@@ -1,0 +1,625 @@
+<?php
+/** @var array<int,array<string,mixed>> $products */
+/** @var array<int,array<string,mixed>> $productPayload */
+/** @var array{search?:string} $filters */
+/** @var array{current_page:int,last_page:int,total:int,per_page:int} $pagination */
+?>
+<?php
+function posProductImageSrc(string $name, ?string $imagePath = null): string
+{
+    $path = trim((string) $imagePath);
+    if ($path !== '') {
+        return url($path);
+    }
+
+    $clean = preg_replace('/\s+/', ' ', trim($name)) ?: '';
+    $letters = preg_replace('/[^A-Za-z0-9]/', '', $clean) ?: '';
+    $letter = mb_strtoupper((string) mb_substr($letters, 0, 1)) ?: '?';
+
+    $hash = md5(mb_strtolower($clean));
+    $colors = ['#0d6efd', '#198754', '#dc3545', '#6f42c1', '#fd7e14', '#20c997', '#6610f2', '#0dcaf0', '#d63384', '#343a40'];
+    $idx1 = hexdec(substr($hash, 0, 2)) % count($colors);
+    $idx2 = hexdec(substr($hash, 2, 2)) % count($colors);
+    $c1 = $colors[$idx1] ?? '#0d6efd';
+    $c2 = $colors[$idx2] ?? '#0a58ca';
+
+    $svg = '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">'
+        . '<defs>'
+        . '<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+        . '<stop offset="0" stop-color="'.$c1.'"/>'
+        . '<stop offset="1" stop-color="'.$c2.'"/>'
+        . '</linearGradient>'
+        . '</defs>'
+        . '<rect width="256" height="256" rx="48" fill="url(#g)"/>'
+        . '<text x="50%" y="54%" text-anchor="middle" font-family="Arial" font-size="92" font-weight="700" fill="#ffffff">'.$letter.'</text>'
+        . '</svg>';
+
+    return 'data:image/svg+xml;charset=UTF-8,' . rawurlencode($svg);
+}
+?>
+
+<div class="row g-3 align-items-start">
+    <div class="col-md-8 pos-products-col">
+        <div class="card">
+            <div class="card-body">
+                <form method="GET" action="<?= e(url('/tenant/pos')) ?>" class="mb-3">
+                    <label class="form-label mb-1" for="searchInput">Search products</label>
+                    <input id="searchInput" type="text" class="form-control" name="search" value="<?= e($filters['search'] ?? '') ?>" placeholder="Type to filter…" autocomplete="off">
+                </form>
+
+                <?php
+                $productPayloadById = [];
+                foreach ($productPayload as $payload) {
+                    $productPayloadById[(int) ($payload['id'] ?? 0)] = $payload;
+                }
+                $groups = [];
+                foreach ($products as $product) {
+                    $key = (string) ($product['category_key'] ?? '');
+                    $key = trim($key) !== '' ? $key : 'other';
+                    if (! isset($groups[$key])) {
+                        $label = ucwords(str_replace(['_', '-'], ' ', $key));
+                        $groups[$key] = ['label' => $label, 'items' => []];
+                    }
+                    $groups[$key]['items'][] = $product;
+                }
+                $keys = array_keys($groups);
+                ?>
+
+                <?php if (! empty($keys)) { ?>
+                    <div class="accordion" id="posCategoryAccordion">
+                        <?php foreach ($keys as $i => $key): ?>
+                            <?php $label = (string) ($groups[$key]['label'] ?? $key); ?>
+                            <?php $collapseId = 'posCatCollapse'.$i; ?>
+                            <div class="accordion-item border-0 shadow-sm mb-2">
+                                <h2 class="accordion-header" id="posCatHeader<?= (int) $i ?>">
+                                    <button type="button"
+                                        class="accordion-button collapsed"
+                                            data-bs-toggle="collapse"
+                                            data-bs-target="#<?= e($collapseId) ?>"
+                                        aria-expanded="false"
+                                            aria-controls="<?= e($collapseId) ?>">
+                                        <span class="me-2"><?= e($label) ?></span>
+                                        <span class="badge text-bg-secondary rounded-pill" style="font-size: .75rem;"><?= (int) count($groups[$key]['items'] ?? []) ?></span>
+                                    </button>
+                                </h2>
+                                <div id="<?= e($collapseId) ?>"
+                                     class="accordion-collapse collapse"
+                                     aria-labelledby="posCatHeader<?= (int) $i ?>"
+                                     data-bs-parent="#posCategoryAccordion">
+                                    <div class="accordion-body pt-2">
+                                        <div class="row g-3">
+                                            <?php foreach (($groups[$key]['items'] ?? []) as $product): ?>
+                                                <?php $pid = (int) ($product['id'] ?? 0); ?>
+                                                <?php $pname = (string) ($product['name'] ?? ''); ?>
+                                                <?php $requirementCount = count((array) (($productPayloadById ?? [])[$pid]['ingredients'] ?? [])); ?>
+                                                <div class="col-12 col-sm-6 col-lg-4 col-xl-3">
+                                                    <div class="pos-product-card card h-100 shadow-sm border border-primary"
+                                                         data-product-id="<?= (int) $pid ?>">
+                                                        <div class="card-body p-2 p-sm-3 d-flex flex-column gap-2 gap-sm-3">
+                                                            <div class="pos-product-image-wrap">
+                                                                <img src="<?= posProductImageSrc($pname, (string) ($product['image_path'] ?? '')) ?>"
+                                                                     alt="<?= e($pname) ?>"
+                                                                     class="pos-product-image rounded">
+                                                                <span class="badge text-bg-primary pos-cart-count d-none" aria-label="Items in cart">Qty: 0</span>
+                                                            </div>
+                                                            <div class="d-flex flex-column gap-1">
+                                                                <div class="pos-product-title fw-semibold"><?= e($pname) ?></div>
+                                                                <div class="d-flex flex-wrap gap-1">
+                                                                    <span class="badge text-bg-success">PHP <?= number_format((float) ($product['price'] ?? 0), 2) ?></span>
+                                                                    <span class="badge text-bg-light border text-dark">
+                                                                        <?= (int) $requirementCount ?> <?= $requirementCount === 1 ? 'Requirement' : 'Requirements' ?>
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                            <div class="d-flex gap-2 mt-auto">
+                                                                <button type="button"
+                                                                        class="btn btn-sm btn-outline-primary flex-grow-1 view-details pos-btn-label"
+                                                                        data-product-id="<?= (int) $pid ?>"
+                                                                        title="View details"
+                                                                        aria-label="View requirements for <?= e($pname) ?>">
+                                                                    <i class="fa fa-eye me-1"></i>Details
+                                                                </button>
+                                                                <button type="button"
+                                                                        class="btn btn-sm btn-primary flex-grow-1 add-cart pos-btn-label"
+                                                                        data-product-id="<?= (int) $pid ?>"
+                                                                        title="Add to cart"
+                                                                        aria-label="Add <?= e($pname) ?> to cart">
+                                                                    <i class="fa fa-plus me-1"></i>Add
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php } else { ?>
+                    <div class="alert alert-info">No products found.</div>
+                <?php } ?>
+
+                <?php require dirname(__DIR__, 2).'/partials/pagination.php'; ?>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4 pos-order-summary-anchor">
+        <div class="card pos-order-summary-float" id="orderSummaryCard">
+            <div class="card-body">
+                <h6 class="mb-2">Transaction Summary</h6>
+                <div id="cartWrap" class="small text-muted mb-2">No items yet.</div>
+                <form id="checkoutForm" method="POST" action="<?= e(url('/tenant/pos/checkout')) ?>">
+                    <?= csrf_field() ?>
+                    <div id="checkoutItems"></div>
+                    <div class="d-flex justify-content-between mb-2"><span>Total</span><strong id="cartTotal">0.00</strong></div>
+                    <button type="button" class="btn btn-success w-100" id="checkoutBtn">Checkout Transaction</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="ingredientsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h6 class="modal-title" id="ingredientTitle">Requirements</h6><button class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body" id="ingredientBody"></div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="receiptModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-labelledby="receiptModalTitle">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="receiptModalTitle">Receipt</h5>
+            </div>
+            <div class="modal-body">
+                <div id="receiptPrintArea" class="receipt-print-area small"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" id="receiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
+                <button type="button" class="btn btn-primary" id="receiptOkBtn" data-bs-dismiss="modal">OK</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+@media print {
+    body * { visibility: hidden; }
+    #receiptModal, #receiptModal * { visibility: visible; }
+    #receiptModal { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; }
+    #receiptModal .modal-dialog { max-width: 100%; margin: 0; }
+    #receiptModal .modal-content { border: 0; box-shadow: none; }
+    #receiptModal .modal-footer { display: none; }
+    .pos-order-summary-float {
+        position: static !important;
+        max-height: none !important;
+        width: auto !important;
+    }
+}
+
+/* Floating + sticky checkout summary (all devices) */
+.pos-order-summary-float {
+    position: fixed;
+    z-index: 1035;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, .12);
+}
+
+@media (min-width: 992px) {
+    .pos-order-summary-float {
+        top: calc(var(--app-toolbar-height, 56px) + .9rem);
+        right: 1rem;
+        width: min(360px, 30vw);
+        max-height: calc(100vh - var(--app-toolbar-height, 56px) - 1.8rem);
+        overflow: auto;
+    }
+    /* keep product area visible while panel floats */
+    .pos-products-col {
+        padding-right: .5rem;
+    }
+}
+
+@media (min-width: 768px) and (max-width: 991.98px) {
+    .pos-order-summary-float {
+        top: calc(var(--app-toolbar-height, 56px) + .75rem);
+        right: .75rem;
+        width: min(340px, 42vw);
+        max-height: calc(100vh - var(--app-toolbar-height, 56px) - 1.5rem);
+        overflow: auto;
+    }
+}
+
+/* When branch dropdown is open, move floating checkout lower
+   so the popout list remains fully visible. */
+body.branch-select-open .pos-order-summary-float {
+    top: calc(var(--app-toolbar-height, 56px) + 4.5rem);
+}
+
+@media (max-width: 767.98px) {
+    .pos-order-summary-float {
+        left: .5rem;
+        right: .5rem;
+        bottom: .5rem;
+        width: auto;
+        max-height: 52vh;
+        overflow: auto;
+        border-radius: .75rem;
+    }
+    /* prevent floating summary from covering end content */
+    .app-main-scroll {
+        padding-bottom: 19rem;
+    }
+    #cartWrap {
+        max-height: 35vh;
+        overflow: auto;
+    }
+}
+
+.pos-cart-table thead th {
+    font-size: .82rem;
+    color: #6c757d;
+}
+.pos-cart-table td {
+    vertical-align: middle;
+}
+.pos-cart-actions {
+    display: inline-flex;
+    gap: .25rem;
+    justify-content: flex-end;
+    align-items: center;
+}
+
+.pos-product-image-wrap {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    border-radius: .6rem;
+    background: #f8f9fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.pos-product-image {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center;
+}
+
+.pos-product-title {
+    font-size: 1rem;
+    line-height: 1.2;
+    min-height: 2.4em;
+}
+
+.pos-btn-label {
+    white-space: nowrap;
+}
+
+.pos-cart-count {
+    position: absolute;
+    top: .4rem;
+    right: .4rem;
+    font-size: .75rem;
+    z-index: 2;
+}
+
+@media (max-width: 575.98px) {
+    .pos-product-title {
+        min-height: 0;
+        font-size: .95rem;
+    }
+}
+
+/* Grocery-style receipt layout */
+.receipt-print-area {
+    display: flex;
+    justify-content: center;
+}
+.receipt-paper {
+    width: 100%;
+    max-width: 340px;
+    margin: 0 auto;
+    padding: .55rem .65rem;
+    border: 1px dashed #adb5bd;
+    border-radius: .35rem;
+    background: #fff;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 12px;
+    line-height: 1.35;
+    color: #111;
+}
+.receipt-center { text-align: center; }
+.receipt-bold { font-weight: 700; }
+.receipt-muted { color: #4b5563; }
+.receipt-dash {
+    border-top: 1px dashed #666;
+    margin: .35rem 0;
+}
+.receipt-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: .5rem;
+}
+.receipt-row .left {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+.receipt-row .right {
+    flex: 0 0 auto;
+    text-align: right;
+    white-space: nowrap;
+}
+</style>
+
+<script>
+(() => {
+    const products = <?= json_embed($productPayload) ?>;
+    const currentSearch = <?= json_embed($filters['search'] ?? '') ?>;
+    const byId = Object.fromEntries(products.map(p => [p.id, p]));
+    const cart = {};
+    const wrap = document.getElementById('cartWrap');
+    const itemsEl = document.getElementById('checkoutItems');
+    const totalEl = document.getElementById('cartTotal');
+    const money = (n) => Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    let searchTimer = null;
+
+    const getOutOfStockIngredient = (product, qty) => {
+        return (product.ingredients || []).find(i => (i.stock_quantity - (i.qty_required * qty)) < 0);
+    };
+    const willReachLow = (product, qty) => {
+        return (product.ingredients || []).some(i => (i.stock_quantity - (i.qty_required * qty)) <= i.low_stock_threshold);
+    };
+    const alertOut = (p, i) => Swal.fire({ icon: 'warning', title: 'Cannot add quantity', text: `${p.name}: ${i.name} is already out of stock or not enough for this quantity.` });
+    const alertCheckoutOut = (p, i) => Swal.fire({
+        icon: 'warning',
+        title: 'Out of stock',
+        text: `${p.name}: ${i.name} does not have enough stock for checkout.`,
+    });
+
+    const renderCart = () => {
+        const entries = Object.values(cart);
+        if (!entries.length) {
+            wrap.innerHTML = '<div class="text-muted">No items yet.</div>';
+            itemsEl.innerHTML = '';
+            totalEl.textContent = '0.00';
+        } else {
+            let total = 0;
+            wrap.innerHTML = `<table class="table table-sm pos-cart-table"><thead><tr><th>Item</th><th class="text-center" style="width:72px;">Qty</th><th class="text-end" style="width:104px;">Subtotal</th><th class="text-end" style="width:148px;">Actions</th></tr></thead><tbody>${
+                entries.map(item => {
+                    const subtotal = item.price * item.quantity;
+                    total += subtotal;
+                    return `<tr>
+                        <td>${item.name}</td>
+                        <td class="text-center fw-semibold">${item.quantity}</td>
+                        <td class="text-end">PHP ${money(subtotal)}</td>
+                        <td class="text-end">
+                            <div class="pos-cart-actions">
+                                <button class="btn btn-sm btn-outline-secondary minus" data-id="${item.product_id}" title="Minus quantity">-</button>
+                                <button class="btn btn-sm btn-outline-secondary plus" data-id="${item.product_id}" title="Add quantity">+</button>
+                                <button class="btn btn-sm btn-outline-danger rem" data-id="${item.product_id}" title="Remove item"><i class="fa fa-trash"></i></button>
+                            </div>
+                        </td>
+                    </tr>`;
+                }).join('')
+            }</tbody></table>`;
+            itemsEl.innerHTML = entries.map((item, idx) => `<input type="hidden" name="items[${idx}][product_id]" value="${item.product_id}"><input type="hidden" name="items[${idx}][quantity]" value="${item.quantity}">`).join('');
+            totalEl.textContent = money(total);
+        }
+
+        // Update card visuals (danger + button color) based on current cart quantities.
+        document.querySelectorAll('.pos-product-card[data-product-id]').forEach(card => {
+            const pid = Number(card.dataset.productId);
+            const p = byId[pid];
+            if (!p) return;
+            const currentQty = cart[p.id]?.quantity || 0;
+            const danger = currentQty > 0 && willReachLow(p, currentQty);
+            card.classList.toggle('border-danger', danger);
+            card.classList.toggle('border-primary', !danger);
+            const addBtn = card.querySelector('.add-cart');
+            if (addBtn) {
+                addBtn.classList.remove('btn-danger', 'btn-primary');
+                addBtn.classList.add(willReachLow(p, currentQty + 1) ? 'btn-danger' : 'btn-primary');
+            }
+            const countBadge = card.querySelector('.pos-cart-count');
+            if (countBadge) {
+                if (currentQty > 0) {
+                    countBadge.textContent = `Qty: ${currentQty}`;
+                    countBadge.classList.remove('d-none');
+                } else {
+                    countBadge.textContent = 'Qty: 0';
+                    countBadge.classList.add('d-none');
+                }
+            }
+        });
+    };
+
+    const productsRoot = document.getElementById('posCategoryAccordion') ?? document.body;
+    productsRoot.addEventListener('click', (e) => {
+        const add = e.target.closest('.add-cart');
+        const details = e.target.closest('.view-details');
+        if (add) {
+            const id = Number(add.dataset.productId);
+            const p = byId[id];
+            if (!p) return;
+            const nextQty = (cart[id]?.quantity || 0) + 1;
+            const out = getOutOfStockIngredient(p, nextQty);
+            if (out) return alertOut(p, out);
+            cart[id] = cart[id] || { product_id: p.id, name: p.name, price: p.price, quantity: 0 };
+            cart[id].quantity += 1;
+            renderCart();
+        }
+        if (details) {
+            const id = Number(details.dataset.productId);
+            const p = byId[id];
+            if (!p) return;
+            document.getElementById('ingredientTitle').textContent = `${p.name} Requirements`;
+            document.getElementById('ingredientBody').innerHTML = `<table class="table table-sm"><thead><tr><th>Required item</th></tr></thead><tbody>${
+                (p.ingredients || []).length
+                    ? p.ingredients.map(i => `<tr><td>${i.name}</td></tr>`).join('')
+                    : '<tr><td class="text-muted text-center">No requirements for this product.</td></tr>'
+            }</tbody></table>`;
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('ingredientsModal')).show();
+        }
+    });
+
+    wrap.addEventListener('click', (e) => {
+        const plus = e.target.closest('.plus');
+        const minus = e.target.closest('.minus');
+        const rem = e.target.closest('.rem');
+        if (plus) {
+            const id = Number(plus.dataset.id);
+            const p = byId[id];
+            if (!p) return;
+            const next = cart[id].quantity + 1;
+            const out = getOutOfStockIngredient(p, next);
+            if (out) return alertOut(p, out);
+            cart[id].quantity = next;
+            renderCart();
+        }
+        if (minus) {
+            const id = Number(minus.dataset.id);
+            if (!cart[id]) return;
+            cart[id].quantity = Math.max(1, cart[id].quantity - 1);
+            renderCart();
+        }
+        if (rem) {
+            delete cart[Number(rem.dataset.id)];
+            renderCart();
+        }
+    });
+
+    const escapeHtml = (s) => String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
+    const buildReceiptHtml = (r) => {
+        const c = r.contact || {};
+        const displayName = String(r.display_name || '').trim() || String(r.store_name || 'Store').trim() || 'Store';
+        const businessStyle = String(r.business_style || '').trim();
+        const taxId = String(r.tax_id || '').trim();
+        const footerNote = String(r.footer_note || '').trim();
+        const lines = [];
+        lines.push('<div class="receipt-paper">');
+        lines.push(`<div class="receipt-center receipt-bold">${escapeHtml(displayName)}</div>`);
+        if (businessStyle) {
+            lines.push(`<div class="receipt-center receipt-muted">${escapeHtml(businessStyle)}</div>`);
+        }
+        if (taxId) {
+            lines.push(`<div class="receipt-center">TIN: ${escapeHtml(taxId)}</div>`);
+        }
+        lines.push('<div class="receipt-dash"></div>');
+        const contactBits = [];
+        if (c.phone) contactBits.push(`<div>Phone: ${escapeHtml(c.phone)}</div>`);
+        if (c.address) contactBits.push(`<div>${escapeHtml(c.address).replace(/\\n/g, '<br>')}</div>`);
+        if (c.email) contactBits.push(`<div>Email: ${escapeHtml(c.email)}</div>`);
+        if (contactBits.length) {
+            lines.push(`<div>${contactBits.join('')}</div>`);
+        } else {
+            lines.push('<div class="receipt-muted">No store contact on file.</div>');
+        }
+        lines.push('<div class="receipt-dash"></div>');
+        lines.push('<div class="receipt-row receipt-bold"><span class="left">Item</span><span class="right">Amount</span></div>');
+        lines.push('<div class="receipt-dash"></div>');
+        (r.items || []).forEach((it) => {
+            lines.push(`<div class="receipt-row"><span class="left">${escapeHtml(it.name)}</span><span class="right">${money(it.line_total)}</span></div>`);
+            lines.push(`<div class="receipt-row receipt-muted"><span class="left">${Number(it.quantity || 0)} x ${money(it.unit_price)}</span><span class="right"></span></div>`);
+        });
+        lines.push('<div class="receipt-dash"></div>');
+        lines.push(`<div class="receipt-row receipt-bold"><span class="left">TOTAL</span><span class="right">${money(r.grand_total)}</span></div>`);
+        lines.push('<div class="receipt-dash"></div>');
+        const tid = r.transaction_id != null ? `#${r.transaction_id}` : '';
+        let when = '';
+        if (r.created_at) {
+            const d = new Date(String(r.created_at).replace(' ', 'T'));
+            when = !Number.isNaN(d.getTime()) ? d.toLocaleString() : escapeHtml(r.created_at);
+        }
+        const meta = `${when || ''}${tid ? ` ${tid}` : ''}`.trim();
+        if (meta) {
+            lines.push(`<div class="receipt-center receipt-muted">${meta}</div>`);
+        }
+        lines.push('<div class="receipt-center">Thank you for your purchase!</div>');
+        if (footerNote) {
+            lines.push(`<div class="receipt-center receipt-muted">${escapeHtml(footerNote).replace(/\\n/g, '<br>')}</div>`);
+        }
+        lines.push('</div>');
+        return lines.join('');
+    };
+
+    document.getElementById('receiptPrintBtn').addEventListener('click', () => {
+        window.print();
+    });
+
+    document.getElementById('checkoutBtn').addEventListener('click', async () => {
+        if (!Object.keys(cart).length) return Swal.fire({ icon: 'warning', title: 'Cart is empty' });
+
+        // Final client-side validation before checkout request.
+        // This catches insufficient stocks in the current cart quantities.
+        for (const id of Object.keys(cart)) {
+            const item = cart[id];
+            const p = byId[Number(id)];
+            if (!p || !item) continue;
+            const out = getOutOfStockIngredient(p, Number(item.quantity || 0));
+            if (out) {
+                return alertCheckoutOut(p, out);
+            }
+        }
+
+        const confirm = await Swal.fire({
+            icon: 'info',
+            title: 'Confirm Order',
+            text: 'Proceed with checkout?',
+            showCancelButton: true,
+            confirmButtonText: 'Confirm Checkout',
+        });
+        if (!confirm.isConfirmed) return;
+
+        const form = document.getElementById('checkoutForm');
+        const fd = new FormData(form);
+        try {
+            const res = await fetch(form.action, {
+                method: 'POST',
+                body: fd,
+                headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok || !body.success) {
+                return Swal.fire({ icon: 'error', title: 'Checkout failed', text: body.message || 'Please try again.' });
+            }
+            document.getElementById('receiptPrintArea').innerHTML = buildReceiptHtml(body.receipt);
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('receiptModal')).show();
+            Object.keys(cart).forEach((k) => { delete cart[k]; });
+            renderCart();
+        } catch {
+            Swal.fire({ icon: 'error', title: 'Network error', text: 'Could not complete checkout.' });
+        }
+    });
+
+    const searchInput = document.getElementById('searchInput');
+    searchInput?.addEventListener('input', () => {
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+            const value = searchInput.value.trim();
+            if (value === (currentSearch || '').trim()) return;
+            const url = new URL(window.location.href);
+            if (value) url.searchParams.set('search', value);
+            else url.searchParams.delete('search');
+            window.location.assign(url.toString());
+        }, 300);
+    });
+
+    renderCart();
+})();
+</script>
