@@ -209,7 +209,12 @@ final class Router
         $tenantAdmin = ['auth', 'tenant.active', 'tenant.subscription', 'role:tenant_admin'];
         $r(['GET'], '#^/tenant/pos$#', PosController::class.'::index', 'tenant.pos.index', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/pos/checkout$#', PosController::class.'::checkout', 'tenant.pos.checkout', array_merge($ta, ['tenant.access:pos']));
+        $r(['GET'], '#^/tenant/pos/pending$#', PosController::class.'::pendingIndex', 'tenant.pos.pending.index', array_merge($ta, ['tenant.access:pos']));
+        $r(['POST'], '#^/tenant/pos/pending$#', PosController::class.'::storePending', 'tenant.pos.pending.store', array_merge($ta, ['tenant.access:pos']));
+        $r(['POST'], '#^/tenant/pos/pending/(\d+)/pay$#', PosController::class.'::payPending', 'tenant.pos.pending.pay', array_merge($ta, ['tenant.access:pos']));
         $r(['GET'], '#^/tenant/transactions$#', ReportController::class.'::transactions', 'tenant.transactions.index', array_merge($ta, ['tenant.access:transactions']));
+        $r(['GET'], '#^/tenant/transactions/(\d+)/edit-data$#', ReportController::class.'::editData', 'tenant.transactions.edit-data', array_merge($ta, ['tenant.access:transactions']));
+        $r(['POST'], '#^/tenant/transactions/(\d+)/edit-items$#', ReportController::class.'::editItems', 'tenant.transactions.edit-items', array_merge($ta, ['tenant.access:transactions']));
         $r(['GET'], '#^/tenant/activity-logs$#', ActivityLogController::class.'::index', 'tenant.activity-logs.index', array_merge($ta, ['tenant.access:activity_logs']));
         $r(['DELETE'], '#^/tenant/activity-logs/(\d+)$#', ActivityLogController::class.'::destroy', 'tenant.activity-logs.destroy', $tenantAdmin);
         $r(['DELETE'], '#^/tenant/activity-logs$#', ActivityLogController::class.'::clear', 'tenant.activity-logs.clear', $tenantAdmin);
@@ -248,6 +253,7 @@ final class Router
         $r(['PATCH'], '#^/tenant/products/(\d+)/toggle-status$#', ProductController::class.'::toggleStatus', 'tenant.products.toggle-status', array_merge($ta, ['tenant.access:products']));
 
         $r(['GET'], '#^/tenant/reports$#', ReportController::class.'::index', 'tenant.reports.index', array_merge($ta, ['tenant.access:reports']));
+        $r(['GET'], '#^/tenant/reports/daily-outs$#', ReportController::class.'::dailyOuts', 'tenant.reports.daily-outs', array_merge($ta, ['tenant.access:reports']));
         $r(['GET'], '#^/tenant/transactions/(\d+)/receipt$#', ReportController::class.'::receipt', 'tenant.transactions.receipt', array_merge($ta, ['tenant.access:transactions']));
         $r(['DELETE'], '#^/tenant/transactions/(\d+)$#', ReportController::class.'::destroyTransaction', 'tenant.transactions.destroy', $tenantAdmin);
     }

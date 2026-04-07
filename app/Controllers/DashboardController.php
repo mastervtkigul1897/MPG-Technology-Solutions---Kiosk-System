@@ -51,44 +51,56 @@ final class DashboardController
         $pdo = App::db();
 
         $today = date('Y-m-d');
-        $yesterday = date('Y-m-d', strtotime('-1 day'));
-        $periodEnd = date('Y-m-d 23:59:59');
-        $start = date('Y-m-d 00:00:00', strtotime('-6 days'));
-
-        $ordersByDay = $this->groupCount($pdo, $tenantId, $start, $periodEnd);
-        $salesByDay = $this->groupSumSales($pdo, $tenantId, $start, $periodEnd);
-        $expensesByDay = $this->groupSumExpenses($pdo, $tenantId, $start, $periodEnd);
-
-        $days = [];
-        for ($i = 0; $i < 7; $i++) {
-            $d = date('Y-m-d', strtotime($start.' +'.$i.' days'));
-            $days[] = ['key' => $d, 'label' => date('M d', strtotime($d))];
+        $from = trim((string) $request->query('from', ''));
+        $to = trim((string) $request->query('to', ''));
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) !== 1) {
+            $from = $today;
         }
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) !== 1) {
+            $to = $today;
+        }
+        if (strtotime($from) > strtotime($to)) {
+            [$from, $to] = [$to, $from];
+        }
+        $rangeStart = $from.' 00:00:00';
+        $rangeEnd = $to.' 23:59:59';
 
-        $periods = [
-            'today' => $this->buildPeriod($pdo, $tenantId, $today, null, $periodEnd),
-            'yesterday' => $this->buildPeriod($pdo, $tenantId, $yesterday, null, $periodEnd),
-            'last_3_days' => $this->buildPeriod($pdo, $tenantId, null, date('Y-m-d 00:00:00', strtotime('-2 days')), $periodEnd),
-            'last_7_days' => $this->buildPeriod($pdo, $tenantId, null, date('Y-m-d 00:00:00', strtotime('-6 days')), $periodEnd),
-            'last_30_days' => $this->buildPeriod($pdo, $tenantId, null, date('Y-m-d 00:00:00', strtotime('-29 days')), $periodEnd),
+        $salesToday = (float) $this->scalar(
+            $pdo,
+            "SELECT COALESCE(SUM(total_amount),0) FROM transactions WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?",
+            [$tenantId, $rangeStart, $rangeEnd]
+        );
+        // Payment totals today (one card per method on dashboard)
+        $st = $pdo->prepare(
+            "SELECT LOWER(TRIM(COALESCE(payment_method,''))) AS pm, COALESCE(SUM(total_amount),0) AS total
+             FROM transactions
+             WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?
+             GROUP BY pm"
+        );
+        $st->execute([$tenantId, $rangeStart, $rangeEnd]);
+        $paymentsToday = [
+            'cash' => 0.0,
+            'card' => 0.0,
+            'gcash' => 0.0,
+            'paymaya' => 0.0,
+            'online_banking' => 0.0,
+            'free' => 0.0,
         ];
-
-        $ordersToday = $this->countCompleted($pdo, $tenantId, $today);
-        $damagesToday = $this->sumDamagedQuantity($pdo, $tenantId, $today);
-        $ingCount = (int) $this->scalar($pdo, 'SELECT COUNT(*) FROM ingredients WHERE tenant_id = ?', [$tenantId]);
-        $prodCount = (int) $this->scalar($pdo, 'SELECT COUNT(*) FROM products WHERE tenant_id = ?', [$tenantId]);
-
-        $chartOrders = [];
-        $chartSales = [];
-        $chartExpenses = [];
-        $chartProfit = [];
-        foreach ($days as $day) {
-            $k = $day['key'];
-            $chartOrders[] = (int) ($ordersByDay[$k] ?? 0);
-            $chartSales[] = (float) ($salesByDay[$k] ?? 0);
-            $chartExpenses[] = (float) ($expensesByDay[$k] ?? 0);
-            $chartProfit[] = (float) (($salesByDay[$k] ?? 0) - ($expensesByDay[$k] ?? 0));
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $pm = (string) ($row['pm'] ?? '');
+            if ($pm === '') {
+                $pm = 'cash';
+            }
+            if (array_key_exists($pm, $paymentsToday)) {
+                $paymentsToday[$pm] += (float) ($row['total'] ?? 0);
+            }
         }
+        $expensesToday = (float) $this->scalar(
+            $pdo,
+            "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE tenant_id = ? AND type = 'manual' AND created_at BETWEEN ? AND ?",
+            [$tenantId, $rangeStart, $rangeEnd]
+        );
+        $netSalesToday = $salesToday - $expensesToday;
 
         $warningDays = (int) App::config('subscription_warning_days', 7);
         $dashboardMaintenance = null;
@@ -120,18 +132,20 @@ final class DashboardController
         return view_page('Dashboard', 'dashboard', [
             'is_super' => false,
             'stats' => [
-                'orders_today' => $ordersToday,
-                'damages_today' => $damagesToday,
-                'ingredients_count' => $ingCount,
-                'products_count' => $prodCount,
+                'sales_today' => $salesToday,
+                'expenses_today' => $expensesToday,
+                'net_sales_today' => $netSalesToday,
+                'payments_today' => $paymentsToday,
+                'range_from' => $from,
+                'range_to' => $to,
             ],
-            'periods' => $periods,
+            'periods' => [],
             'chart' => [
-                'labels' => array_column($days, 'label'),
-                'orders' => $chartOrders,
-                'sales' => $chartSales,
-                'expenses' => $chartExpenses,
-                'profit' => $chartProfit,
+                'labels' => [],
+                'orders' => [],
+                'sales' => [],
+                'expenses' => [],
+                'profit' => [],
             ],
             'dashboard_maintenance' => $dashboardMaintenance,
             'dashboard_subscription' => $dashboardSubscription,

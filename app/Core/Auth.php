@@ -54,6 +54,13 @@ final class Auth
 
     public static function user(): ?array
     {
+        // Force relogin when the calendar day changes (prevents idle timeouts during store hours).
+        $loginDay = (string) ($_SESSION['login_day'] ?? '');
+        if ($loginDay !== '' && $loginDay !== date('Y-m-d')) {
+            self::logout();
+            return null;
+        }
+
         $id = $_SESSION['user_id'] ?? null;
         if (! $id) {
             return null;
@@ -91,12 +98,14 @@ final class Auth
     {
         session_regenerate_id(true);
         $_SESSION['user_id'] = $userId;
+        $_SESSION['login_day'] = date('Y-m-d');
         unset($_SESSION['active_tenant_id']);
     }
 
     public static function logout(): void
     {
         unset($_SESSION['user_id']);
+        unset($_SESSION['login_day']);
         unset($_SESSION['active_tenant_id']);
         session_regenerate_id(true);
     }

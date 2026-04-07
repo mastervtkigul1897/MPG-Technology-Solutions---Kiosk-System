@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 define('BASE_PATH', __DIR__);
 
+// Keep POS sessions alive during store hours; still require relogin next day.
+// (PHP will use this for session GC and cookie persistence.)
+@ini_set('session.gc_maxlifetime', (string) (60 * 60 * 20)); // 20 hours
+@ini_set('session.cookie_lifetime', (string) (60 * 60 * 20));
+
 session_start([
     'cookie_httponly' => true,
     'cookie_samesite' => 'Lax',

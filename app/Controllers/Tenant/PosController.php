@@ -222,6 +222,37 @@ final class PosController
 
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        $paidRaw = $request->input('amount_tendered');
+        $amountTendered = is_numeric($paidRaw) ? (float) $paidRaw : null;
+        $paymentMethod = strtolower(trim((string) $request->input('payment_method', 'cash')));
+        $allowedMethods = ['cash', 'card', 'gcash', 'paymaya', 'online_banking', 'free'];
+        if (! in_array($paymentMethod, $allowedMethods, true)) {
+            $paymentMethod = 'cash';
+        }
+
+        if ($paymentMethod === 'free') {
+            // Only allow one FREE transaction per store per day.
+            $today = date('Y-m-d');
+            $st = $pdo->prepare(
+                "SELECT COUNT(*)
+                 FROM transactions
+                 WHERE tenant_id = ?
+                   AND status = 'completed'
+                   AND LOWER(TRIM(COALESCE(payment_method,''))) = 'free'
+                   AND DATE(created_at) = ?"
+            );
+            $st->execute([$tenantId, $today]);
+            $already = (int) $st->fetchColumn();
+            if ($already > 0) {
+                $msg = 'FREE (Employee) is only allowed once per day.';
+                if ($request->wantsJson()) {
+                    return json_response(['success' => false, 'message' => $msg], 422);
+                }
+                session_flash('errors', [$msg]);
+
+                return redirect(url('/tenant/pos'));
+            }
+        }
 
         try {
             $transactionId = (new CheckoutService())->checkout($tenantId, (int) $user['id'], $parsed);
@@ -235,6 +266,39 @@ final class PosController
         }
 
         TenantReceiptFields::ensure($pdo);
+
+        // Store payment method + paid + change.
+        // For FREE: keep amounts at 0 and zero out item totals.
+        if ($paymentMethod === 'free') {
+            try {
+                $pdo->prepare('UPDATE transaction_items SET unit_price = 0, line_total = 0, updated_at = NOW() WHERE tenant_id = ? AND transaction_id = ?')
+                    ->execute([$tenantId, $transactionId]);
+                $pdo->prepare("UPDATE transactions SET payment_method = 'free', amount_paid = 0, amount_tendered = 0, change_amount = 0, refunded_amount = 0, added_paid_amount = 0, original_total_amount = 0, total_amount = 0, expense_total = 0, profit_total = 0, updated_at = NOW() WHERE tenant_id = ? AND id = ?")
+                    ->execute([$tenantId, $transactionId]);
+            } catch (\Throwable) {
+            }
+        } elseif ($amountTendered !== null) {
+            try {
+                $st = $pdo->prepare('SELECT total_amount FROM transactions WHERE tenant_id = ? AND id = ? LIMIT 1');
+                $st->execute([$tenantId, $transactionId]);
+                $total = (float) $st->fetchColumn();
+                if ($paymentMethod !== 'cash') {
+                    // Non-cash: paid equals exact total, no change.
+                    $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = 0, original_total_amount = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
+                        ->execute([$paymentMethod, $total, $total, $total, $tenantId, $transactionId]);
+                } else {
+                    if ($amountTendered < $total) {
+                        throw new RuntimeException('Amount received is less than total.');
+                    }
+                    $change = $amountTendered - $total;
+                    // amount_paid stores the original total (what customer paid for, net of change).
+                    $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = ?, original_total_amount = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
+                        ->execute([$paymentMethod, $total, $amountTendered, $change, $total, $tenantId, $transactionId]);
+                }
+            } catch (\Throwable) {
+                // Do not fail checkout if these optional fields cannot be saved.
+            }
+        }
         $receipt = self::buildReceiptPayload($pdo, $tenantId, $transactionId);
 
         if ($request->wantsJson()) {
@@ -247,6 +311,112 @@ final class PosController
         session_flash('success', 'Checkout completed.');
 
         return redirect(url('/tenant/pos'));
+    }
+
+    public function pendingIndex(Request $request): Response
+    {
+        $user = Auth::user();
+        $tenantId = (int) $user['tenant_id'];
+        $pdo = App::db();
+
+        $st = $pdo->prepare(
+            "SELECT t.id, t.total_amount, t.created_at, t.pending_name, t.pending_contact,
+                    (SELECT COALESCE(SUM(quantity),0) FROM transaction_items ti WHERE ti.tenant_id = t.tenant_id AND ti.transaction_id = t.id) AS qty_sum
+             FROM transactions t
+             WHERE t.tenant_id = ? AND t.status = 'pending'
+             ORDER BY t.created_at DESC, t.id DESC
+             LIMIT 100"
+        );
+        $st->execute([$tenantId]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+        return json_response(['success' => true, 'data' => $rows]);
+    }
+
+    public function storePending(Request $request): Response
+    {
+        $user = Auth::user();
+        $pendingName = trim((string) $request->input('pending_name', ''));
+        $pendingContact = trim((string) $request->input('pending_contact', ''));
+        if ($pendingName === '') {
+            return json_response(['success' => false, 'message' => 'Name is required.'], 422);
+        }
+        if ($pendingContact === '') {
+            $pendingContact = null;
+        }
+        $items = $request->input('items');
+        if (! is_array($items) || $items === []) {
+            return json_response(['success' => false, 'message' => 'Cart is empty.'], 422);
+        }
+        $parsed = [];
+        foreach ($items as $i) {
+            if (! is_array($i)) {
+                continue;
+            }
+            $parsed[] = [
+                'product_id' => (int) ($i['product_id'] ?? 0),
+                'quantity' => max(1, (int) ($i['quantity'] ?? 0)),
+            ];
+        }
+        if ($parsed === []) {
+            return json_response(['success' => false, 'message' => 'Cart is empty.'], 422);
+        }
+
+        $tenantId = (int) $user['tenant_id'];
+        try {
+            $pendingId = (new CheckoutService())->createPending($tenantId, (int) $user['id'], $parsed, $pendingName, $pendingContact);
+        } catch (RuntimeException $e) {
+            return json_response(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        return json_response(['success' => true, 'pending_id' => $pendingId]);
+    }
+
+    public function payPending(Request $request, string $id): Response
+    {
+        $user = Auth::user();
+        $tenantId = (int) $user['tenant_id'];
+        $pendingId = (int) $id;
+        if ($pendingId < 1) {
+            return json_response(['success' => false, 'message' => 'Invalid request.'], 422);
+        }
+        $paidRaw = $request->input('amount_tendered');
+        $amountTendered = is_numeric($paidRaw) ? (float) $paidRaw : -1;
+        $paymentMethod = strtolower(trim((string) $request->input('payment_method', 'cash')));
+        $allowedMethods = ['cash', 'card', 'gcash', 'paymaya', 'online_banking'];
+        if (! in_array($paymentMethod, $allowedMethods, true)) {
+            $paymentMethod = 'cash';
+        }
+        if ($amountTendered < 0) {
+            return json_response(['success' => false, 'message' => 'Amount received is required.'], 422);
+        }
+
+        $pdo = App::db();
+        try {
+            $txId = (new CheckoutService())->payPending($tenantId, (int) $user['id'], $pendingId, $amountTendered);
+            // Store payment method/paid/change similarly to checkout.
+            try {
+                $st = $pdo->prepare('SELECT total_amount FROM transactions WHERE tenant_id = ? AND id = ? LIMIT 1');
+                $st->execute([$tenantId, $txId]);
+                $total = (float) $st->fetchColumn();
+                if ($paymentMethod !== 'cash') {
+                    $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = 0, original_total_amount = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
+                        ->execute([$paymentMethod, $total, $total, $total, $tenantId, $txId]);
+                } else {
+                    $change = max(0, $amountTendered - $total);
+                    $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = ?, original_total_amount = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
+                        ->execute([$paymentMethod, $total, $amountTendered, $change, $total, $tenantId, $txId]);
+                }
+            } catch (\Throwable) {
+            }
+        } catch (RuntimeException $e) {
+            return json_response(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        TenantReceiptFields::ensure($pdo);
+        $receipt = self::buildReceiptPayload($pdo, $tenantId, $txId);
+
+        return json_response(['success' => true, 'receipt' => $receipt]);
     }
 
     /** @return array<string, mixed> */
@@ -262,10 +432,11 @@ final class PosController
         $tenant = $st->fetch(PDO::FETCH_ASSOC) ?: [];
 
         $st = $pdo->prepare(
-            'SELECT total_amount, created_at FROM transactions WHERE id = ? AND tenant_id = ? LIMIT 1'
+            'SELECT total_amount, original_total_amount, amount_tendered, change_amount, payment_method, amount_paid, refunded_amount, added_paid_amount, created_at
+             FROM transactions WHERE id = ? AND tenant_id = ? LIMIT 1'
         );
         $st->execute([$transactionId, $tenantId]);
-        $tx = $st->fetch(PDO::FETCH_ASSOC);
+        $tx = $st->fetch(PDO::FETCH_ASSOC) ?: [];
 
         $st = $pdo->prepare(
             'SELECT ti.quantity, ti.unit_price, ti.line_total, p.name AS product_name
@@ -307,6 +478,13 @@ final class PosController
             'footer_note' => $footerNote,
             'items' => $lines,
             'grand_total' => (float) ($tx['total_amount'] ?? 0),
+            'original_total_amount' => array_key_exists('original_total_amount', $tx) && $tx['original_total_amount'] !== null ? (float) $tx['original_total_amount'] : null,
+            'amount_tendered' => array_key_exists('amount_tendered', $tx) && $tx['amount_tendered'] !== null ? (float) $tx['amount_tendered'] : null,
+            'change_amount' => array_key_exists('change_amount', $tx) && $tx['change_amount'] !== null ? (float) $tx['change_amount'] : null,
+            'payment_method' => array_key_exists('payment_method', $tx) && $tx['payment_method'] !== null ? (string) $tx['payment_method'] : null,
+            'amount_paid' => array_key_exists('amount_paid', $tx) && $tx['amount_paid'] !== null ? (float) $tx['amount_paid'] : null,
+            'refunded_amount' => array_key_exists('refunded_amount', $tx) ? (float) ($tx['refunded_amount'] ?? 0) : 0.0,
+            'added_paid_amount' => array_key_exists('added_paid_amount', $tx) ? (float) ($tx['added_paid_amount'] ?? 0) : 0.0,
             'created_at' => $tx['created_at'] ?? null,
         ];
     }

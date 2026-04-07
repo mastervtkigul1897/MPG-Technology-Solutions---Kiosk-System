@@ -155,7 +155,20 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
                     <?= csrf_field() ?>
                     <div id="checkoutItems"></div>
                     <div class="d-flex justify-content-between mb-2"><span>Total</span><strong id="cartTotal">0.00</strong></div>
-                    <button type="button" class="btn btn-success w-100" id="checkoutBtn">Checkout Transaction</button>
+                    <div class="d-grid gap-2">
+                        <button type="button" class="btn btn-success w-100" id="checkoutBtn">
+                            <span class="d-inline-flex align-items-center justify-content-center me-2" style="width: 1.25em;">
+                                <i class="fa-solid fa-money-bill-wave"></i>
+                            </span>
+                            <span>Checkout to Pay</span>
+                        </button>
+                        <button type="button" class="btn btn-danger w-100" id="savePendingBtn">
+                            <span class="d-inline-flex align-items-center justify-content-center me-2" style="width: 1.25em;">
+                                <i class="fa-solid fa-clock-rotate-left"></i>
+                            </span>
+                            <span>Checkout as Pending</span>
+                        </button>
+                    </div>
                 </form>
             </div>
         </div>
@@ -183,6 +196,32 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" id="receiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
                 <button type="button" class="btn btn-primary" id="receiptOkBtn" data-bs-dismiss="modal">OK</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="pendingMetaModal" tabindex="-1" aria-labelledby="pendingMetaModalTitle" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="pendingMetaModalTitle">Checkout as Pending</h5>
+            </div>
+            <div class="modal-body">
+                <div class="small text-muted mb-3">Ilagay ang creditor details. Required ang name, optional ang contact number.</div>
+                <div class="mb-2">
+                    <label class="form-label mb-1" for="pendingNameInput">Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="pendingNameInput" placeholder="e.g. Juan Dela Cruz" required>
+                </div>
+                <div class="mb-0">
+                    <label class="form-label mb-1" for="pendingContactInput">Contact number (optional)</label>
+                    <input type="text" class="form-control" id="pendingContactInput" placeholder="e.g. 09xxxxxxxxx">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-warning" id="pendingMetaSaveBtn">
+                    <i class="fa fa-floppy-disk me-1"></i>Save Pending
+                </button>
             </div>
         </div>
     </div>
@@ -539,6 +578,54 @@ body.branch-select-open .pos-order-summary-float {
         });
         lines.push('<div class="receipt-dash"></div>');
         lines.push(`<div class="receipt-row receipt-bold"><span class="left">TOTAL</span><span class="right">${money(r.grand_total)}</span></div>`);
+        // PH VAT (12%) breakdown (VAT-inclusive total): VAT = Total * 12/112; VATable Sales = Total - VAT
+        const totalForVat = Number(r.grand_total || 0);
+        const vatAmount = totalForVat > 0 ? (totalForVat * (12 / 112)) : 0;
+        const vatableSales = Math.max(0, totalForVat - vatAmount);
+        lines.push(`<div class="receipt-row"><span class="left">VATABLE SALES</span><span class="right">${money(vatableSales)}</span></div>`);
+        lines.push(`<div class="receipt-row"><span class="left">VAT (12%)</span><span class="right">${money(vatAmount)}</span></div>`);
+        const tendered = r.amount_tendered != null ? Number(r.amount_tendered) : null;
+        const change = r.change_amount != null ? Number(r.change_amount) : null;
+        const ch0 = change != null ? change : 0;
+        const pm = String(r.payment_method || '').trim().toLowerCase();
+        const pmLabel = pm ? pm.toUpperCase().replace(/_/g, ' ') : '';
+        if (pmLabel) lines.push(`<div class="receipt-row"><span class="left">PAYMENT</span><span class="right">${escapeHtml(pmLabel)}</span></div>`);
+        const refunded = r.refunded_amount != null ? Number(r.refunded_amount) : 0;
+        const added = r.added_paid_amount != null ? Number(r.added_paid_amount) : 0;
+        const basePaid = pm === 'cash'
+            ? (tendered != null ? tendered : null)
+            : (r.amount_paid != null ? Number(r.amount_paid) : (tendered != null ? tendered : null));
+        // Apply refunds FIFO: refund reduces base first, then additional.
+        const baseAfterRefund = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, basePaid - refunded) : null;
+        const remainingRefundAfterBase = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, refunded - basePaid) : refunded;
+        const addedAfterRefund = Number.isFinite(added) ? Math.max(0, added - remainingRefundAfterBase) : 0;
+        const netPaid = (baseAfterRefund != null && Number.isFinite(baseAfterRefund))
+            ? Math.max(0, baseAfterRefund + addedAfterRefund)
+            : null;
+        if (pm === 'cash' && basePaid != null) {
+            lines.push(`<div class="receipt-row"><span class="left">NET TO ORDER (initial)</span><span class="right">${money(basePaid)}</span></div>`);
+            if (tendered != null && Number.isFinite(tendered) && Math.abs(tendered - basePaid) > 0.009) {
+                lines.push(`<div class="receipt-row receipt-muted"><span class="left">Cash tendered (reference)</span><span class="right">${money(tendered)}</span></div>`);
+            }
+        } else if (basePaid != null) {
+            lines.push(`<div class="receipt-row"><span class="left">AMOUNT PAID</span><span class="right">${money(baseAfterRefund ?? basePaid)}</span></div>`);
+        }
+        if (refunded != null && Number.isFinite(refunded) && refunded > 0) {
+            lines.push(`<div class="receipt-row"><span class="left">REFUND</span><span class="right">-${money(refunded)}</span></div>`);
+        }
+        if (addedAfterRefund != null && Number.isFinite(addedAfterRefund) && addedAfterRefund > 0) {
+            lines.push(`<div class="receipt-row"><span class="left">ADDITIONAL PAID</span><span class="right">${money(addedAfterRefund)}</span></div>`);
+        }
+        if (netPaid != null) {
+            lines.push(`<div class="receipt-row receipt-bold"><span class="left">NET PAID</span><span class="right">${money(netPaid)}</span></div>`);
+        }
+        // After any edit adjustment (refund/additional), treat this receipt as final settlement.
+        // Change from the original payment is no longer meaningful.
+        const hasAdjust = (Number.isFinite(refunded) && refunded > 0) || (Number.isFinite(added) && added > 0);
+        const finalChange = hasAdjust ? 0 : change;
+        if (finalChange != null && Number.isFinite(finalChange)) {
+            lines.push(`<div class="receipt-row"><span class="left">CHANGE</span><span class="right">${money(finalChange)}</span></div>`);
+        }
         lines.push('<div class="receipt-dash"></div>');
         const tid = r.transaction_id != null ? `#${r.transaction_id}` : '';
         let when = '';
@@ -577,24 +664,113 @@ body.branch-select-open .pos-order-summary-float {
             }
         }
 
-        const confirm = await Swal.fire({
-            icon: 'info',
-            title: 'Confirm Order',
-            text: 'Proceed with checkout?',
+        const payment = await Swal.fire({
+            icon: 'question',
+            title: 'Payment details',
+            html: `
+                <div class="text-start">
+                    <label class="form-label mb-1">Mode of payment</label>
+                    <select id="swalPaymentMethod" class="form-select mb-2">
+                        <option value="cash">Cash</option>
+                        <option value="card">Card</option>
+                        <option value="gcash">GCash</option>
+                        <option value="paymaya">PayMaya</option>
+                        <option value="online_banking">Online Banking</option>
+                        <option value="free">Free (Employee)</option>
+                    </select>
+                    <label class="form-label mb-1">Amount received</label>
+                    <input id="swalAmountReceived" class="form-control" placeholder="0.00" inputmode="decimal" autocomplete="off">
+                    <div id="swalQuickAmounts" class="d-flex flex-wrap gap-2 mt-2"></div>
+                    <div class="form-text">For non-cash payments, this will be set to exact total.</div>
+                </div>
+            `,
             showCancelButton: true,
-            confirmButtonText: 'Confirm Checkout',
+            confirmButtonText: 'Proceed',
+            didOpen: () => {
+                const methodEl = document.getElementById('swalPaymentMethod');
+                const amtEl = document.getElementById('swalAmountReceived');
+                const quickWrap = document.getElementById('swalQuickAmounts');
+                const total = Number(totalEl?.textContent?.replace(/,/g, '') || 0);
+                const sync = () => {
+                    const method = String(methodEl?.value || 'cash');
+                    if (method !== 'cash' && method !== 'free') {
+                        amtEl.value = String(total.toFixed(2));
+                        amtEl.disabled = true;
+                        if (quickWrap) quickWrap.innerHTML = '';
+                    } else if (method === 'free') {
+                        amtEl.value = '0.00';
+                        amtEl.disabled = true;
+                        if (quickWrap) quickWrap.innerHTML = '';
+                    } else {
+                        // CASH: keep the field disabled unless user explicitly taps "Enter amount".
+                        amtEl.disabled = true;
+                        if (!amtEl.value) amtEl.value = String(total.toFixed(2));
+                        if (quickWrap) {
+                            const opts = [50, 100, 200, 500, 1000];
+                            quickWrap.innerHTML = opts.map(v => `<button type="button" class="btn btn-sm btn-outline-secondary" data-amt="${v}">${v}</button>`).join('')
+                                + `<button type="button" class="btn btn-sm btn-outline-primary" data-amt="custom">Enter amount</button>`;
+                            quickWrap.querySelectorAll('button[data-amt]').forEach((b) => {
+                                b.addEventListener('click', () => {
+                                    const val = String(b.getAttribute('data-amt') || '');
+                                    if (val === 'custom') {
+                                        amtEl.value = '';
+                                        amtEl.disabled = false;
+                                        setTimeout(() => amtEl?.focus(), 50);
+                                    } else {
+                                        const n = Number(val);
+                                        if (Number.isFinite(n)) {
+                                            amtEl.value = String(n.toFixed(2));
+                                            // Keep the field disabled; quick buttons are the intended input.
+                                        }
+                                    }
+                                });
+                            });
+                        }
+                    }
+                };
+                methodEl?.addEventListener('change', sync);
+                sync();
+                // Focus only when Enter amount is tapped.
+            },
+            preConfirm: () => {
+                const method = String(document.getElementById('swalPaymentMethod')?.value || 'cash');
+                const total = Number(totalEl?.textContent?.replace(/,/g, '') || 0);
+                const raw = String(document.getElementById('swalAmountReceived')?.value || '').trim();
+                const received = Number(raw);
+                const finalReceived = method === 'cash' ? received : (method === 'free' ? 0 : total);
+                if (!Number.isFinite(finalReceived) || finalReceived < 0) {
+                    Swal.showValidationMessage('Enter a valid amount received.');
+                    return false;
+                }
+                if (method === 'cash' && finalReceived < total) {
+                    Swal.showValidationMessage('Amount received is less than total.');
+                    return false;
+                }
+                return { method, received: finalReceived };
+            },
         });
-        if (!confirm.isConfirmed) return;
+        if (!payment.isConfirmed) return;
+        const paymentMethod = payment.value.method;
+        const tendered = Number(payment.value.received || 0);
 
         const form = document.getElementById('checkoutForm');
         const fd = new FormData(form);
+        fd.set('payment_method', String(paymentMethod));
+        fd.set('amount_tendered', String(tendered));
         try {
+            Swal.fire({
+                title: 'Preparing receipt…',
+                allowOutsideClick: false,
+                allowEscapeKey: false,
+                didOpen: () => Swal.showLoading(),
+            });
             const res = await fetch(form.action, {
                 method: 'POST',
                 body: fd,
                 headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
             });
             const body = await res.json().catch(() => ({}));
+            Swal.close();
             if (!res.ok || !body.success) {
                 return Swal.fire({ icon: 'error', title: 'Checkout failed', text: body.message || 'Please try again.' });
             }
@@ -603,7 +779,68 @@ body.branch-select-open .pos-order-summary-float {
             Object.keys(cart).forEach((k) => { delete cart[k]; });
             renderCart();
         } catch {
+            Swal.close();
             Swal.fire({ icon: 'error', title: 'Network error', text: 'Could not complete checkout.' });
+        }
+    });
+
+    const csrf = document.querySelector('input[name="_token"]')?.value || '';
+    const pendingStoreUrl = <?= json_embed(url('/tenant/pos/pending')) ?>;
+
+    const formatWhen = (raw) => {
+        if (!raw) return '';
+        const d = new Date(String(raw).replace(' ', 'T'));
+        return !Number.isNaN(d.getTime()) ? d.toLocaleString() : String(raw);
+    };
+
+    const pendingMetaModalEl = document.getElementById('pendingMetaModal');
+    const pendingMetaModal = pendingMetaModalEl ? bootstrap.Modal.getOrCreateInstance(pendingMetaModalEl) : null;
+    const pendingNameInput = document.getElementById('pendingNameInput');
+    const pendingContactInput = document.getElementById('pendingContactInput');
+    const pendingMetaSaveBtn = document.getElementById('pendingMetaSaveBtn');
+
+    document.getElementById('savePendingBtn')?.addEventListener('click', async () => {
+        if (!Object.keys(cart).length) return Swal.fire({ icon: 'warning', title: 'Cart is empty' });
+        if (!pendingMetaModal) return;
+        if (pendingNameInput) pendingNameInput.value = '';
+        if (pendingContactInput) pendingContactInput.value = '';
+        pendingMetaModal.show();
+        setTimeout(() => pendingNameInput?.focus(), 120);
+    });
+
+    pendingMetaSaveBtn?.addEventListener('click', async () => {
+        const name = String(pendingNameInput?.value || '').trim();
+        const contact = String(pendingContactInput?.value || '').trim();
+        if (!name) {
+            pendingNameInput?.focus();
+            return Swal.fire({ icon: 'warning', title: 'Name is required', text: 'Please enter the creditor name.' });
+        }
+
+        const entries = Object.values(cart).map((c) => ({ product_id: c.product_id, quantity: c.quantity }));
+        const fd = new FormData();
+        if (csrf) fd.set('_token', csrf);
+        fd.set('pending_name', name);
+        if (contact) fd.set('pending_contact', contact);
+        entries.forEach((it, idx) => {
+            fd.set(`items[${idx}][product_id]`, String(it.product_id));
+            fd.set(`items[${idx}][quantity]`, String(it.quantity));
+        });
+        try {
+            const res = await fetch(pendingStoreUrl, {
+                method: 'POST',
+                body: fd,
+                headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok || !body.success) {
+                return Swal.fire({ icon: 'error', title: 'Save pending failed', text: body.message || 'Please try again.' });
+            }
+            Object.keys(cart).forEach((k) => { delete cart[k]; });
+            renderCart();
+            pendingMetaModal?.hide();
+            Swal.fire({ icon: 'success', title: 'Saved as pending', text: `Pending #${body.pending_id}` });
+        } catch {
+            Swal.fire({ icon: 'error', title: 'Network error', text: 'Could not save pending.' });
         }
     });
 

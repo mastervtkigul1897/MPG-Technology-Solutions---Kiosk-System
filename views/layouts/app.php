@@ -310,6 +310,96 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
             };
         })();
         </script>
+        <script>
+        (() => {
+            // Mobile/tablet pull-to-refresh (reload) when scrolled to top.
+            const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+            if (!isTouch) return;
+
+            const scrollEl = document.querySelector('.app-main-scroll .overflow-auto') || document.scrollingElement || document.documentElement;
+            if (!scrollEl) return;
+
+            let startY = 0;
+            let pulling = false;
+            let indicator = null;
+            const threshold = 70; // px
+
+            const ensureIndicator = () => {
+                if (indicator) return indicator;
+                indicator = document.createElement('div');
+                indicator.id = 'pullToRefreshIndicator';
+                indicator.style.position = 'fixed';
+                indicator.style.left = '50%';
+                indicator.style.top = 'calc(var(--app-toolbar-height, 56px) + .35rem)';
+                indicator.style.transform = 'translate(-50%, -120%)';
+                indicator.style.transition = 'transform 160ms ease, opacity 160ms ease';
+                indicator.style.opacity = '0';
+                indicator.style.zIndex = '2000';
+                indicator.style.background = 'rgba(33, 37, 41, .92)';
+                indicator.style.color = '#fff';
+                indicator.style.padding = '.35rem .6rem';
+                indicator.style.borderRadius = '999px';
+                indicator.style.fontSize = '.85rem';
+                indicator.style.boxShadow = '0 8px 18px rgba(0,0,0,.18)';
+                indicator.innerHTML = '<i class="fa-solid fa-rotate me-1"></i>Pull to refresh';
+                document.body.appendChild(indicator);
+                return indicator;
+            };
+
+            const showIndicator = (ready) => {
+                const el = ensureIndicator();
+                el.style.opacity = '1';
+                el.style.transform = 'translate(-50%, 0)';
+                el.innerHTML = ready
+                    ? '<i class="fa-solid fa-rotate me-1"></i>Release to refresh'
+                    : '<i class="fa-solid fa-rotate me-1"></i>Pull to refresh';
+            };
+            const hideIndicator = () => {
+                if (!indicator) return;
+                indicator.style.opacity = '0';
+                indicator.style.transform = 'translate(-50%, -120%)';
+            };
+
+            const isAtTop = () => (scrollEl === document.scrollingElement || scrollEl === document.documentElement)
+                ? (window.scrollY || document.documentElement.scrollTop || 0) <= 0
+                : (scrollEl.scrollTop || 0) <= 0;
+
+            const isBusy = () => {
+                // If any Bootstrap modal is open, do not trigger refresh.
+                return document.querySelector('.modal.show') != null;
+            };
+
+            window.addEventListener('touchstart', (e) => {
+                if (isBusy()) return;
+                if (!isAtTop()) return;
+                if (!e.touches || e.touches.length !== 1) return;
+                startY = e.touches[0].clientY;
+                pulling = true;
+            }, { passive: true });
+
+            window.addEventListener('touchmove', (e) => {
+                if (!pulling) return;
+                if (isBusy()) { pulling = false; hideIndicator(); return; }
+                if (!e.touches || e.touches.length !== 1) return;
+                const dy = e.touches[0].clientY - startY;
+                if (dy <= 0) { hideIndicator(); return; }
+                showIndicator(dy >= threshold);
+            }, { passive: true });
+
+            window.addEventListener('touchend', () => {
+                if (!pulling) return;
+                pulling = false;
+                if (isBusy()) { hideIndicator(); return; }
+                // Use last indicator state by checking its text
+                const ready = indicator && indicator.textContent && indicator.textContent.toLowerCase().includes('release');
+                hideIndicator();
+                if (ready) {
+                    // Small delay so the indicator can animate out.
+                    setTimeout(() => window.location.reload(), 120);
+                }
+            }, { passive: true });
+        })();
+        </script>
         <div class="app-main-scroll flex-grow-1 d-flex flex-column min-h-0">
         <div class="app-top-toolbar d-flex justify-content-between align-items-center mb-2">
             <div class="mobile-sidebar-toggle">

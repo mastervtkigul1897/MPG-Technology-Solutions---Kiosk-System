@@ -31,54 +31,89 @@ if (! empty($is_super)): ?>
             </div>
         </div>
     <?php endif; ?>
-    <div class="row g-3 mb-3">
-        <div class="col-md-3"><div class="card"><div class="card-body"><small>Total Orders Today</small><h4><?= (int) ($stats['orders_today'] ?? 0) ?></h4></div></div></div>
-        <div class="col-md-3"><div class="card"><div class="card-body"><small>Total Damage Today</small><h4><?= number_format((float) ($stats['damages_today'] ?? 0), 2) ?></h4></div></div></div>
-        <div class="col-md-3"><div class="card"><div class="card-body"><small>Total Inventory Items</small><h4><?= (int) ($stats['ingredients_count'] ?? 0) ?></h4></div></div></div>
-        <div class="col-md-3"><div class="card"><div class="card-body"><small>Total Products</small><h4><?= (int) ($stats['products_count'] ?? 0) ?></h4></div></div></div>
-    </div>
+
+    <?php
+    $rangeFrom = (string) ($stats['range_from'] ?? date('Y-m-d'));
+    $rangeTo = (string) ($stats['range_to'] ?? date('Y-m-d'));
+    $today = date('Y-m-d');
+    $isTodayOnly = ($rangeFrom === $today && $rangeTo === $today);
+    ?>
     <div class="card mb-3">
         <div class="card-body">
-            <h6>Orders / Sales / Expense / Profit (Last 7 Days)</h6>
-            <canvas id="dashChart" height="100"></canvas>
+            <form class="row g-2 align-items-end" method="get" action="">
+                <div class="col-12 col-md-4">
+                    <label class="form-label small text-muted mb-1">From date</label>
+                    <input type="date" name="from" class="form-control" value="<?= e($rangeFrom) ?>">
+                </div>
+                <div class="col-12 col-md-4">
+                    <label class="form-label small text-muted mb-1">To date</label>
+                    <input type="date" name="to" class="form-control" value="<?= e($rangeTo) ?>">
+                </div>
+                <div class="col-12 col-md-4 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary flex-grow-1">Apply</button>
+                    <a class="btn btn-outline-secondary" href="<?= e(url('/dashboard')) ?>">Today</a>
+                </div>
+            </form>
+            <?php if ($isTodayOnly): ?>
+                <div class="small text-muted mt-2">Showing totals for <strong>today</strong>.</div>
+            <?php else: ?>
+                <div class="small text-muted mt-2">Showing totals from <strong><?= e($rangeFrom) ?></strong> to <strong><?= e($rangeTo) ?></strong>.</div>
+            <?php endif; ?>
         </div>
     </div>
-    <div class="card">
-        <div class="card-body">
-            <h6>Orders and Sales by Period</h6>
-            <?php
-            $periodLabels = ['today' => 'Today', 'yesterday' => 'Yesterday', 'last_3_days' => 'Last 3 Days', 'last_7_days' => 'Last 7 Days', 'last_30_days' => 'Last 30 Days'];
-            ?>
-            <div class="table-responsive">
-                <table class="table table-striped js-mobile-collapsible">
-                    <thead><tr><th>Period</th><th>Orders</th><th>Sales</th><th>Expense</th><th>Profit</th></tr></thead>
-                    <tbody>
-                    <?php foreach ($periodLabels as $key => $label): ?>
-                        <tr>
-                            <td><?= e($label) ?></td>
-                            <td><?= (int) ($periods[$key]['orders'] ?? 0) ?></td>
-                            <td><?= number_format((float) ($periods[$key]['sales'] ?? 0), 2) ?></td>
-                            <td><?= number_format((float) ($periods[$key]['expenses'] ?? 0), 2) ?></td>
-                            <td><?= number_format((float) ($periods[$key]['profit'] ?? 0), 2) ?></td>
-                        </tr>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table>
+
+    <div class="row g-3 mb-3">
+        <div class="col-md-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted"><?= $isTodayOnly ? 'Sales today' : 'Sales (selected range)' ?></small>
+                    <h3 class="mb-0"><?= number_format((float) ($stats['sales_today'] ?? 0), 2) ?></h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted"><?= $isTodayOnly ? 'Expenses today' : 'Expenses (selected range)' ?></small>
+                    <h3 class="mb-0"><?= number_format((float) ($stats['expenses_today'] ?? 0), 2) ?></h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted"><?= $isTodayOnly ? 'Net sales today' : 'Net sales (selected range)' ?></small>
+                    <div class="small text-muted mb-1">Sales − expenses</div>
+                    <?php
+                    $net = (float) ($stats['net_sales_today'] ?? 0);
+                    $netClass = $net < 0 ? 'text-danger' : '';
+                    ?>
+                    <h3 class="mb-0 <?= $netClass ?>"><?= number_format($net, 2) ?></h3>
+                </div>
             </div>
         </div>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script>
-    new Chart(document.getElementById('dashChart'), {
-        data: {
-            labels: <?= json_embed($chart['labels'] ?? []) ?>,
-            datasets: [
-                { type: 'bar', label: 'Orders', data: <?= json_embed($chart['orders'] ?? []) ?> },
-                { type: 'line', label: 'Sales', data: <?= json_embed($chart['sales'] ?? []) ?> },
-                { type: 'line', label: 'Expense', data: <?= json_embed($chart['expenses'] ?? []) ?> },
-                { type: 'line', label: 'Profit', data: <?= json_embed($chart['profit'] ?? []) ?> }
-            ]
-        }
-    });
-    </script>
+    <?php
+    $pt = (array) ($stats['payments_today'] ?? []);
+    $suffix = $isTodayOnly ? 'today' : '(selected range)';
+    $payCards = [
+        ['key' => 'cash', 'label' => 'Cash '.$suffix],
+        ['key' => 'card', 'label' => 'Card '.$suffix],
+        ['key' => 'gcash', 'label' => 'GCash '.$suffix],
+        ['key' => 'paymaya', 'label' => 'PayMaya '.$suffix],
+        ['key' => 'online_banking', 'label' => 'Online banking '.$suffix],
+    ];
+    ?>
+    <div class="row g-3 mb-3">
+        <?php foreach ($payCards as $pc): ?>
+            <div class="col-6 col-lg-4 col-xl-2">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <small class="text-muted"><?= e($pc['label']) ?></small>
+                        <h4 class="mb-0"><?= number_format((float) ($pt[$pc['key']] ?? 0), 2) ?></h4>
+                    </div>
+                </div>
+            </div>
+        <?php endforeach; ?>
+    </div>
 <?php endif; ?>
