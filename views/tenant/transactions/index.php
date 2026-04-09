@@ -317,6 +317,15 @@
     const dateTodayBtn = document.getElementById('txDateTodayBtn');
     const dateClearBtn = document.getElementById('txDateClearBtn');
 
+    // Default date filter must be today.
+    if (dateFilterEl && !dateFilterEl.value) {
+        const now = new Date();
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        const dd = String(now.getDate()).padStart(2, '0');
+        dateFilterEl.value = `${yyyy}-${mm}-${dd}`;
+    }
+
     initServerDataTable('#transactionsTable', {
         ajax: {
             url: '<?= e(route('tenant.transactions.index')) ?>',
@@ -713,6 +722,21 @@
                 });
             });
             editRemoveTbody.querySelectorAll('.edit-existing-qty').forEach((el) => el.addEventListener('input', recalcSummary));
+
+            // FREE payment: do not allow voiding/removing items.
+            const pmLower2 = String(currentEdit.payment_method || 'cash').toLowerCase();
+            if (pmLower2 === 'free') {
+                editRemoveTbody.querySelectorAll('.edit-void-btn').forEach((btn) => {
+                    btn.disabled = true;
+                    btn.classList.remove('btn-outline-danger');
+                    btn.classList.add('btn-outline-secondary');
+                    if (btn.textContent.trim().toLowerCase() === 'void') btn.textContent = 'Locked';
+                });
+                // Prevent manual qty edits that could remove items (void).
+                editRemoveTbody.querySelectorAll('.edit-existing-qty').forEach((el) => {
+                    el.disabled = true;
+                });
+            }
 
             const canEdit = status === 'completed' || status === 'pending';
             setEditEnabled(canEdit);

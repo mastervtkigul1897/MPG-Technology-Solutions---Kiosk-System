@@ -148,14 +148,13 @@
 
                     <div class="mb-2">
                         <h6 class="mb-1">Assign resource requirements</h6>
-                        <p class="small text-muted mb-0">Optional: set inventory requirements only for products/services that consume stock.</p>
+                        <p class="small text-muted mb-2">Optional: set inventory requirements only for products/services that consume stock.</p>
+                        <button type="button" class="btn btn-outline-primary w-100" id="editAddRecipeRow">
+                            <i class="fa fa-plus me-1"></i> Add requirement row
+                        </button>
                     </div>
 
                     <div id="editRecipeRows" class="vstack gap-3"></div>
-
-                    <button type="button" class="btn btn-outline-primary w-100 mt-2" id="editAddRecipeRow">
-                        <i class="fa fa-plus me-1"></i> Add requirement row
-                    </button>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>

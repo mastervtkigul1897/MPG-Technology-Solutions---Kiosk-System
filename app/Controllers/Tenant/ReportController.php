@@ -489,6 +489,17 @@ final class ReportController
                 ];
             }
 
+            // FREE orders: do not allow void/removal of any existing item.
+            if ($pmLower === 'free') {
+                foreach ($existing as $itemId => $row) {
+                    $oldQty = max(0, (int) ($row['quantity'] ?? 0));
+                    $wanted = array_key_exists($itemId, $existingWanted) ? (int) $existingWanted[$itemId] : $oldQty;
+                    if ($wanted < $oldQty) {
+                        throw new RuntimeException('Cannot void items on FREE (Employee) transactions.');
+                    }
+                }
+            }
+
             $before = [
                 'existing_new_qty' => $existingWanted,
                 'added' => $adds,
