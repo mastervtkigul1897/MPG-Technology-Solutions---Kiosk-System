@@ -44,4 +44,10 @@ return [
         'rate_limit_general' => [120, 60],
         'rate_limit_checkout' => [20, 60],
     ],
+    /** Raw ESC/POS over TCP (Wi-Fi/Ethernet thermal, usually port 9100). Server must reach printer IP. */
+    'thermal_printer' => [
+        'host' => trim((string) $get('THERMAL_PRINTER_HOST', '')),
+        'port' => max(1, min(65535, (int) ($get('THERMAL_PRINTER_PORT', '9100') ?: 9100))),
+        'timeout' => max(0.5, min(30.0, (float) ($get('THERMAL_PRINTER_TIMEOUT', '3') ?: 3))),
+    ],
 ];

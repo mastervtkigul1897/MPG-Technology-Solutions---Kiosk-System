@@ -193,9 +193,13 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
             <div class="modal-body">
                 <div id="receiptPrintArea" class="receipt-print-area small"></div>
             </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" id="receiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
-                <button type="button" class="btn btn-primary" id="receiptOkBtn" data-bs-dismiss="modal">OK</button>
+            <div class="modal-footer flex-column flex-sm-row flex-wrap gap-2 justify-content-stretch justify-content-sm-end w-100">
+                <div class="d-grid d-sm-flex gap-2 w-100 flex-sm-grow-0 flex-sm-wrap justify-content-sm-end">
+                    <button type="button" class="btn btn-outline-secondary" id="receiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
+                    <button type="button" class="btn btn-outline-dark <?= empty($thermal_receipt_network_enabled) ? 'd-none' : '' ?>" id="receiptPrintWifiBtn" title="Server → printer sa LAN (OK sa phone kung naka-set ang host)"><i class="fa-solid fa-wifi me-1"></i>Wi‑Fi / LAN</button>
+                    <button type="button" class="btn btn-outline-dark" id="receiptPrintBleBtn" title="Mag-print sa Bluetooth thermal printer (Chrome/Android, HTTPS; hindi sa Safari sa iPhone)"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
+                    <button type="button" class="btn btn-primary" id="receiptOkBtn" data-bs-dismiss="modal">OK</button>
+                </div>
             </div>
         </div>
     </div>
@@ -228,13 +232,97 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
 </div>
 
 <style>
+/* Thermal receipt print: 80mm roll, black & white, one continuous “page” (no blank sheet) */
 @media print {
-    body * { visibility: hidden; }
-    #receiptModal, #receiptModal * { visibility: visible; }
-    #receiptModal { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; }
-    #receiptModal .modal-dialog { max-width: 100%; margin: 0; }
-    #receiptModal .modal-content { border: 0; box-shadow: none; }
-    #receiptModal .modal-footer { display: none; }
+    @page {
+        size: 80mm auto;
+        margin: 0;
+    }
+    html, body {
+        height: auto !important;
+        min-height: 0 !important;
+        overflow: visible !important;
+        background: #fff !important;
+        color: #000 !important;
+        print-color-adjust: economy;
+        -webkit-print-color-adjust: economy;
+    }
+    body * {
+        visibility: hidden !important;
+    }
+    #receiptModal,
+    #receiptModal * {
+        visibility: visible !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+    }
+    #receiptModal {
+        position: absolute !important;
+        inset: 0 auto auto 0 !important;
+        width: 80mm !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: #fff !important;
+        border: 0 !important;
+        filter: none !important;
+    }
+    #receiptModal .modal-dialog {
+        max-width: 80mm !important;
+        width: 80mm !important;
+        margin: 0 !important;
+        height: auto !important;
+    }
+    #receiptModal .modal-content {
+        border: 0 !important;
+        box-shadow: none !important;
+        background: #fff !important;
+        color: #000 !important;
+        height: auto !important;
+    }
+    #receiptModal .modal-header,
+    #receiptModal .modal-footer {
+        display: none !important;
+    }
+    #receiptModal .modal-body {
+        padding: 0 !important;
+        overflow: visible !important;
+        max-height: none !important;
+        background: #fff !important;
+    }
+    #receiptPrintArea {
+        display: block !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        justify-content: flex-start !important;
+    }
+    #receiptPrintArea .receipt-paper,
+    #receiptModal .receipt-paper {
+        width: 100% !important;
+        max-width: none !important;
+        margin: 0 !important;
+        padding: 1.5mm 2mm !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        background: #fff !important;
+        color: #000 !important;
+        font-family: "Courier New", Courier, monospace !important;
+        font-size: 11px !important;
+        line-height: 1.3 !important;
+        page-break-after: avoid !important;
+        break-after: avoid-page !important;
+        page-break-inside: auto;
+    }
+    #receiptModal .receipt-paper * {
+        color: #000 !important;
+        background: transparent !important;
+    }
+    #receiptModal .receipt-muted {
+        color: #333 !important;
+    }
+    #receiptModal .receipt-dash {
+        border-top-color: #000 !important;
+    }
     .pos-order-summary-float {
         position: static !important;
         max-height: none !important;
@@ -366,7 +454,7 @@ body.branch-select-open .pos-order-summary-float {
 }
 .receipt-paper {
     width: 100%;
-    max-width: 340px;
+    max-width: 80mm;
     margin: 0 auto;
     padding: .55rem .65rem;
     border: 1px dashed #adb5bd;
@@ -403,6 +491,66 @@ body.branch-select-open .pos-order-summary-float {
 
 <script>
 (() => {
+    const thermalCfg = <?= json_embed([
+        'networkUrl' => $thermal_receipt_network_url ?? '',
+        'escposUrl' => $thermal_receipt_escpos_url ?? '',
+        'networkEnabled' => ! empty($thermal_receipt_network_enabled),
+    ]) ?>;
+    let lastReceiptObject = null;
+
+    const postReceiptJson = async (url, receipt) => {
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+        const params = new URLSearchParams();
+        params.set('_token', csrf);
+        params.set('receipt_json', JSON.stringify(receipt));
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            body: params,
+        });
+        return res.json().catch(() => ({}));
+    };
+
+    const fetchEscposBytes = async (receipt) => {
+        const body = await postReceiptJson(thermalCfg.escposUrl, receipt);
+        if (!body || !body.success || !body.escpos_base64) {
+            throw new Error(body?.message || 'Could not build ESC/POS data.');
+        }
+        const bin = atob(body.escpos_base64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+        return out;
+    };
+
+    const writeEscposBluetooth = async (bytes) => {
+        if (!navigator.bluetooth) {
+            throw new Error('Web Bluetooth not available. Use Chrome or Edge over HTTPS, or pair the printer with the tablet/PC and use Print.');
+        }
+        const optionalServices = [
+            '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+            '0000ffe0-0000-1000-8000-00805f9b34fb',
+            '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+        ];
+        const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices });
+        const server = await device.gatt.connect();
+        for (const sid of optionalServices) {
+            let svc;
+            try { svc = await server.getPrimaryService(sid); } catch { continue; }
+            const chars = await svc.getCharacteristics();
+            for (const ch of chars) {
+                if (!ch.properties.write && !ch.properties.writeWithoutResponse) continue;
+                const chunkSize = ch.properties.writeWithoutResponse ? 180 : 20;
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                    const slice = bytes.slice(i, i + chunkSize);
+                    if (ch.properties.writeWithoutResponse) await ch.writeValueWithoutResponse(slice);
+                    else await ch.writeValueWithResponse(slice);
+                }
+                return;
+            }
+        }
+        throw new Error('No writable Bluetooth characteristic found. Pair the printer with the OS and use Print, or use Wi‑Fi/LAN raw printing.');
+    };
+
     const products = <?= json_embed($productPayload) ?>;
     const currentSearch = <?= json_embed($filters['search'] ?? '') ?>;
     const byId = Object.fromEntries(products.map(p => [p.id, p]));
@@ -645,8 +793,79 @@ body.branch-select-open .pos-order-summary-float {
         return lines.join('');
     };
 
-    document.getElementById('receiptPrintBtn').addEventListener('click', () => {
+    const receiptThermalCssUrl = <?= json_embed(url('css/receipt-thermal-print-doc.css')) ?>;
+    const printReceiptDedicated = (rootEl) => {
+        if (typeof window.printReceiptThermalDoc === 'function') {
+            window.printReceiptThermalDoc(rootEl, {
+                cssUrl: receiptThermalCssUrl,
+                onPopupBlocked: () => {
+                    if (typeof Swal !== 'undefined') {
+                        Swal.fire({
+                            icon: 'info',
+                            title: 'Hindi na-block lang ang bagong tab',
+                            text: 'Susubukan ang print sa loob ng page. Kung kailangan pa rin ng bagong window, payagan ang pop-ups para sa site na ito.',
+                        });
+                    }
+                },
+            });
+            return;
+        }
+        if (!rootEl) return;
+        const markup = rootEl.innerHTML;
+        if (!markup || !String(markup).trim()) {
+            window.print();
+            return;
+        }
         window.print();
+    };
+
+    document.getElementById('receiptPrintBtn').addEventListener('click', () => {
+        printReceiptDedicated(document.getElementById('receiptPrintArea'));
+    });
+
+    document.getElementById('receiptPrintWifiBtn')?.addEventListener('click', async () => {
+        if (!thermalCfg.networkEnabled) return;
+        const r = lastReceiptObject;
+        if (!r) return Swal.fire({ icon: 'warning', title: 'No receipt', text: 'Complete a sale first.' });
+        Swal.fire({ title: 'Sending to printer…', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+        try {
+            const body = await postReceiptJson(thermalCfg.networkUrl, r);
+            Swal.close();
+            if (!body.success) throw new Error(body.message || 'Failed');
+            Swal.fire({ icon: 'success', title: 'Sent', text: 'Raw data sent to network printer.', timer: 1800, showConfirmButton: false });
+        } catch (err) {
+            Swal.close();
+            Swal.fire({ icon: 'error', title: 'Network print failed', text: String(err?.message || err) });
+        }
+    });
+
+    document.getElementById('receiptPrintBleBtn')?.addEventListener('click', async () => {
+        const r = lastReceiptObject;
+        if (!r) return Swal.fire({ icon: 'warning', title: 'No receipt', text: 'Complete a sale first.' });
+        if (!window.isSecureContext) {
+            return Swal.fire({ icon: 'info', title: 'Kailangan ang HTTPS', text: 'Buksan ang app sa HTTPS (o localhost) para sa Web Bluetooth.' });
+        }
+        const hints = typeof window.mpgReceiptDeviceHints === 'function' ? window.mpgReceiptDeviceHints() : null;
+        if (hints && !hints.hasWebBluetooth) {
+            return Swal.fire({
+                icon: 'info',
+                title: 'Hindi available ang Bluetooth print dito',
+                html: hints.isIOS
+                    ? 'Walang Web Bluetooth ang Safari sa iPhone/iPad. Gamitin ang <strong>Print</strong> (AirPrint) o <strong>Wi‑Fi / LAN</strong> kung naka-set ang printer sa server.'
+                    : 'Ang browser na ito ay walang Web Bluetooth. Subukan ang Chrome sa Android, o gamitin ang <strong>Print</strong> / <strong>Wi‑Fi / LAN</strong>.',
+            });
+        }
+        try {
+            Swal.fire({ title: 'Preparing data…', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+            const bytes = await fetchEscposBytes(r);
+            Swal.close();
+            await writeEscposBluetooth(bytes);
+            Swal.fire({ icon: 'success', title: 'Naipadala sa Bluetooth printer', timer: 1800, showConfirmButton: false });
+        } catch (err) {
+            Swal.close();
+            if (err?.name === 'NotFoundError' || err?.name === 'SecurityError') return;
+            Swal.fire({ icon: 'error', title: 'Hindi nagawa ang Bluetooth print', text: String(err?.message || err) });
+        }
     });
 
     document.getElementById('checkoutBtn').addEventListener('click', async () => {
@@ -774,6 +993,7 @@ body.branch-select-open .pos-order-summary-float {
             if (!res.ok || !body.success) {
                 return Swal.fire({ icon: 'error', title: 'Checkout failed', text: body.message || 'Please try again.' });
             }
+            lastReceiptObject = body.receipt || null;
             document.getElementById('receiptPrintArea').innerHTML = buildReceiptHtml(body.receipt);
             bootstrap.Modal.getOrCreateInstance(document.getElementById('receiptModal')).show();
             Object.keys(cart).forEach((k) => { delete cart[k]; });

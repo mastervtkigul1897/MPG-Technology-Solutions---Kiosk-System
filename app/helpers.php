@@ -182,6 +182,27 @@ function response_view(string $name, array $data = [], int $code = 200): Respons
     return new Response(view($name, $data), $code, ['Content-Type' => 'text/html; charset=UTF-8']);
 }
 
+/**
+ * URLs/flags for thermal receipt: Wi-Fi raw TCP (server) + ESC/POS payload for Web Bluetooth (browser).
+ *
+ * @return array{thermal_receipt_network_url: string, thermal_receipt_escpos_url: string, thermal_receipt_network_enabled: bool}
+ */
+function thermal_receipt_client_config(string $context = 'pos'): array
+{
+    $tp = App::config('thermal_printer');
+    if (! is_array($tp)) {
+        $tp = [];
+    }
+    $host = trim((string) ($tp['host'] ?? ''));
+    $prefix = $context === 'transactions' ? '/tenant/transactions' : '/tenant/pos';
+
+    return [
+        'thermal_receipt_network_url' => url($prefix.'/receipt-print-network'),
+        'thermal_receipt_escpos_url' => url($prefix.'/receipt-escpos'),
+        'thermal_receipt_network_enabled' => $host !== '',
+    ];
+}
+
 function view_page(string $title, string $name, array $data = []): Response
 {
     $inner = view($name, $data);

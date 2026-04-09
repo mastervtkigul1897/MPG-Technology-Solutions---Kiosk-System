@@ -96,7 +96,7 @@
     </div>
 </div>
 <div class="modal fade" id="editProductModal" tabindex="-1" aria-labelledby="editProductModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-dialog modal-dialog-centered modal-lg modal-fullscreen-sm-down">
         <div class="modal-content">
             <div class="modal-header">
                 <h6 class="modal-title" id="editProductModalLabel">Edit product & requirements</h6>
@@ -167,17 +167,47 @@
     </div>
 </div>
 <style>
-/* Keep edit modal usable even with many ingredient rows */
+/*
+ * Edit product modal: one flex column + scroll only in .modal-body (min-height: 0).
+ * Avoids nested max-height + sticky footer clipping on phones / older WebViews.
+ */
+#editProductModal .modal-content {
+    max-height: calc(100vh - 1rem);
+    max-height: calc(100dvh - 1rem);
+    display: flex;
+    flex-direction: column;
+}
+#editProductModal .modal-header {
+    flex-shrink: 0;
+}
+#editProductModal #editProductForm {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
 #editProductModal .modal-body {
-    max-height: calc(100vh - 220px);
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
 }
 #editProductModal .modal-footer {
-    position: sticky;
-    bottom: 0;
-    background: #fff;
-    border-top: 1px solid #dee2e6;
-    z-index: 2;
+    flex-shrink: 0;
+    background: var(--bs-modal-bg, #fff);
+    border-top: 1px solid var(--bs-border-color, #dee2e6);
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+@media (max-width: 575.98px) {
+    /* Fullscreen dialog: use full viewport; body remains the scroll area */
+    #editProductModal .modal-dialog.modal-fullscreen-sm-down .modal-content {
+        max-height: none;
+        height: 100%;
+        min-height: 100dvh;
+    }
 }
 
 .products-table-thumb {

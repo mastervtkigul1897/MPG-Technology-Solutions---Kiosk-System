@@ -10,6 +10,8 @@ use App\Core\Request;
 use App\Core\Response;
 use App\Core\TenantReceiptFields;
 use App\Services\CheckoutService;
+use App\Services\ThermalEscPosReceipt;
+use App\Services\ThermalPrinterClient;
 use PDO;
 use RuntimeException;
 
@@ -187,7 +189,7 @@ final class PosController
 
         $lastPage = max(1, (int) ceil($total / $perPage));
 
-        return view_page('Create Transaction', 'tenant.pos.index', [
+        return view_page('Create Transaction', 'tenant.pos.index', array_merge([
             'products' => $products,
             'productPayload' => $productPayload,
             'filters' => ['search' => $search],
@@ -197,7 +199,74 @@ final class PosController
                 'total' => $total,
                 'per_page' => $perPage,
             ],
+        ], thermal_receipt_client_config('pos')));
+    }
+
+    public function receiptEscpos(Request $request): Response
+    {
+        Auth::user();
+        $receipt = self::receiptArrayFromRequest($request);
+        if ($receipt === null) {
+            return json_response(['success' => false, 'message' => 'Missing or invalid receipt data.'], 422);
+        }
+        try {
+            $bytes = ThermalEscPosReceipt::build($receipt);
+        } catch (\Throwable) {
+            return json_response(['success' => false, 'message' => 'Could not build receipt.'], 422);
+        }
+
+        return json_response([
+            'success' => true,
+            'escpos_base64' => base64_encode($bytes),
         ]);
+    }
+
+    public function receiptPrintNetwork(Request $request): Response
+    {
+        Auth::user();
+        $receipt = self::receiptArrayFromRequest($request);
+        if ($receipt === null) {
+            return json_response(['success' => false, 'message' => 'Missing or invalid receipt data.'], 422);
+        }
+        $tp = App::config('thermal_printer');
+        if (! is_array($tp)) {
+            $tp = [];
+        }
+        $host = trim((string) ($tp['host'] ?? ''));
+        if ($host === '') {
+            return json_response([
+                'success' => false,
+                'message' => 'Wi-Fi/Ethernet printer not configured. Set THERMAL_PRINTER_HOST in .env (PHP server must reach the printer, usually port 9100).',
+            ], 422);
+        }
+        $port = (int) ($tp['port'] ?? 9100);
+        $timeout = (float) ($tp['timeout'] ?? 3);
+        try {
+            $bytes = ThermalEscPosReceipt::build($receipt);
+            ThermalPrinterClient::sendRaw($host, $port, $timeout, $bytes);
+        } catch (\Throwable $e) {
+            return json_response(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        return json_response(['success' => true]);
+    }
+
+    /** @return array<string, mixed>|null */
+    private static function receiptArrayFromRequest(Request $request): ?array
+    {
+        $rj = $request->input('receipt_json');
+        if (is_string($rj) && $rj !== '') {
+            $decoded = json_decode($rj, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+        $r = $request->input('receipt');
+        if (is_array($r)) {
+            return $r;
+        }
+
+        return null;
     }
 
     public function checkout(Request $request): Response

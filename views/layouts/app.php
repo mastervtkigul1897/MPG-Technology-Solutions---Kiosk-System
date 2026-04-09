@@ -81,6 +81,12 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
             main form .btn.btn-primary:not(.btn-sm):not(.btn-lg) {
                 min-height: 2.75rem;
             }
+            /* Receipt / checkout modals: full-width tap targets on narrow screens */
+            main .modal-footer.flex-column .btn,
+            main #receiptModal .modal-footer .btn,
+            main #transactionReceiptModal .modal-footer .btn {
+                min-height: 2.75rem;
+            }
         }
     </style>
 </head>
@@ -231,6 +237,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
     <main class="flex-grow-1 d-flex flex-column min-vh-100 p-3 p-md-4">
         <?php /* Load jQuery + DataTables + initServerDataTable before $content so inline scripts in views run after they exist */ ?>
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+        <script src="<?= e(url('js/receipt-print.js')) ?>"></script>
         <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
         <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>

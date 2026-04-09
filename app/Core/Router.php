@@ -212,6 +212,10 @@ final class Router
         $r(['GET'], '#^/tenant/pos/pending$#', PosController::class.'::pendingIndex', 'tenant.pos.pending.index', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/pos/pending$#', PosController::class.'::storePending', 'tenant.pos.pending.store', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/pos/pending/(\d+)/pay$#', PosController::class.'::payPending', 'tenant.pos.pending.pay', array_merge($ta, ['tenant.access:pos']));
+        $r(['POST'], '#^/tenant/pos/receipt-escpos$#', PosController::class.'::receiptEscpos', 'tenant.pos.receipt-escpos', array_merge($ta, ['tenant.access:pos']));
+        $r(['POST'], '#^/tenant/pos/receipt-print-network$#', PosController::class.'::receiptPrintNetwork', 'tenant.pos.receipt-print-network', array_merge($ta, ['tenant.access:pos']));
+        $r(['POST'], '#^/tenant/transactions/receipt-escpos$#', PosController::class.'::receiptEscpos', 'tenant.transactions.receipt-escpos', array_merge($ta, ['tenant.access:transactions']));
+        $r(['POST'], '#^/tenant/transactions/receipt-print-network$#', PosController::class.'::receiptPrintNetwork', 'tenant.transactions.receipt-print-network', array_merge($ta, ['tenant.access:transactions']));
         $r(['GET'], '#^/tenant/transactions$#', ReportController::class.'::transactions', 'tenant.transactions.index', array_merge($ta, ['tenant.access:transactions']));
         $r(['GET'], '#^/tenant/transactions/(\d+)/edit-data$#', ReportController::class.'::editData', 'tenant.transactions.edit-data', array_merge($ta, ['tenant.access:transactions']));
         $r(['POST'], '#^/tenant/transactions/(\d+)/edit-items$#', ReportController::class.'::editItems', 'tenant.transactions.edit-items', array_merge($ta, ['tenant.access:transactions']));

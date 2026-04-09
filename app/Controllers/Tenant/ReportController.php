@@ -306,7 +306,7 @@ final class ReportController
             ]);
         }
 
-        return view_page('Transactions', 'tenant.transactions.index');
+        return view_page('Transactions', 'tenant.transactions.index', thermal_receipt_client_config('transactions'));
     }
 
     public function editData(Request $request, string $id): Response
