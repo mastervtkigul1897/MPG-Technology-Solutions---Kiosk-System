@@ -59,7 +59,11 @@
                 </div>
                 <div class="mpg-webview-receipt-hint w-100 small text-muted mt-2 mb-0 text-center text-sm-start">
                     <i class="fa-solid fa-tablet-screen-button me-1" aria-hidden="true"></i>
-                    <strong>APK / tablet / WebView:</strong> Bluetooth thermal is not available here. Use <strong>Print</strong><?= empty($thermal_receipt_network_enabled) ? '' : ' or <strong>Wi‑Fi / LAN</strong>' ?> for the receipt.
+                    <?php if (! empty($thermal_receipt_show_bluetooth)): ?>
+                        <strong>APK / tablet / WebView:</strong> Bluetooth thermal is not available here. Use <strong>Print</strong><?= empty($thermal_receipt_network_enabled) ? '' : ' or <strong>Wi‑Fi / LAN</strong>' ?> for the receipt.
+                    <?php else: ?>
+                        <strong>APK / tablet / WebView:</strong> Use <strong>Print</strong><?= empty($thermal_receipt_network_enabled) ? '' : ' or <strong>Wi‑Fi / LAN</strong>' ?> for the receipt.
+                    <?php endif; ?>
                 </div>
             </div>
         </div>

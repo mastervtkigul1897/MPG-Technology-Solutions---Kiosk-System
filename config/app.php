@@ -50,4 +50,9 @@ return [
         'port' => max(1, min(65535, (int) ($get('THERMAL_PRINTER_PORT', '9100') ?: 9100))),
         'timeout' => max(0.5, min(30.0, (float) ($get('THERMAL_PRINTER_TIMEOUT', '3') ?: 3))),
     ],
+    /**
+     * Show the Web Bluetooth thermal button (Chrome/HTTPS). Code stays loaded; false = hide UI only.
+     * Use false while testing Wi‑Fi/LAN; set THERMAL_RECEIPT_SHOW_BLUETOOTH=true in .env to show again.
+     */
+    'thermal_receipt_show_bluetooth' => filter_var($get('THERMAL_RECEIPT_SHOW_BLUETOOTH', 'false'), FILTER_VALIDATE_BOOL),
 ];

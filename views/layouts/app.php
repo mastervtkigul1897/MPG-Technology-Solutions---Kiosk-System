@@ -106,6 +106,8 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         .mpg-webview-receipt-hint { display: none; }
         body.mpg-shell-no-web-bluetooth .mpg-btn-bluetooth-thermal { display: none !important; }
         body.mpg-shell-no-web-bluetooth .mpg-webview-receipt-hint { display: block !important; }
+        /* Hide Bluetooth print button only (handlers stay; toggle via THERMAL_RECEIPT_SHOW_BLUETOOTH in .env) */
+        body.mpg-hide-bluetooth-print .mpg-btn-bluetooth-thermal { display: none !important; }
 
         /* Receipt modals: readable labels (no “hover to see text”), safe-area on mobile */
         #receiptModal .mpg-receipt-modal-footer .btn-outline-primary,
@@ -182,7 +184,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         }
     </style>
 </head>
-<body class="bg-light d-flex flex-column min-vh-100">
+<body class="bg-light d-flex flex-column min-vh-100<?= \App\Core\App::config('thermal_receipt_show_bluetooth', false) ? '' : ' mpg-hide-bluetooth-print' ?>">
 <div class="d-flex flex-grow-1 min-vh-100">
     <aside class="desktop-sidebar bg-dark text-white p-3">
         <h5 class="mb-3"><?= e($appName) ?></h5>

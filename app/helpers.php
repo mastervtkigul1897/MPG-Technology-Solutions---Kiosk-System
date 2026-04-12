@@ -185,7 +185,7 @@ function response_view(string $name, array $data = [], int $code = 200): Respons
 /**
  * URLs/flags for thermal receipt: Wi-Fi raw TCP (server) + ESC/POS payload for Web Bluetooth (browser).
  *
- * @return array{thermal_receipt_network_url: string, thermal_receipt_escpos_url: string, thermal_receipt_network_enabled: bool}
+ * @return array{thermal_receipt_network_url: string, thermal_receipt_escpos_url: string, thermal_receipt_network_enabled: bool, thermal_receipt_show_bluetooth: bool}
  */
 function thermal_receipt_client_config(string $context = 'pos'): array
 {
@@ -200,6 +200,7 @@ function thermal_receipt_client_config(string $context = 'pos'): array
         'thermal_receipt_network_url' => url($prefix.'/receipt-print-network'),
         'thermal_receipt_escpos_url' => url($prefix.'/receipt-escpos'),
         'thermal_receipt_network_enabled' => $host !== '',
+        'thermal_receipt_show_bluetooth' => (bool) App::config('thermal_receipt_show_bluetooth', false),
     ];
 }
 
