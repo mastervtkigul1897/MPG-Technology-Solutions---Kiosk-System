@@ -299,30 +299,6 @@ final class PosController
             $paymentMethod = 'cash';
         }
 
-        if ($paymentMethod === 'free') {
-            // Only allow one FREE transaction per store per day.
-            $today = date('Y-m-d');
-            $st = $pdo->prepare(
-                "SELECT COUNT(*)
-                 FROM transactions
-                 WHERE tenant_id = ?
-                   AND status = 'completed'
-                   AND LOWER(TRIM(COALESCE(payment_method,''))) = 'free'
-                   AND DATE(created_at) = ?"
-            );
-            $st->execute([$tenantId, $today]);
-            $already = (int) $st->fetchColumn();
-            if ($already > 0) {
-                $msg = 'FREE (Employee) is only allowed once per day.';
-                if ($request->wantsJson()) {
-                    return json_response(['success' => false, 'message' => $msg], 422);
-                }
-                session_flash('errors', [$msg]);
-
-                return redirect(url('/tenant/pos'));
-            }
-        }
-
         try {
             $transactionId = (new CheckoutService())->checkout($tenantId, (int) $user['id'], $parsed);
         } catch (RuntimeException $e) {

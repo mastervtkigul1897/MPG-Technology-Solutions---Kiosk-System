@@ -25,7 +25,7 @@
                 </div>
                 <div class="col-md-6">
                     <label class="form-label" for="paid_amount">Paid amount</label>
-                    <input type="number" class="form-control" id="paid_amount" name="paid_amount" min="0" step="0.01" placeholder="0.00" autocomplete="off">
+                    <input type="number" class="form-control" id="paid_amount" name="paid_amount" min="0" step="any" placeholder="0" autocomplete="off">
                     <div class="form-text">Amount received for this store (optional, for your records).</div>
                 </div>
             </div>
@@ -115,6 +115,7 @@
         : (isTablet ? [3, 4, 5, 6] : []);
 
     initServerDataTable('#tenantsTable', {
+        printButton: true,
         ajax: {
             url: '<?= e(route('super-admin.tenants.index')) ?>',
             data: { datatable: 1 }

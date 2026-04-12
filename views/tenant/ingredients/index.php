@@ -14,11 +14,11 @@
             </div>
             <div class="col-6 col-md-3 col-lg-2">
                 <label class="form-label mb-1">Current Stock</label>
-                <input class="form-control" type="number" step="0.01" inputmode="decimal" name="stock_quantity" placeholder="Stock" required>
+                <input class="form-control" type="number" step="any" inputmode="decimal" name="stock_quantity" placeholder="Stock" required>
             </div>
             <div class="col-12 col-md-6 col-lg-3">
                 <label class="form-label mb-1">Low Stock Threshold</label>
-                <input class="form-control" type="number" step="0.01" inputmode="decimal" name="low_stock_threshold" placeholder="Low Threshold" required>
+                <input class="form-control" type="number" step="any" inputmode="decimal" name="low_stock_threshold" placeholder="Low Threshold" required>
             </div>
             <div class="col-12 col-md-6 col-lg-2">
                 <label class="form-label mb-1" for="ingredientCreateBtn">Add item</label>
@@ -48,6 +48,15 @@
 (() => {
     const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     const allowedUnits = <?= json_embed($allowed_units) ?>;
+    const DECIMAL_SCALE = 16;
+    const toDecInputStr = (v) => {
+        const x = Number(v);
+        if (!Number.isFinite(x)) return '0';
+        const f = 10 ** DECIMAL_SCALE;
+        let s = (Math.round(x * f) / f).toFixed(DECIMAL_SCALE);
+        if (s.includes('.')) s = s.replace(/\.?0+$/, '') || '0';
+        return s === '-0' ? '0' : s;
+    };
     const createForm = document.getElementById('ingredientCreateForm');
 
     const showValidationErrors = (payload) => {
@@ -69,6 +78,7 @@
     const encodeBody = (payload) => new URLSearchParams(payload).toString();
 
     const table = initServerDataTable('#ingredientsTable', {
+        printButton: true,
         ajax: {
             url: '<?= e(route('tenant.ingredients.index')) ?>',
             data: { datatable: 1 }
@@ -140,8 +150,8 @@
         const cells = tr.children;
         cells[2].innerHTML = `<input class="form-control form-control-sm js-edit-name" value="${rowData.name}">`;
         cells[3].innerHTML = renderUnitSelect(rowData.unit);
-        cells[4].innerHTML = `<input class="form-control form-control-sm js-edit-stock" type="number" step="0.01" value="${Number(rowData.stock_quantity).toFixed(2)}">`;
-        cells[5].innerHTML = `<input class="form-control form-control-sm js-edit-threshold" type="number" step="0.01" value="${Number(rowData.low_stock_threshold).toFixed(2)}">`;
+        cells[4].innerHTML = `<input class="form-control form-control-sm js-edit-stock" type="number" step="any" value="${toDecInputStr(rowData.stock_quantity)}">`;
+        cells[5].innerHTML = `<input class="form-control form-control-sm js-edit-threshold" type="number" step="any" value="${toDecInputStr(rowData.low_stock_threshold)}">`;
         cells[6].innerHTML = `
             <div class="d-flex gap-1 flex-wrap">
                 <button type="button" class="btn btn-sm btn-success js-save" data-id="${rowData.id}" title="Save"><i class="fa fa-check"></i></button>

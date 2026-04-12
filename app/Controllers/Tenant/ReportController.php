@@ -15,71 +15,131 @@ use RuntimeException;
 
 final class ReportController
 {
+    /** @var list<string> */
+    private const CHART_PRESETS = ['today', 'yesterday', 'last_3', 'last_7', 'last_14', 'last_30', 'this_month', 'custom'];
+
     public function index(Request $request): Response
     {
-        $tenantId = (int) Auth::user()['tenant_id'];
+        $user = Auth::user();
+        if (! $user || ($user['role'] ?? '') !== 'tenant_admin') {
+            return new Response('Forbidden', 403);
+        }
+
+        $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
-        $periodEnd = date('Y-m-d 23:59:59');
-        $startOfWeek = date('Y-m-d 00:00:00', strtotime('-6 days'));
-        $startOfMonth = date('Y-m-d 00:00:00', strtotime('-29 days'));
-        $startOfYear = date('Y-m-d 00:00:00', strtotime('-364 days'));
         $today = date('Y-m-d');
+        [$from, $to, $chartPreset] = $this->resolveReportRange($request, $today);
+        $rangeStart = $from.' 00:00:00';
+        $rangeEnd = $to.' 23:59:59';
+        $chartSeries = $this->buildChartSeries($pdo, $tenantId, $from, $to);
 
-        $dailySales = $this->scalarSum(
-            $pdo,
-            "SELECT COALESCE(SUM(total_amount),0) FROM transactions WHERE tenant_id = ? AND status = 'completed' AND DATE(created_at) = ?",
-            [$tenantId, $today]
-        );
-        $weeklySales = $this->scalarSum(
+        $salesTotal = $this->scalarSum(
             $pdo,
             "SELECT COALESCE(SUM(total_amount),0) FROM transactions WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?",
-            [$tenantId, $startOfWeek, $periodEnd]
+            [$tenantId, $rangeStart, $rangeEnd]
         );
-        $monthlySales = $this->scalarSum(
+        $st = $pdo->prepare(
+            "SELECT LOWER(TRIM(COALESCE(payment_method,''))) AS pm, COALESCE(SUM(total_amount),0) AS total
+             FROM transactions
+             WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?
+             GROUP BY pm"
+        );
+        $st->execute([$tenantId, $rangeStart, $rangeEnd]);
+        $paymentsByMethod = [
+            'cash' => 0.0,
+            'card' => 0.0,
+            'gcash' => 0.0,
+            'paymaya' => 0.0,
+            'online_banking' => 0.0,
+            'free' => 0.0,
+        ];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $pm = (string) ($row['pm'] ?? '');
+            if ($pm === '') {
+                $pm = 'cash';
+            }
+            if (array_key_exists($pm, $paymentsByMethod)) {
+                $paymentsByMethod[$pm] += (float) ($row['total'] ?? 0);
+            }
+        }
+        $expensesTotal = $this->scalarSum(
             $pdo,
-            "SELECT COALESCE(SUM(total_amount),0) FROM transactions WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?",
-            [$tenantId, $startOfMonth, $periodEnd]
+            "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE tenant_id = ? AND type = 'manual' AND created_at BETWEEN ? AND ?",
+            [$tenantId, $rangeStart, $rangeEnd]
         );
-        $yearlySales = $this->scalarSum(
-            $pdo,
-            "SELECT COALESCE(SUM(total_amount),0) FROM transactions WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?",
-            [$tenantId, $startOfYear, $periodEnd]
-        );
+        $netSales = $salesTotal - $expensesTotal;
 
-        $dailyExpense = $this->scalarSum(
+        // Audit: sum of line items vs transaction totals (should match; FREE orders = ₱0 sa both).
+        $lineItemsSum = $this->scalarSum(
             $pdo,
-            "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE tenant_id = ? AND type = 'manual' AND DATE(created_at) = ?",
-            [$tenantId, $today]
+            'SELECT COALESCE(SUM(ti.line_total), 0) FROM transaction_items ti
+             INNER JOIN transactions t ON t.id = ti.transaction_id AND t.tenant_id = ti.tenant_id
+             WHERE t.tenant_id = ? AND t.status = \'completed\' AND t.created_at BETWEEN ? AND ?',
+            [$tenantId, $rangeStart, $rangeEnd]
         );
-        $weeklyExpense = $this->scalarSum(
-            $pdo,
-            "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE tenant_id = ? AND type = 'manual' AND created_at BETWEEN ? AND ?",
-            [$tenantId, $startOfWeek, $periodEnd]
+        $reconciliationDelta = round_money($salesTotal - $lineItemsSum);
+        $stFree = $pdo->prepare(
+            'SELECT COUNT(*) FROM transactions
+             WHERE tenant_id = ? AND status = \'completed\'
+             AND LOWER(TRIM(COALESCE(payment_method, \'\'))) = \'free\'
+             AND created_at BETWEEN ? AND ?'
         );
-        $monthlyExpense = $this->scalarSum(
-            $pdo,
-            "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE tenant_id = ? AND type = 'manual' AND created_at BETWEEN ? AND ?",
-            [$tenantId, $startOfMonth, $periodEnd]
+        $stFree->execute([$tenantId, $rangeStart, $rangeEnd]);
+        $freeOrdersCount = (int) $stFree->fetchColumn();
+        $stFreeLines = $pdo->prepare(
+            'SELECT COALESCE(SUM(ti.line_total), 0) FROM transaction_items ti
+             INNER JOIN transactions t ON t.id = ti.transaction_id AND t.tenant_id = ti.tenant_id
+             WHERE t.tenant_id = ? AND t.status = \'completed\'
+             AND LOWER(TRIM(COALESCE(t.payment_method, \'\'))) = \'free\'
+             AND t.created_at BETWEEN ? AND ?'
         );
-        $yearlyExpense = $this->scalarSum(
-            $pdo,
-            "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE tenant_id = ? AND type = 'manual' AND created_at BETWEEN ? AND ?",
-            [$tenantId, $startOfYear, $periodEnd]
-        );
+        $stFreeLines->execute([$tenantId, $rangeStart, $rangeEnd]);
+        $freeLineSum = (float) $stFreeLines->fetchColumn();
+
+        $warningDays = (int) App::config('subscription_warning_days', 7);
+        $reportsMaintenance = null;
+        $reportsSubscription = null;
+
+        if (App::config('maintenance_mode', false)) {
+            $mm = trim((string) App::config('maintenance_message', ''));
+            if ($mm !== '') {
+                $reportsMaintenance = ['message' => $mm];
+            }
+        }
+
+        $stExp = $pdo->prepare('SELECT license_expires_at FROM tenants WHERE id = ? LIMIT 1');
+        $stExp->execute([$tenantId]);
+        $trow = $stExp->fetch(PDO::FETCH_ASSOC);
+        $expRaw = $trow['license_expires_at'] ?? null;
+        if ($expRaw !== null && $expRaw !== '') {
+            $expDate = date('Y-m-d', strtotime((string) $expRaw));
+            $todayCheck = date('Y-m-d');
+            $daysLeft = (int) floor((strtotime($expDate.' 00:00:00') - strtotime($todayCheck.' 00:00:00')) / 86400);
+            if ($daysLeft >= 0 && $daysLeft <= $warningDays) {
+                $reportsSubscription = [
+                    'expires_label' => date('M j, Y', strtotime($expDate)),
+                    'days_left' => $daysLeft,
+                ];
+            }
+        }
 
         return view_page('Reports', 'tenant.reports.index', [
-            'daily_sales' => $dailySales,
-            'weekly_sales' => $weeklySales,
-            'monthly_sales' => $monthlySales,
-            'yearly_sales' => $yearlySales,
-            'daily_expense' => $dailyExpense,
-            'weekly_expense' => $weeklyExpense,
-            'monthly_expense' => $monthlyExpense,
-            'yearly_expense' => $yearlyExpense,
-            'daily_profit' => $dailySales - $dailyExpense,
-            'weekly_profit' => $weeklySales - $weeklyExpense,
-            'monthly_profit' => $monthlySales - $monthlyExpense,
-            'yearly_profit' => $yearlySales - $yearlyExpense,
+            'stats' => [
+                'sales_total' => $salesTotal,
+                'line_items_sum' => $lineItemsSum,
+                'reconciliation_delta' => $reconciliationDelta,
+                'free_orders_count' => $freeOrdersCount,
+                'free_line_sum' => $freeLineSum,
+                'expenses_total' => $expensesTotal,
+                'net_sales' => $netSales,
+                'payments_by_method' => $paymentsByMethod,
+                'range_from' => $from,
+                'range_to' => $to,
+                'chart_preset' => $chartPreset,
+            ],
+            'chart' => $chartSeries,
+            'reports_maintenance' => $reportsMaintenance,
+            'reports_subscription' => $reportsSubscription,
         ]);
     }
 
@@ -87,36 +147,57 @@ final class ReportController
     {
         $tenantId = (int) Auth::user()['tenant_id'];
         $pdo = App::db();
-        $date = trim((string) $request->query('date', ''));
-        if ($date === '') {
-            $date = date('Y-m-d');
+        $today = date('Y-m-d');
+        $from = trim((string) $request->query('from', ''));
+        $to = trim((string) $request->query('to', ''));
+
+        if ($from === '' && $to === '') {
+            $legacy = trim((string) $request->query('date', ''));
+            if ($legacy !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $legacy) === 1) {
+                $from = $legacy;
+                $to = $legacy;
+            } else {
+                $from = $today;
+                $to = $today;
+            }
         }
-        // Basic validation: YYYY-MM-DD
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) !== 1) {
-            return json_response(['success' => false, 'message' => 'Invalid date.'], 422);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) !== 1) {
+            $from = $today;
+        }
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) !== 1) {
+            $to = $today;
+        }
+        if (strtotime($from) > strtotime($to)) {
+            [$from, $to] = [$to, $from];
         }
 
+        $rangeStart = $from.' 00:00:00';
+        $rangeEnd = $to.' 23:59:59';
+
         $st = $pdo->prepare(
-            "SELECT p.id AS product_id, p.name AS product_name, COALESCE(SUM(ti.quantity),0) AS qty
+            "SELECT p.id AS product_id, p.name AS product_name,
+                    COALESCE(SUM(ti.quantity),0) AS qty,
+                    COALESCE(SUM(ti.line_total),0) AS line_amount
              FROM transactions t
              INNER JOIN transaction_items ti ON ti.transaction_id = t.id AND ti.tenant_id = t.tenant_id
              INNER JOIN products p ON p.id = ti.product_id AND p.tenant_id = ti.tenant_id
-             WHERE t.tenant_id = ? AND t.status = 'completed' AND DATE(t.created_at) = ?
+             WHERE t.tenant_id = ? AND t.status = 'completed' AND t.created_at BETWEEN ? AND ?
              GROUP BY p.id, p.name
              ORDER BY qty DESC, p.name ASC
              LIMIT 200"
         );
-        $st->execute([$tenantId, $date]);
+        $st->execute([$tenantId, $rangeStart, $rangeEnd]);
         $rows = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $rows[] = [
                 'product_id' => (int) ($row['product_id'] ?? 0),
                 'product_name' => (string) ($row['product_name'] ?? ''),
-                'qty' => (int) ($row['qty'] ?? 0),
+                'qty' => (float) ($row['qty'] ?? 0),
+                'line_amount' => round_money((float) ($row['line_amount'] ?? 0)),
             ];
         }
 
-        return json_response(['success' => true, 'date' => $date, 'data' => $rows]);
+        return json_response(['success' => true, 'from' => $from, 'to' => $to, 'data' => $rows]);
     }
 
     private function scalarSum(PDO $pdo, string $sql, array $params): float
@@ -208,8 +289,8 @@ final class ReportController
                     if ((int) ($it['quantity'] ?? 0) <= 0) {
                         $hasVoidedLines = true;
                     }
-                    $itemsHtml .= '<li>'.e((string) $it['product_name']).' - Qty '.number_format((float) $it['quantity'], 2)
-                        .' x '.number_format((float) $it['unit_price'], 2).' = '.number_format((float) $it['line_total'], 2).'</li>';
+                    $itemsHtml .= '<li>'.e((string) $it['product_name']).' - Qty '.e(format_stock((float) $it['quantity']))
+                        .' x '.e(format_money((float) $it['unit_price'])).' = '.e(format_money((float) $it['line_total'])).'</li>';
                 }
                 $itemsHtml .= '</ul>';
 
@@ -262,7 +343,7 @@ final class ReportController
                 // change_amount may be 0 so tendered−change would wrongly equal full tendered (e.g. 500 vs 364).
                 $ap = (float) ($trow['amount_paid'] ?? 0);
                 $basePaid = $pmRaw === 'cash'
-                    ? ($ap > 0.009 ? $ap : max(0.0, (float) ($trow['amount_tendered'] ?? 0) - (float) ($trow['change_amount'] ?? 0)))
+                    ? ($ap > money_epsilon() ? $ap : max(0.0, (float) ($trow['amount_tendered'] ?? 0) - (float) ($trow['change_amount'] ?? 0)))
                     : $ap;
                 $refunded = (float) ($trow['refunded_amount'] ?? 0);
                 $added = (float) ($trow['added_paid_amount'] ?? 0);
@@ -270,14 +351,14 @@ final class ReportController
                 $change = (float) ($trow['change_amount'] ?? 0);
                 if ($refunded > 0 && $added > 0) {
                     // Should not happen with new logic, but render clearly if legacy data exists.
-                    $adjustHtml = '<div class="small text-danger">Refunded '.number_format($refunded, 2).'</div>'
-                        .'<div class="small text-success">Additional '.number_format($added, 2).'</div>';
+                    $adjustHtml = '<div class="small text-danger">Refunded '.e(format_money($refunded)).'</div>'
+                        .'<div class="small text-success">Additional '.e(format_money($added)).'</div>';
                 } elseif ($refunded > 0) {
-                    $adjustHtml = '<span class="text-danger">Refunded '.number_format($refunded, 2).'</span>';
+                    $adjustHtml = '<span class="text-danger">Refunded '.e(format_money($refunded)).'</span>';
                 } elseif ($added > 0) {
-                    $adjustHtml = '<span class="text-success">Additional '.number_format($added, 2).'</span>';
+                    $adjustHtml = '<span class="text-success">Additional '.e(format_money($added)).'</span>';
                 } elseif ($change > 0) {
-                    $adjustHtml = '<span>'.number_format($change, 2).'</span>';
+                    $adjustHtml = '<span>'.e(format_money($change)).'</span>';
                 } else {
                     $adjustHtml = '<span class="text-muted">0.00</span>';
                 }
@@ -287,10 +368,10 @@ final class ReportController
                     'date' => $trow['created_at'] ? date('M d, Y h:i A', strtotime((string) $trow['created_at'])) : '',
                     'cashier' => e((string) ($trow['cashier_name'] ?? 'N/A')),
                     'qty' => (float) ($trow['qty_sum'] ?? 0),
-                    'total' => number_format((float) $trow['total_amount'], 2),
+                    'total' => format_money((float) $trow['total_amount']),
                     'payment_method' => $pm !== '' ? e($pm) : '-',
                     // Show NET PAID so void/restore loops don't "inflate" paid display.
-                    'amount_paid' => number_format($netPaid, 2),
+                    'amount_paid' => format_money($netPaid),
                     'change_amount' => $adjustHtml,
                     'status' => '<span class="badge '.$badgeClass.'">'.e((string) $statusText).'</span>',
                     'details' => $details,
@@ -449,7 +530,7 @@ final class ReportController
             // Backfill for older rows: prefer amount_paid for cash (net at checkout); else tendered−change.
             if ($originalTotal === null) {
                 $ap0 = (float) ($tx['amount_paid'] ?? 0);
-                if ($paymentMethod === 'cash' && $ap0 > 0.009) {
+                if ($paymentMethod === 'cash' && $ap0 > money_epsilon()) {
                     $originalTotal = $ap0;
                 } elseif ($paymentMethod === 'cash' && $tx['amount_tendered'] !== null && $tx['change_amount'] !== null) {
                     $originalTotal = max(0.0, (float) $tx['amount_tendered'] - (float) $tx['change_amount']);
@@ -463,7 +544,7 @@ final class ReportController
             $pmLower = strtolower(trim($paymentMethod));
             $apNet = (float) ($tx['amount_paid'] ?? 0);
             $basePaidNet = $pmLower === 'cash'
-                ? ($apNet > 0.009 ? $apNet : max(0.0, (float) ($tx['amount_tendered'] ?? 0) - (float) ($tx['change_amount'] ?? 0)))
+                ? ($apNet > money_epsilon() ? $apNet : max(0.0, (float) ($tx['amount_tendered'] ?? 0) - (float) ($tx['change_amount'] ?? 0)))
                 : $apNet;
 
             $st = $pdo->prepare('SELECT id, product_id, quantity, unit_price, line_total FROM transaction_items WHERE tenant_id = ? AND transaction_id = ?');
@@ -536,7 +617,7 @@ final class ReportController
                 if ($delta < 0) {
                     $restoreUnits = abs($delta);
                     foreach ($req as $ingId => $perQty) {
-                        $amt = $perQty * $restoreUnits;
+                        $amt = round_stock((float) $perQty * $restoreUnits);
                         $pdo->prepare('SELECT id FROM ingredients WHERE tenant_id = ? AND id = ? FOR UPDATE')->execute([$tenantId, $ingId]);
                         $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity + ? WHERE tenant_id = ? AND id = ?')
                             ->execute([$amt, $tenantId, $ingId]);
@@ -549,7 +630,7 @@ final class ReportController
                     $deductUnits = $delta;
                     // Check sufficiency and lock
                     foreach ($req as $ingId => $perQty) {
-                        $need = $perQty * $deductUnits;
+                        $need = round_stock((float) $perQty * $deductUnits);
                         $stOne = $pdo->prepare('SELECT id, name, stock_quantity FROM ingredients WHERE tenant_id = ? AND id = ? FOR UPDATE');
                         $stOne->execute([$tenantId, $ingId]);
                         $ingRow = $stOne->fetch(PDO::FETCH_ASSOC);
@@ -559,7 +640,7 @@ final class ReportController
                         }
                     }
                     foreach ($req as $ingId => $perQty) {
-                        $need = $perQty * $deductUnits;
+                        $need = round_stock((float) $perQty * $deductUnits);
                         $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity - ? WHERE tenant_id = ? AND id = ?')
                             ->execute([$need, $tenantId, $ingId]);
                         $pdo->prepare(
@@ -613,7 +694,11 @@ final class ReportController
                     }
                     $required[$ingId] = ($required[$ingId] ?? 0) + $need;
                 }
+                $requiredRounded = [];
                 foreach ($required as $ingId => $needQty) {
+                    $requiredRounded[(int) $ingId] = round_stock((float) $needQty);
+                }
+                foreach ($requiredRounded as $ingId => $needQty) {
                     $stOne = $pdo->prepare('SELECT id, name, stock_quantity FROM ingredients WHERE tenant_id = ? AND id = ? FOR UPDATE');
                     $stOne->execute([$tenantId, $ingId]);
                     $ingRow = $stOne->fetch(PDO::FETCH_ASSOC);
@@ -622,7 +707,7 @@ final class ReportController
                         throw new RuntimeException("Insufficient stock for {$name}.");
                     }
                 }
-                foreach ($required as $ingId => $needQty) {
+                foreach ($requiredRounded as $ingId => $needQty) {
                     $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity - ? WHERE tenant_id = ? AND id = ?')
                         ->execute([$needQty, $tenantId, $ingId]);
                     $pdo->prepare(
@@ -700,19 +785,19 @@ final class ReportController
                     $refund = 0.0;
                     $added = 0.0;
                     $diff = $newTotal - $netReceived;
-                    if ($diff < -0.009) {
+                    if ($diff < -money_epsilon()) {
                         $refund = abs($diff);
-                    } elseif ($diff > 0.009) {
+                    } elseif ($diff > money_epsilon()) {
                         $added = $diff;
                     }
 
                     if ($refund > 0 && $refundOverride !== null) {
-                        if (abs($refundOverride - $refund) > 0.009) {
+                        if (abs($refundOverride - $refund) > money_epsilon()) {
                             throw new RuntimeException('Refund amount must equal the total difference.');
                         }
                     }
                     if ($added > 0 && $additionalOverride !== null) {
-                        if (abs($additionalOverride - $added) > 0.009) {
+                        if (abs($additionalOverride - $added) > money_epsilon()) {
                             throw new RuntimeException('Additional paid amount must equal the total difference.');
                         }
                     }
@@ -829,9 +914,14 @@ final class ReportController
                 }
             }
 
+            $requiredVoidRounded = [];
+            foreach ($required as $ingId => $needQty) {
+                $requiredVoidRounded[(int) $ingId] = round_stock((float) $needQty);
+            }
+
             if (! $isVoid) {
                 // Void: restore stock for ALL associated requirements.
-                foreach ($required as $ingId => $needQty) {
+                foreach ($requiredVoidRounded as $ingId => $needQty) {
                     $pdo->prepare('SELECT id FROM ingredients WHERE tenant_id = ? AND id = ? FOR UPDATE')
                         ->execute([$tenantId, $ingId]);
                     $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity + ? WHERE tenant_id = ? AND id = ?')
@@ -843,7 +933,7 @@ final class ReportController
                 }
             } else {
                 // Unvoid: deduct stock again (to match the restored inventory).
-                foreach ($required as $ingId => $needQty) {
+                foreach ($requiredVoidRounded as $ingId => $needQty) {
                     $stOne = $pdo->prepare('SELECT id, name, stock_quantity FROM ingredients WHERE tenant_id = ? AND id = ? FOR UPDATE');
                     $stOne->execute([$tenantId, $ingId]);
                     $ingRow = $stOne->fetch(PDO::FETCH_ASSOC);
@@ -852,7 +942,7 @@ final class ReportController
                         throw new RuntimeException("Insufficient stock for {$name}.");
                     }
                 }
-                foreach ($required as $ingId => $needQty) {
+                foreach ($requiredVoidRounded as $ingId => $needQty) {
                     $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity - ? WHERE tenant_id = ? AND id = ?')
                         ->execute([$needQty, $tenantId, $ingId]);
                     $pdo->prepare(
@@ -889,6 +979,181 @@ final class ReportController
             session_flash('success', $isVoid ? 'Order has been restored and set to completed.' : 'Order has been cancelled.');
 
         return redirect(url('/tenant/transactions'));
+    }
+
+    /**
+     * @return array{0:string,1:string,2:string}
+     */
+    private function resolveReportRange(Request $request, string $today): array
+    {
+        $preset = trim((string) $request->query('preset', ''));
+
+        if ($preset !== '' && in_array($preset, self::CHART_PRESETS, true)) {
+            if ($preset === 'custom') {
+                $from = trim((string) $request->query('from', ''));
+                $to = trim((string) $request->query('to', ''));
+                if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) !== 1) {
+                    $from = $today;
+                }
+                if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) !== 1) {
+                    $to = $today;
+                }
+                if (strtotime($from) > strtotime($to)) {
+                    [$from, $to] = [$to, $from];
+                }
+
+                return [$from, $to, 'custom'];
+            }
+
+            return [...$this->rangeForPreset($preset, $today), $preset];
+        }
+
+        $from = trim((string) $request->query('from', ''));
+        $to = trim((string) $request->query('to', ''));
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) !== 1) {
+            $from = $today;
+        }
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) !== 1) {
+            $to = $today;
+        }
+        if (strtotime($from) > strtotime($to)) {
+            [$from, $to] = [$to, $from];
+        }
+        $inferred = ($from === $to && $from === $today) ? 'today' : 'custom';
+
+        return [$from, $to, $inferred];
+    }
+
+    /** @return array{0:string,1:string} */
+    private function rangeForPreset(string $preset, string $today): array
+    {
+        $todayTs = strtotime($today.' 00:00:00');
+        if ($todayTs === false) {
+            return [$today, $today];
+        }
+
+        return match ($preset) {
+            'today' => [$today, $today],
+            'yesterday' => [
+                date('Y-m-d', strtotime('-1 day', $todayTs)),
+                date('Y-m-d', strtotime('-1 day', $todayTs)),
+            ],
+            'last_3' => [date('Y-m-d', strtotime('-2 days', $todayTs)), $today],
+            'last_7' => [date('Y-m-d', strtotime('-6 days', $todayTs)), $today],
+            'last_14' => [date('Y-m-d', strtotime('-13 days', $todayTs)), $today],
+            'last_30' => [date('Y-m-d', strtotime('-29 days', $todayTs)), $today],
+            'this_month' => [date('Y-m-01', $todayTs), $today],
+            default => [$today, $today],
+        };
+    }
+
+    /**
+     * @return array{labels:list<string>,dates:list<string>,orders:list<int>,sales:list<float>,expenses:list<float>,profit:list<float>}
+     */
+    private function buildChartSeries(PDO $pdo, int $tenantId, string $from, string $to): array
+    {
+        $rangeStart = $from.' 00:00:00';
+        $rangeEnd = $to.' 23:59:59';
+        $orderMap = $this->groupCount($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $salesMap = $this->groupSumSales($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $expenseMap = $this->groupSumExpenses($pdo, $tenantId, $rangeStart, $rangeEnd);
+
+        $labels = [];
+        $dates = [];
+        $orders = [];
+        $sales = [];
+        $expenses = [];
+        $profit = [];
+
+        $cur = strtotime($from.' 00:00:00');
+        $endTs = strtotime($to.' 00:00:00');
+        if ($cur === false || $endTs === false) {
+            return [
+                'labels' => [],
+                'dates' => [],
+                'orders' => [],
+                'sales' => [],
+                'expenses' => [],
+                'profit' => [],
+            ];
+        }
+
+        while ($cur <= $endTs) {
+            $d = date('Y-m-d', $cur);
+            $dates[] = $d;
+            $labels[] = date('M j', $cur);
+            $o = $orderMap[$d] ?? 0;
+            $s = (float) ($salesMap[$d] ?? 0.0);
+            $e = (float) ($expenseMap[$d] ?? 0.0);
+            $orders[] = $o;
+            $sales[] = round_money($s);
+            $expenses[] = round_money($e);
+            $profit[] = round_money($s - $e);
+            $cur = strtotime('+1 day', $cur);
+            if ($cur === false) {
+                break;
+            }
+        }
+
+        return [
+            'labels' => $labels,
+            'dates' => $dates,
+            'orders' => $orders,
+            'sales' => $sales,
+            'expenses' => $expenses,
+            'profit' => $profit,
+        ];
+    }
+
+    /** @return array<string,int> */
+    private function groupCount(PDO $pdo, int $tenantId, string $start, string $end): array
+    {
+        $st = $pdo->prepare(
+            "SELECT DATE(created_at) as d, COUNT(*) as c FROM transactions
+             WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?
+             GROUP BY d"
+        );
+        $st->execute([$tenantId, $start, $end]);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $out[(string) $row['d']] = (int) $row['c'];
+        }
+
+        return $out;
+    }
+
+    /** @return array<string,float> */
+    private function groupSumSales(PDO $pdo, int $tenantId, string $start, string $end): array
+    {
+        $st = $pdo->prepare(
+            "SELECT DATE(created_at) as d, COALESCE(SUM(total_amount),0) as s FROM transactions
+             WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?
+             GROUP BY d"
+        );
+        $st->execute([$tenantId, $start, $end]);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $out[(string) $row['d']] = (float) $row['s'];
+        }
+
+        return $out;
+    }
+
+    /** @return array<string,float> */
+    private function groupSumExpenses(PDO $pdo, int $tenantId, string $start, string $end): array
+    {
+        $st = $pdo->prepare(
+            "SELECT DATE(created_at) as d, COALESCE(SUM(amount),0) as s FROM expenses
+             WHERE tenant_id = ? AND type = 'manual' AND created_at BETWEEN ? AND ?
+             GROUP BY d"
+        );
+        $st->execute([$tenantId, $start, $end]);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $out[(string) $row['d']] = (float) $row['s'];
+        }
+
+        return $out;
     }
 
     /** @return array<string,mixed> */

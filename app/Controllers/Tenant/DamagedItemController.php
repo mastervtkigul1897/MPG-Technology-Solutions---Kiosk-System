@@ -52,7 +52,7 @@ final class DamagedItemController
             $start = max(0, (int) $request->input('start', 0));
             $length = min(100, max(1, (int) $request->input('length', 25)));
 
-            $sql = "SELECT d.id, d.ingredient_id, d.quantity, d.created_at, i.name AS ingredient_name, i.unit
+            $sql = "SELECT d.id, d.ingredient_id, d.quantity, d.note, d.created_at, i.name AS ingredient_name, i.unit
                     FROM damaged_items d
                     INNER JOIN ingredients i ON i.id = d.ingredient_id AND i.tenant_id = d.tenant_id
                     WHERE $where
@@ -72,8 +72,8 @@ final class DamagedItemController
                     $deleteBtn = '<button type="button" class="btn btn-sm btn-outline-danger js-delete-damaged" data-id="'.$did.'" title="Delete"><i class="fa fa-trash"></i></button>';
                 }
 
-                $qtyValue = round((float) $row['quantity'], 2);
-                $qtyStr = number_format((float) $qtyValue, 2, '.', '');
+                $qtyValue = round_stock((float) $row['quantity']);
+                $qtyStr = format_stock_plain($qtyValue);
 
                 $data[] = [
                     'id' => $did,
@@ -82,6 +82,7 @@ final class DamagedItemController
                     'quantity' => $qtyStr,
                     'quantity_value' => (float) $qtyValue,
                     'unit' => e((string) $row['unit']),
+                    'note' => e((string) ($row['note'] ?? '')),
                     'created_at' => $row['created_at'] ? date('M d, Y h:i A', strtotime((string) $row['created_at'])) : '',
                     'actions' => '<div class="d-flex gap-1">'.$editBtn.$deleteBtn.'</div>',
                 ];
@@ -113,14 +114,19 @@ final class DamagedItemController
 
         $tenantId = (int) $user['tenant_id'];
         $ingredientId = (int) $request->input('ingredient_id');
-        $qty = round((float) $request->input('quantity'), 2);
+        $qty = round_stock((float) $request->input('quantity'));
+        $noteRaw = trim((string) $request->input('note', ''));
+        $note = $noteRaw === '' ? null : mb_substr($noteRaw, 0, 255);
 
         $errors = [];
         if ($ingredientId < 1) {
             $errors['ingredient_id'] = ['Invalid ingredient.'];
         }
-        if ($qty < 0.01) {
-            $errors['quantity'] = ['Quantity must be at least 0.01.'];
+        if ($qty < stock_min_positive()) {
+            $errors['quantity'] = ['Quantity must be greater than zero.'];
+        }
+        if ($note !== null && mb_strlen($note) > 255) {
+            $errors['note'] = ['Notes is too long.'];
         }
 
         if ($errors !== []) {
@@ -145,9 +151,9 @@ final class DamagedItemController
             }
 
             $pdo->prepare(
-                'INSERT INTO damaged_items (tenant_id, user_id, ingredient_id, quantity, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, NOW(), NOW())'
-            )->execute([$tenantId, (int) $user['id'], $ingredientId, $qty]);
+                'INSERT INTO damaged_items (tenant_id, user_id, ingredient_id, quantity, note, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, NOW(), NOW())'
+            )->execute([$tenantId, (int) $user['id'], $ingredientId, $qty, $note]);
 
             $pdo->prepare(
                 'INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
@@ -188,7 +194,9 @@ final class DamagedItemController
         $tenantId = (int) $user['tenant_id'];
         $damageId = (int) $id;
         $newIngredientId = (int) $request->input('ingredient_id');
-        $newQty = round((float) $request->input('quantity'), 2);
+        $newQty = round_stock((float) $request->input('quantity'));
+        $noteRaw = trim((string) $request->input('note', ''));
+        $note = $noteRaw === '' ? null : mb_substr($noteRaw, 0, 255);
 
         if ($damageId < 1) {
             return new Response('Not found', 404);
@@ -198,8 +206,11 @@ final class DamagedItemController
         if ($newIngredientId < 1) {
             $errors['ingredient_id'] = ['Invalid ingredient.'];
         }
-        if ($newQty < 0.01) {
-            $errors['quantity'] = ['Quantity must be at least 0.01.'];
+        if ($newQty < stock_min_positive()) {
+            $errors['quantity'] = ['Quantity must be greater than zero.'];
+        }
+        if ($note !== null && mb_strlen($note) > 255) {
+            $errors['note'] = ['Notes is too long.'];
         }
         if ($errors !== []) {
             return $this->jsonOrBack($request, $errors, 422, '/tenant/damaged-items');
@@ -214,8 +225,8 @@ final class DamagedItemController
         }
 
         $oldIngredientId = (int) $existing['ingredient_id'];
-        $oldQty = (float) $existing['quantity'];
-        $delta = $newQty - $oldQty;
+        $oldQty = round_stock((float) $existing['quantity']);
+        $delta = round_stock($newQty - $oldQty);
 
         try {
             $pdo->beginTransaction();
@@ -238,8 +249,8 @@ final class DamagedItemController
                 }
 
                 $pdo->prepare(
-                    'UPDATE damaged_items SET ingredient_id = ?, quantity = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?'
-                )->execute([$newIngredientId, $newQty, $tenantId, $damageId]);
+                    'UPDATE damaged_items SET ingredient_id = ?, quantity = ?, note = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?'
+                )->execute([$newIngredientId, $newQty, $note, $tenantId, $damageId]);
 
                 // Inventory movements: IN for old restore, OUT for new deduct.
                 $pdo->prepare(
@@ -253,15 +264,16 @@ final class DamagedItemController
                 )->execute([$tenantId, $newIngredientId, (int) $user['id'], $newQty]);
             } else {
                 // Same ingredient: adjust by delta.
-                if (abs($delta) >= 0.0001) {
+                if (abs($delta) > stock_epsilon()) {
                     if ($delta > 0) {
                         // More damage => stock decreases.
+                        $dOut = round_stock($delta);
                         $st2 = $pdo->prepare(
                             'UPDATE ingredients
                              SET stock_quantity = stock_quantity - ?
                              WHERE tenant_id = ? AND id = ? AND stock_quantity >= ?'
                         );
-                        $st2->execute([$delta, $tenantId, $oldIngredientId, $delta]);
+                        $st2->execute([$dOut, $tenantId, $oldIngredientId, $dOut]);
                         if ($st2->rowCount() < 1) {
                             $pdo->rollBack();
                             return $this->jsonOrBack($request, ['quantity' => ['Insufficient stock for the increased damage quantity.']], 422, '/tenant/damaged-items');
@@ -270,10 +282,10 @@ final class DamagedItemController
                         $pdo->prepare(
                             'INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
                              VALUES (?, ?, NULL, ?, \'OUT\', ?, \'damage_edit\', NOW(), NOW())'
-                        )->execute([$tenantId, $oldIngredientId, (int) $user['id'], $delta]);
+                        )->execute([$tenantId, $oldIngredientId, (int) $user['id'], $dOut]);
                     } else {
                         // Less damage => stock increases.
-                        $restore = abs($delta);
+                        $restore = round_stock(abs($delta));
                         $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity + ? WHERE tenant_id = ? AND id = ?')
                             ->execute([$restore, $tenantId, $oldIngredientId]);
 
@@ -285,8 +297,8 @@ final class DamagedItemController
                 }
 
                 $pdo->prepare(
-                    'UPDATE damaged_items SET quantity = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?'
-                )->execute([$newQty, $tenantId, $damageId]);
+                    'UPDATE damaged_items SET quantity = ?, note = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?'
+                )->execute([$newQty, $note, $tenantId, $damageId]);
             }
 
             $pdo->commit();

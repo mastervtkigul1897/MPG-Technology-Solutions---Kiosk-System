@@ -36,10 +36,14 @@ final class ExpenseController
             $st->execute($params);
             $filtered = (int) $st->fetchColumn();
 
-            $orderIdx = (int) data_get($request->all(), 'order.0.column', 0);
+            $orderIdx = (int) data_get($request->all(), 'order.0.column', 4);
             $orderDir = strtolower((string) data_get($request->all(), 'order.0.dir', 'desc')) === 'asc' ? 'ASC' : 'DESC';
-            $columns = ['id', 'description', 'amount', 'created_at'];
-            $orderBy = $columns[$orderIdx] ?? 'id';
+            // Same column order as DataTables: 0 = responsive control, 1=id, 2=desc, 3=amount, 4=created_at, 5=actions
+            $columns = [null, 'id', 'description', 'amount', 'created_at', null];
+            $orderBy = $columns[$orderIdx] ?? 'created_at';
+            if ($orderBy === null || $orderBy === '') {
+                $orderBy = 'created_at';
+            }
             $start = max(0, (int) $request->input('start', 0));
             $length = min(100, max(1, (int) $request->input('length', 25)));
 
@@ -58,7 +62,7 @@ final class ExpenseController
                 $data[] = [
                     'id' => $expense['id'],
                     'description' => e((string) $expense['description']),
-                    'amount' => number_format((float) $expense['amount'], 2),
+                    'amount' => format_money((float) $expense['amount']),
                     'created_at' => $expense['created_at'] ? date('M d, Y h:i A', strtotime((string) $expense['created_at'])) : '',
                     'actions' => $deleteAction,
                 ];
@@ -85,7 +89,7 @@ final class ExpenseController
         $desc = trim((string) $request->input('description'));
         $amount = (float) $request->input('amount');
 
-        if ($desc === '' || $amount < 0.01) {
+        if ($desc === '' || $amount < money_min_positive()) {
             return redirect(url('/tenant/expenses'));
         }
 

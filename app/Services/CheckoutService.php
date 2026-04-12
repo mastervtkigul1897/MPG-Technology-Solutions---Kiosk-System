@@ -84,13 +84,13 @@ final class CheckoutService
             // Keep this tolerant: add what is missing (ignore duplicates/permissions).
             if (! $hasAmountTendered) {
                 try {
-                    $pdo->exec('ALTER TABLE `transactions` ADD COLUMN `amount_tendered` DECIMAL(10,2) NULL DEFAULT NULL AFTER `total_amount`');
+                    $pdo->exec('ALTER TABLE `transactions` ADD COLUMN `amount_tendered` DECIMAL(38,16) NULL DEFAULT NULL AFTER `total_amount`');
                 } catch (\Throwable) {
                 }
             }
             if (! $hasChangeAmount) {
                 try {
-                    $pdo->exec('ALTER TABLE `transactions` ADD COLUMN `change_amount` DECIMAL(10,2) NULL DEFAULT NULL AFTER `amount_tendered`');
+                    $pdo->exec('ALTER TABLE `transactions` ADD COLUMN `change_amount` DECIMAL(38,16) NULL DEFAULT NULL AFTER `amount_tendered`');
                 } catch (\Throwable) {
                 }
             }
@@ -102,25 +102,25 @@ final class CheckoutService
             }
             if (! $hasAmountPaid) {
                 try {
-                    $pdo->exec("ALTER TABLE `transactions` ADD COLUMN `amount_paid` DECIMAL(10,2) NULL DEFAULT NULL AFTER `payment_method`");
+                    $pdo->exec("ALTER TABLE `transactions` ADD COLUMN `amount_paid` DECIMAL(38,16) NULL DEFAULT NULL AFTER `payment_method`");
                 } catch (\Throwable) {
                 }
             }
             if (! $hasRefundedAmount) {
                 try {
-                    $pdo->exec("ALTER TABLE `transactions` ADD COLUMN `refunded_amount` DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER `amount_paid`");
+                    $pdo->exec("ALTER TABLE `transactions` ADD COLUMN `refunded_amount` DECIMAL(38,16) NOT NULL DEFAULT 0 AFTER `amount_paid`");
                 } catch (\Throwable) {
                 }
             }
             if (! $hasAddedPaidAmount) {
                 try {
-                    $pdo->exec("ALTER TABLE `transactions` ADD COLUMN `added_paid_amount` DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER `refunded_amount`");
+                    $pdo->exec("ALTER TABLE `transactions` ADD COLUMN `added_paid_amount` DECIMAL(38,16) NOT NULL DEFAULT 0 AFTER `refunded_amount`");
                 } catch (\Throwable) {
                 }
             }
             if (! $hasOriginalTotalAmount) {
                 try {
-                    $pdo->exec("ALTER TABLE `transactions` ADD COLUMN `original_total_amount` DECIMAL(10,2) NULL DEFAULT NULL AFTER `added_paid_amount`");
+                    $pdo->exec("ALTER TABLE `transactions` ADD COLUMN `original_total_amount` DECIMAL(38,16) NULL DEFAULT NULL AFTER `added_paid_amount`");
                 } catch (\Throwable) {
                 }
             }
@@ -157,7 +157,7 @@ final class CheckoutService
             } catch (\Throwable) {
             }
             try {
-                $pdo->exec("ALTER TABLE `transactions` MODIFY COLUMN `amount_paid` DECIMAL(10,2) NOT NULL DEFAULT 0");
+                $pdo->exec("ALTER TABLE `transactions` MODIFY COLUMN `amount_paid` DECIMAL(38,16) NOT NULL DEFAULT 0");
             } catch (\Throwable) {
             }
 
@@ -203,7 +203,7 @@ final class CheckoutService
     }
 
     /**
-     * Create a pending/utang transaction (no stock deduction yet).
+     * Create a pending (credit) transaction (no stock deduction yet).
      *
      * @param  array<int, array{product_id:int, quantity:int}>  $items
      */
@@ -411,7 +411,12 @@ final class CheckoutService
             }
         }
 
+        $roundedRequired = [];
         foreach ($required as $ingId => $needQty) {
+            $roundedRequired[(int) $ingId] = round_stock((float) $needQty);
+        }
+
+        foreach ($roundedRequired as $ingId => $needQty) {
             $stOne = $pdo->prepare('SELECT id, name, stock_quantity FROM ingredients WHERE tenant_id = ? AND id = ? FOR UPDATE');
             $stOne->execute([$tenantId, $ingId]);
             $ing = $stOne->fetch(PDO::FETCH_ASSOC);
@@ -421,7 +426,7 @@ final class CheckoutService
             }
         }
 
-        foreach ($required as $ingId => $needQty) {
+        foreach ($roundedRequired as $ingId => $needQty) {
             $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity - ? WHERE tenant_id = ? AND id = ?')
                 ->execute([$needQty, $tenantId, $ingId]);
             $pdo->prepare(

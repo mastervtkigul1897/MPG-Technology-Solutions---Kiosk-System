@@ -28,13 +28,6 @@ final class DashboardController
                 'stats' => [
                     'tenants_count' => $tenants,
                 ],
-                'periods' => [],
-                'chart' => [
-                    'labels' => [],
-                    'orders' => [],
-                    'sales' => [],
-                    'profit' => [],
-                ],
             ]);
         }
 
@@ -51,26 +44,14 @@ final class DashboardController
         $pdo = App::db();
 
         $today = date('Y-m-d');
-        $from = trim((string) $request->query('from', ''));
-        $to = trim((string) $request->query('to', ''));
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) !== 1) {
-            $from = $today;
-        }
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) !== 1) {
-            $to = $today;
-        }
-        if (strtotime($from) > strtotime($to)) {
-            [$from, $to] = [$to, $from];
-        }
-        $rangeStart = $from.' 00:00:00';
-        $rangeEnd = $to.' 23:59:59';
+        $rangeStart = $today.' 00:00:00';
+        $rangeEnd = $today.' 23:59:59';
 
         $salesToday = (float) $this->scalar(
             $pdo,
             "SELECT COALESCE(SUM(total_amount),0) FROM transactions WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?",
             [$tenantId, $rangeStart, $rangeEnd]
         );
-        // Payment totals today (one card per method on dashboard)
         $st = $pdo->prepare(
             "SELECT LOWER(TRIM(COALESCE(payment_method,''))) AS pm, COALESCE(SUM(total_amount),0) AS total
              FROM transactions
@@ -102,6 +83,43 @@ final class DashboardController
         );
         $netSalesToday = $salesToday - $expensesToday;
 
+        $freeMealsToday = [];
+        $stFree = $pdo->prepare(
+            "SELECT t.id, t.created_at
+             FROM transactions t
+             WHERE t.tenant_id = ? AND t.status = 'completed'
+               AND LOWER(TRIM(COALESCE(t.payment_method,''))) = 'free'
+               AND t.created_at BETWEEN ? AND ?
+             ORDER BY t.created_at DESC"
+        );
+        $stFree->execute([$tenantId, $rangeStart, $rangeEnd]);
+        foreach ($stFree->fetchAll(PDO::FETCH_ASSOC) as $tr) {
+            $txId = (int) ($tr['id'] ?? 0);
+            if ($txId < 1) {
+                continue;
+            }
+            $sti = $pdo->prepare(
+                'SELECT p.name, ti.quantity
+                 FROM transaction_items ti
+                 INNER JOIN products p ON p.id = ti.product_id AND p.tenant_id = ti.tenant_id
+                 WHERE ti.tenant_id = ? AND ti.transaction_id = ?
+                 ORDER BY ti.id ASC'
+            );
+            $sti->execute([$tenantId, $txId]);
+            $items = [];
+            foreach ($sti->fetchAll(PDO::FETCH_ASSOC) as $ir) {
+                $items[] = [
+                    'name' => (string) ($ir['name'] ?? ''),
+                    'qty' => (float) ($ir['quantity'] ?? 0),
+                ];
+            }
+            $freeMealsToday[] = [
+                'id' => $txId,
+                'created_at' => (string) ($tr['created_at'] ?? ''),
+                'items' => $items,
+            ];
+        }
+
         $warningDays = (int) App::config('subscription_warning_days', 7);
         $dashboardMaintenance = null;
         $dashboardSubscription = null;
@@ -119,8 +137,8 @@ final class DashboardController
         $expRaw = $trow['license_expires_at'] ?? null;
         if ($expRaw !== null && $expRaw !== '') {
             $expDate = date('Y-m-d', strtotime((string) $expRaw));
-            $today = date('Y-m-d');
-            $daysLeft = (int) floor((strtotime($expDate.' 00:00:00') - strtotime($today.' 00:00:00')) / 86400);
+            $todayCheck = date('Y-m-d');
+            $daysLeft = (int) floor((strtotime($expDate.' 00:00:00') - strtotime($todayCheck.' 00:00:00')) / 86400);
             if ($daysLeft >= 0 && $daysLeft <= $warningDays) {
                 $dashboardSubscription = [
                     'expires_label' => date('M j, Y', strtotime($expDate)),
@@ -136,17 +154,8 @@ final class DashboardController
                 'expenses_today' => $expensesToday,
                 'net_sales_today' => $netSalesToday,
                 'payments_today' => $paymentsToday,
-                'range_from' => $from,
-                'range_to' => $to,
             ],
-            'periods' => [],
-            'chart' => [
-                'labels' => [],
-                'orders' => [],
-                'sales' => [],
-                'expenses' => [],
-                'profit' => [],
-            ],
+            'free_meals_today' => $freeMealsToday,
             'dashboard_maintenance' => $dashboardMaintenance,
             'dashboard_subscription' => $dashboardSubscription,
         ]);
@@ -158,122 +167,5 @@ final class DashboardController
         $st->execute($params);
 
         return $st->fetchColumn();
-    }
-
-    private function countCompleted(PDO $pdo, int $tenantId, string $date): int
-    {
-        $st = $pdo->prepare(
-            "SELECT COUNT(*) FROM transactions WHERE tenant_id = ? AND status = 'completed' AND DATE(created_at) = ?"
-        );
-        $st->execute([$tenantId, $date]);
-
-        return (int) $st->fetchColumn();
-    }
-
-    private function sumDamagedQuantity(PDO $pdo, int $tenantId, string $date): float
-    {
-        try {
-            $st = $pdo->prepare(
-                "SELECT COALESCE(SUM(quantity),0) FROM damaged_items
-                 WHERE tenant_id = ? AND DATE(created_at) = ?"
-            );
-            $st->execute([$tenantId, $date]);
-
-            return round((float) $st->fetchColumn(), 2);
-        } catch (\PDOException $e) {
-            // If the table doesn't exist yet (fresh deployment), don't break the dashboard.
-            return 0.0;
-        }
-    }
-
-    /** @return array<string,int> */
-    private function groupCount(PDO $pdo, int $tenantId, string $start, string $end): array
-    {
-        $st = $pdo->prepare(
-            "SELECT DATE(created_at) as d, COUNT(*) as c FROM transactions
-             WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?
-             GROUP BY d"
-        );
-        $st->execute([$tenantId, $start, $end]);
-        $out = [];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $out[(string) $row['d']] = (int) $row['c'];
-        }
-
-        return $out;
-    }
-
-    /** @return array<string,float> */
-    private function groupSumSales(PDO $pdo, int $tenantId, string $start, string $end): array
-    {
-        $st = $pdo->prepare(
-            "SELECT DATE(created_at) as d, COALESCE(SUM(total_amount),0) as s FROM transactions
-             WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?
-             GROUP BY d"
-        );
-        $st->execute([$tenantId, $start, $end]);
-        $out = [];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $out[(string) $row['d']] = (float) $row['s'];
-        }
-
-        return $out;
-    }
-
-    /** @return array<string,float> */
-    private function groupSumExpenses(PDO $pdo, int $tenantId, string $start, string $end): array
-    {
-        $st = $pdo->prepare(
-            "SELECT DATE(created_at) as d, COALESCE(SUM(amount),0) as s FROM expenses
-             WHERE tenant_id = ? AND type = 'manual' AND created_at BETWEEN ? AND ?
-             GROUP BY d"
-        );
-        $st->execute([$tenantId, $start, $end]);
-        $out = [];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $out[(string) $row['d']] = (float) $row['s'];
-        }
-
-        return $out;
-    }
-
-    /** @return array{orders:int,sales:float,expenses:float,profit:float} */
-    private function buildPeriod(PDO $pdo, int $tenantId, ?string $date, ?string $rangeStart, string $nowEnd): array
-    {
-        $tSql = 'SELECT COUNT(*), COALESCE(SUM(total_amount),0) FROM transactions WHERE tenant_id = ? AND status = ?';
-        $eSql = 'SELECT COALESCE(SUM(amount),0) FROM expenses WHERE tenant_id = ? AND type = ?';
-        $paramsT = [$tenantId, 'completed'];
-        $paramsE = [$tenantId, 'manual'];
-
-        if ($date) {
-            $tSql .= ' AND DATE(created_at) = ?';
-            $paramsT[] = $date;
-            $eSql .= ' AND DATE(created_at) = ?';
-            $paramsE[] = $date;
-        } elseif ($rangeStart) {
-            $tSql .= ' AND created_at BETWEEN ? AND ?';
-            $paramsT[] = $rangeStart;
-            $paramsT[] = $nowEnd;
-            $eSql .= ' AND created_at BETWEEN ? AND ?';
-            $paramsE[] = $rangeStart;
-            $paramsE[] = $nowEnd;
-        }
-
-        $st = $pdo->prepare($tSql);
-        $st->execute($paramsT);
-        $row = $st->fetch(PDO::FETCH_NUM);
-        $orders = (int) ($row[0] ?? 0);
-        $sales = (float) ($row[1] ?? 0);
-
-        $st = $pdo->prepare($eSql);
-        $st->execute($paramsE);
-        $expenses = (float) $st->fetchColumn();
-
-        return [
-            'orders' => $orders,
-            'sales' => $sales,
-            'expenses' => $expenses,
-            'profit' => $sales - $expenses,
-        ];
     }
 }

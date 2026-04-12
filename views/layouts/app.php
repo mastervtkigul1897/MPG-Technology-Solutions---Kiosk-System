@@ -50,6 +50,36 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         :root { --app-toolbar-height: 56px; }
         .desktop-sidebar { display: none !important; }
         .table td, .table th { vertical-align: middle; }
+        /* Tables: respect device width — flex children can shrink; scroll inside wrappers, not the whole page */
+        main.flex-grow-1 {
+            min-width: 0;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+        .app-main-scroll {
+            min-width: 0;
+            width: 100%;
+        }
+        main .flex-grow-1.overflow-auto {
+            min-width: 0;
+        }
+        main .card {
+            max-width: 100%;
+            min-width: 0;
+        }
+        .table-responsive {
+            max-width: 100%;
+            -webkit-overflow-scrolling: touch;
+        }
+        div.dataTables_wrapper {
+            width: 100% !important;
+            max-width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        table.dataTable {
+            width: 100% !important;
+        }
         .dataTables_wrapper .dataTables_filter input { margin-left: .5rem; }
         table.dataTable.dtr-inline.collapsed > tbody > tr > td.dtr-control:before,
         table.dataTable.dtr-inline.collapsed > tbody > tr > th.dtr-control:before {
@@ -72,6 +102,62 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
             touch-action: manipulation;
             -webkit-tap-highlight-color: rgba(13, 110, 253, 0.15);
         }
+        /* APK WebView / embedded shell: no Web Bluetooth — hide BT button, show hint */
+        .mpg-webview-receipt-hint { display: none; }
+        body.mpg-shell-no-web-bluetooth .mpg-btn-bluetooth-thermal { display: none !important; }
+        body.mpg-shell-no-web-bluetooth .mpg-webview-receipt-hint { display: block !important; }
+
+        /* Receipt modals: readable labels (no “hover to see text”), safe-area on mobile */
+        #receiptModal .mpg-receipt-modal-footer .btn-outline-primary,
+        #transactionReceiptModal .mpg-receipt-modal-footer .btn-outline-primary {
+            color: var(--bs-primary) !important;
+            border-color: var(--bs-primary) !important;
+            background-color: #fff !important;
+        }
+        #receiptModal .mpg-receipt-modal-footer .btn-outline-primary:hover,
+        #transactionReceiptModal .mpg-receipt-modal-footer .btn-outline-primary:hover {
+            color: #fff !important;
+            background-color: var(--bs-primary) !important;
+        }
+        @media (max-width: 767.98px) {
+            .mpg-receipt-modal-content {
+                min-height: 100dvh;
+                max-height: 100dvh;
+                display: flex;
+                flex-direction: column;
+            }
+            .mpg-receipt-modal-content .modal-body {
+                flex: 1 1 auto;
+                min-height: 0;
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            .mpg-receipt-modal-footer {
+                flex-shrink: 0;
+                background: #fff !important;
+                border-top: 1px solid var(--bs-border-color) !important;
+                padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px)) !important;
+            }
+        }
+        @media (min-width: 576px) {
+            #receiptModal .mpg-receipt-modal-footer .mpg-receipt-action-btn,
+            #transactionReceiptModal .mpg-receipt-modal-footer .mpg-receipt-action-btn {
+                width: auto !important;
+            }
+        }
+
+        @media print {
+            aside.desktop-sidebar,
+            aside.offcanvas,
+            .app-top-toolbar,
+            .mobile-sidebar-toggle,
+            .d-print-none {
+                display: none !important;
+            }
+            main { padding: 0.5rem !important; }
+            main h4 { font-size: 1.1rem; }
+        }
+
         @media (max-width: 767.98px) {
             main .table .btn-sm {
                 min-width: 2.75rem;
@@ -86,6 +172,12 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
             main #receiptModal .modal-footer .btn,
             main #transactionReceiptModal .modal-footer .btn {
                 min-height: 2.75rem;
+            }
+            /* DataTables toolbar: avoid horizontal overflow from negative row margins */
+            div.dataTables_wrapper > .row {
+                margin-left: 0 !important;
+                margin-right: 0 !important;
+                --bs-gutter-x: 0.75rem;
             }
         }
     </style>
@@ -120,7 +212,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
                 <?php if (user_can_module('damaged_items')): ?>
                     <a class="nav-link text-white <?= route_is('tenant.damaged-items.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/damaged-items')) ?>">Damaged Items</a>
                 <?php endif; ?>
-                <?php if (user_can_module('reports')): ?>
+                <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
                     <a class="nav-link text-white <?= route_is('tenant.reports.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/reports')) ?>">Reports</a>
                 <?php endif; ?>
                 <?php if (user_can_module('notifications')): ?>
@@ -174,7 +266,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
                     <?php if (user_can_module('damaged_items')): ?>
                         <a class="nav-link text-white" href="<?= e(url('/tenant/damaged-items')) ?>">Damaged Items</a>
                     <?php endif; ?>
-                    <?php if (user_can_module('reports')): ?>
+                    <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
                         <a class="nav-link text-white" href="<?= e(url('/tenant/reports')) ?>">Reports</a>
                     <?php endif; ?>
                     <?php if (user_can_module('notifications')): ?>
@@ -234,7 +326,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         </div>
     </aside>
 
-    <main class="flex-grow-1 d-flex flex-column min-vh-100 p-3 p-md-4">
+    <main class="flex-grow-1 d-flex flex-column min-vh-100 min-w-0 p-3 p-md-4">
         <?php /* Load jQuery + DataTables + initServerDataTable before $content so inline scripts in views run after they exist */ ?>
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
         <script src="<?= e(url('js/receipt-print.js')) ?>"></script>
@@ -244,6 +336,10 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
         <script src="https://cdn.datatables.net/responsive/2.5.0/js/dataTables.responsive.min.js"></script>
         <script src="https://cdn.datatables.net/responsive/2.5.0/js/responsive.bootstrap5.min.js"></script>
+        <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.2/css/buttons.bootstrap5.min.css">
+        <script src="https://cdn.datatables.net/buttons/2.4.2/js/dataTables.buttons.min.js"></script>
+        <script src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.bootstrap5.min.js"></script>
+        <script src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.print.min.js"></script>
         <script>
         (() => {
             if (typeof Swal !== 'undefined' && !window.__swalAutoCloseWrapped) {
@@ -261,7 +357,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
             window.initServerDataTable = (selector, options = {}) => {
                 const el = $(selector);
                 if (!el.length) return null;
-                const { ajax: userAjax, ...rest } = options;
+                const { ajax: userAjax, printButton, ...rest } = options;
                 const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
 
                 // Use GET for server-side DataTables so the request hits the same route as the page.
@@ -294,16 +390,16 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
                     };
                 }
 
-                return el.DataTable({
+                const defaultResponsive = {
+                    details: {
+                        type: 'column',
+                        target: 0,
+                        renderer: $.fn.dataTable.Responsive.renderer.tableAll({ tableClass: 'table table-sm' }),
+                    },
+                };
+                const dtOpts = {
                     processing: true,
                     serverSide: true,
-                    responsive: {
-                        details: {
-                            type: 'column',
-                            target: 0,
-                            renderer: $.fn.dataTable.Responsive.renderer.tableAll({ tableClass: 'table table-sm' }),
-                        },
-                    },
                     autoWidth: false,
                     pageLength: 25,
                     lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
@@ -313,101 +409,39 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
                     createdRow: (row) => { row.querySelectorAll('td').forEach((cell) => cell.classList.add('align-middle')); },
                     ...rest,
                     ajax: ajaxConfig,
-                });
+                };
+                if (rest.responsive === false) {
+                    delete dtOpts.responsive;
+                } else if (rest.responsive && typeof rest.responsive === 'object') {
+                    dtOpts.responsive = { ...defaultResponsive, ...rest.responsive };
+                } else {
+                    dtOpts.responsive = defaultResponsive;
+                }
+                if (printButton) {
+                    dtOpts.dom = rest.dom || 'Bfrtip';
+                    if (!dtOpts.buttons) {
+                        dtOpts.buttons = [
+                            {
+                                extend: 'print',
+                                text: 'Print table',
+                                className: 'btn btn-sm btn-outline-secondary mb-2',
+                                title: document.title,
+                            },
+                        ];
+                    }
+                }
+                return el.DataTable(dtOpts);
             };
         })();
         </script>
         <script>
-        (() => {
-            // Mobile/tablet pull-to-refresh (reload) when scrolled to top.
-            const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
-            if (!isTouch) return;
-
-            const scrollEl = document.querySelector('.app-main-scroll .overflow-auto') || document.scrollingElement || document.documentElement;
-            if (!scrollEl) return;
-
-            let startY = 0;
-            let pulling = false;
-            let indicator = null;
-            const threshold = 70; // px
-
-            const ensureIndicator = () => {
-                if (indicator) return indicator;
-                indicator = document.createElement('div');
-                indicator.id = 'pullToRefreshIndicator';
-                indicator.style.position = 'fixed';
-                indicator.style.left = '50%';
-                indicator.style.top = 'calc(var(--app-toolbar-height, 56px) + .35rem)';
-                indicator.style.transform = 'translate(-50%, -120%)';
-                indicator.style.transition = 'transform 160ms ease, opacity 160ms ease';
-                indicator.style.opacity = '0';
-                indicator.style.zIndex = '2000';
-                indicator.style.background = 'rgba(33, 37, 41, .92)';
-                indicator.style.color = '#fff';
-                indicator.style.padding = '.35rem .6rem';
-                indicator.style.borderRadius = '999px';
-                indicator.style.fontSize = '.85rem';
-                indicator.style.boxShadow = '0 8px 18px rgba(0,0,0,.18)';
-                indicator.innerHTML = '<i class="fa-solid fa-rotate me-1"></i>Pull to refresh';
-                document.body.appendChild(indicator);
-                return indicator;
-            };
-
-            const showIndicator = (ready) => {
-                const el = ensureIndicator();
-                el.style.opacity = '1';
-                el.style.transform = 'translate(-50%, 0)';
-                el.innerHTML = ready
-                    ? '<i class="fa-solid fa-rotate me-1"></i>Release to refresh'
-                    : '<i class="fa-solid fa-rotate me-1"></i>Pull to refresh';
-            };
-            const hideIndicator = () => {
-                if (!indicator) return;
-                indicator.style.opacity = '0';
-                indicator.style.transform = 'translate(-50%, -120%)';
-            };
-
-            const isAtTop = () => (scrollEl === document.scrollingElement || scrollEl === document.documentElement)
-                ? (window.scrollY || document.documentElement.scrollTop || 0) <= 0
-                : (scrollEl.scrollTop || 0) <= 0;
-
-            const isBusy = () => {
-                // If any Bootstrap modal is open, do not trigger refresh.
-                return document.querySelector('.modal.show') != null;
-            };
-
-            window.addEventListener('touchstart', (e) => {
-                if (isBusy()) return;
-                if (!isAtTop()) return;
-                if (!e.touches || e.touches.length !== 1) return;
-                startY = e.touches[0].clientY;
-                pulling = true;
-            }, { passive: true });
-
-            window.addEventListener('touchmove', (e) => {
-                if (!pulling) return;
-                if (isBusy()) { pulling = false; hideIndicator(); return; }
-                if (!e.touches || e.touches.length !== 1) return;
-                const dy = e.touches[0].clientY - startY;
-                if (dy <= 0) { hideIndicator(); return; }
-                showIndicator(dy >= threshold);
-            }, { passive: true });
-
-            window.addEventListener('touchend', () => {
-                if (!pulling) return;
-                pulling = false;
-                if (isBusy()) { hideIndicator(); return; }
-                // Use last indicator state by checking its text
-                const ready = indicator && indicator.textContent && indicator.textContent.toLowerCase().includes('release');
-                hideIndicator();
-                if (ready) {
-                    // Small delay so the indicator can animate out.
-                    setTimeout(() => window.location.reload(), 120);
-                }
-            }, { passive: true });
-        })();
+        document.addEventListener('DOMContentLoaded', function () {
+            if (typeof window.mpgApplyEmbeddedShellReceiptUi === 'function') {
+                window.mpgApplyEmbeddedShellReceiptUi();
+            }
+        });
         </script>
-        <div class="app-main-scroll flex-grow-1 d-flex flex-column min-h-0">
+        <div class="app-main-scroll flex-grow-1 d-flex flex-column min-h-0 min-w-0 w-100">
         <div class="app-top-toolbar d-flex justify-content-between align-items-center mb-2">
             <div class="mobile-sidebar-toggle">
                 <button class="btn btn-dark btn-sm" type="button" data-bs-toggle="offcanvas" data-bs-target="#appSidebarMobile" aria-controls="appSidebarMobile">
@@ -424,7 +458,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         </div>
         <h4 class="mb-3"><?= e($title ?? 'Dashboard') ?></h4>
         <?php require dirname(__DIR__).'/partials/alerts.php'; ?>
-        <div class="flex-grow-1 min-h-0 overflow-auto"><?= $content ?? '' ?></div>
+        <div class="flex-grow-1 min-h-0 min-w-0 overflow-auto"><?= $content ?? '' ?></div>
         <?php
         $footerCreditClass = 'text-muted mt-auto pt-3 border-top';
         require dirname(__DIR__).'/partials/footer_credit.php';

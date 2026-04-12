@@ -203,6 +203,89 @@ function thermal_receipt_client_config(string $context = 'pos'): array
     ];
 }
 
+/** Currency / receipt / totals display (not stock). */
+function money_scale(): int
+{
+    return 2;
+}
+
+/** Inventory: stock, recipe quantities, damaged qty, movements (matches DB fractional precision). */
+function stock_scale(): int
+{
+    return 16;
+}
+
+/** Float tolerance for payment / money branches. */
+function money_epsilon(): float
+{
+    return 1e-12;
+}
+
+/** Float tolerance for stock comparisons (deduction / audit). */
+function stock_epsilon(): float
+{
+    return 1e-14;
+}
+
+function money_min_positive(): float
+{
+    return 0.01;
+}
+
+function stock_min_positive(): float
+{
+    return 1e-15;
+}
+
+function round_money(float $n): float
+{
+    return round($n, money_scale());
+}
+
+function round_stock(float $n): float
+{
+    return round($n, stock_scale());
+}
+
+/** Currency display: always 2 decimal places, thousands comma. */
+function format_money(mixed $n): string
+{
+    $f = (float) $n;
+    if (! is_finite($f)) {
+        return '0.00';
+    }
+
+    return number_format($f, money_scale(), '.', ',');
+}
+
+/**
+ * Stock / recipe qty display: up to stock_scale() digits, trim trailing zeros, thousands comma.
+ */
+function format_stock(mixed $n): string
+{
+    return format_stock_inner($n, stock_scale(), true);
+}
+
+/** Stock values in logs / attributes (no thousands separator). */
+function format_stock_plain(mixed $n): string
+{
+    return format_stock_inner($n, stock_scale(), false);
+}
+
+function format_stock_inner(mixed $n, int $maxDecimals, bool $thousandsComma): string
+{
+    $f = (float) $n;
+    if (! is_finite($f)) {
+        return '0';
+    }
+    $s = number_format($f, $maxDecimals, '.', $thousandsComma ? ',' : '');
+    if (str_contains($s, '.')) {
+        $s = rtrim(rtrim($s, '0'), '.');
+    }
+
+    return ($s === '-0' || $s === '' || $s === '-.') ? '0' : $s;
+}
+
 function view_page(string $title, string $name, array $data = []): Response
 {
     $inner = view($name, $data);

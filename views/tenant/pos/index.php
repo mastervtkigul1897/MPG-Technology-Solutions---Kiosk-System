@@ -105,7 +105,7 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
                                                             <div class="d-flex flex-column gap-1">
                                                                 <div class="pos-product-title fw-semibold"><?= e($pname) ?></div>
                                                                 <div class="d-flex flex-wrap gap-1">
-                                                                    <span class="badge text-bg-success">PHP <?= number_format((float) ($product['price'] ?? 0), 2) ?></span>
+                                                                    <span class="badge text-bg-success">PHP <?= e(format_money((float) ($product['price'] ?? 0))) ?></span>
                                                                     <span class="badge text-bg-light border text-dark">
                                                                         <?= (int) $requirementCount ?> <?= $requirementCount === 1 ? 'Requirement' : 'Requirements' ?>
                                                                     </span>
@@ -185,20 +185,24 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
 </div>
 
 <div class="modal fade" id="receiptModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-labelledby="receiptModalTitle">
-    <div class="modal-dialog modal-dialog-scrollable">
-        <div class="modal-content">
-            <div class="modal-header">
+    <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-md-down">
+        <div class="modal-content mpg-receipt-modal-content">
+            <div class="modal-header border-bottom">
                 <h5 class="modal-title" id="receiptModalTitle">Receipt</h5>
             </div>
             <div class="modal-body">
                 <div id="receiptPrintArea" class="receipt-print-area small"></div>
             </div>
-            <div class="modal-footer flex-column flex-sm-row flex-wrap gap-2 justify-content-stretch justify-content-sm-end w-100">
+            <div class="modal-footer flex-column flex-sm-row flex-wrap gap-2 justify-content-stretch justify-content-sm-end w-100 mpg-receipt-modal-footer">
                 <div class="d-grid d-sm-flex gap-2 w-100 flex-sm-grow-0 flex-sm-wrap justify-content-sm-end">
-                    <button type="button" class="btn btn-outline-secondary" id="receiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
-                    <button type="button" class="btn btn-outline-dark <?= empty($thermal_receipt_network_enabled) ? 'd-none' : '' ?>" id="receiptPrintWifiBtn" title="Server → printer sa LAN (OK sa phone kung naka-set ang host)"><i class="fa-solid fa-wifi me-1"></i>Wi‑Fi / LAN</button>
-                    <button type="button" class="btn btn-outline-dark" id="receiptPrintBleBtn" title="Mag-print sa Bluetooth thermal printer (Chrome/Android, HTTPS; hindi sa Safari sa iPhone)"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
-                    <button type="button" class="btn btn-primary" id="receiptOkBtn" data-bs-dismiss="modal">OK</button>
+                    <button type="button" class="btn btn-primary text-white w-100 mpg-receipt-action-btn" id="receiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
+                    <button type="button" class="btn btn-success text-white <?= empty($thermal_receipt_network_enabled) ? 'd-none' : '' ?> w-100 mpg-receipt-action-btn" id="receiptPrintWifiBtn" title="Server sends raw data to printer on LAN (phone/tablet/APK when host is configured)"><i class="fa-solid fa-wifi me-1"></i>Wi‑Fi / LAN</button>
+                    <button type="button" class="btn btn-outline-primary mpg-btn-bluetooth-thermal w-100 mpg-receipt-action-btn" id="receiptPrintBleBtn" title="Bluetooth thermal (Chrome desktop/Android app; not available in WebView APK)"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
+                    <button type="button" class="btn btn-secondary text-white w-100 mpg-receipt-action-btn" id="receiptOkBtn" data-bs-dismiss="modal">OK</button>
+                </div>
+                <div class="mpg-webview-receipt-hint w-100 small text-muted mt-2 mb-0 text-center text-sm-start">
+                    <i class="fa-solid fa-tablet-screen-button me-1" aria-hidden="true"></i>
+                    <strong>APK / tablet / WebView:</strong> Bluetooth thermal is not available here. Use <strong>Print</strong><?= empty($thermal_receipt_network_enabled) ? '' : ' or <strong>Wi‑Fi / LAN</strong>' ?> for the receipt.
                 </div>
             </div>
         </div>
@@ -212,7 +216,7 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
                 <h5 class="modal-title" id="pendingMetaModalTitle">Checkout as Pending</h5>
             </div>
             <div class="modal-body">
-                <div class="small text-muted mb-3">Ilagay ang creditor details. Required ang name, optional ang contact number.</div>
+                <div class="small text-muted mb-3">Enter creditor details. Name is required; contact number is optional.</div>
                 <div class="mb-2">
                     <label class="form-label mb-1" for="pendingNameInput">Name <span class="text-danger">*</span></label>
                     <input type="text" class="form-control" id="pendingNameInput" placeholder="e.g. Juan Dela Cruz" required>
@@ -232,10 +236,10 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
 </div>
 
 <style>
-/* Thermal receipt print: 80mm roll, black & white, one continuous “page” (no blank sheet) */
+/* Thermal receipt print: 55mm roll, black & white, one continuous “page” (no blank sheet) */
 @media print {
     @page {
-        size: 80mm auto;
+        size: 55mm auto;
         margin: 0;
     }
     html, body {
@@ -259,7 +263,7 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
     #receiptModal {
         position: absolute !important;
         inset: 0 auto auto 0 !important;
-        width: 80mm !important;
+        width: 55mm !important;
         max-width: 100% !important;
         margin: 0 !important;
         padding: 0 !important;
@@ -268,8 +272,8 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
         filter: none !important;
     }
     #receiptModal .modal-dialog {
-        max-width: 80mm !important;
-        width: 80mm !important;
+        max-width: 55mm !important;
+        width: 55mm !important;
         margin: 0 !important;
         height: auto !important;
     }
@@ -307,8 +311,8 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
         background: #fff !important;
         color: #000 !important;
         font-family: "Courier New", Courier, monospace !important;
-        font-size: 11px !important;
-        line-height: 1.3 !important;
+        font-size: 9px !important;
+        line-height: 1.22 !important;
         page-break-after: avoid !important;
         break-after: avoid-page !important;
         page-break-inside: auto;
@@ -454,23 +458,27 @@ body.branch-select-open .pos-order-summary-float {
 }
 .receipt-paper {
     width: 100%;
-    max-width: 80mm;
+    max-width: 55mm;
     margin: 0 auto;
-    padding: .55rem .65rem;
+    padding: .45rem .55rem;
     border: 1px dashed #adb5bd;
     border-radius: .35rem;
     background: #fff;
     font-family: "Courier New", Courier, monospace;
-    font-size: 12px;
-    line-height: 1.35;
+    font-size: 10px;
+    line-height: 1.25;
     color: #111;
+}
+.receipt-bottom-spacer {
+    height: 2.5em;
+    min-height: 2.5em;
 }
 .receipt-center { text-align: center; }
 .receipt-bold { font-weight: 700; }
 .receipt-muted { color: #4b5563; }
 .receipt-dash {
     border-top: 1px dashed #666;
-    margin: .35rem 0;
+    margin: .22rem 0;
 }
 .receipt-row {
     display: flex;
@@ -486,6 +494,14 @@ body.branch-select-open .pos-order-summary-float {
     flex: 0 0 auto;
     text-align: right;
     white-space: nowrap;
+}
+.receipt-item-name {
+    font-weight: 600;
+    margin-bottom: 0.06rem;
+    word-break: break-word;
+}
+.receipt-item-price-line {
+    margin-bottom: 0.35rem;
 }
 </style>
 
@@ -522,43 +538,23 @@ body.branch-select-open .pos-order-summary-float {
         return out;
     };
 
-    const writeEscposBluetooth = async (bytes) => {
-        if (!navigator.bluetooth) {
-            throw new Error('Web Bluetooth not available. Use Chrome or Edge over HTTPS, or pair the printer with the tablet/PC and use Print.');
-        }
-        const optionalServices = [
-            '49535343-fe7d-4ae5-8fa9-9fafd205e455',
-            '0000ffe0-0000-1000-8000-00805f9b34fb',
-            '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
-        ];
-        const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices });
-        const server = await device.gatt.connect();
-        for (const sid of optionalServices) {
-            let svc;
-            try { svc = await server.getPrimaryService(sid); } catch { continue; }
-            const chars = await svc.getCharacteristics();
-            for (const ch of chars) {
-                if (!ch.properties.write && !ch.properties.writeWithoutResponse) continue;
-                const chunkSize = ch.properties.writeWithoutResponse ? 180 : 20;
-                for (let i = 0; i < bytes.length; i += chunkSize) {
-                    const slice = bytes.slice(i, i + chunkSize);
-                    if (ch.properties.writeWithoutResponse) await ch.writeValueWithoutResponse(slice);
-                    else await ch.writeValueWithResponse(slice);
-                }
-                return;
-            }
-        }
-        throw new Error('No writable Bluetooth characteristic found. Pair the printer with the OS and use Print, or use Wi‑Fi/LAN raw printing.');
-    };
-
     const products = <?= json_embed($productPayload) ?>;
     const currentSearch = <?= json_embed($filters['search'] ?? '') ?>;
     const byId = Object.fromEntries(products.map(p => [p.id, p]));
+    const MONEY_DECIMALS = 2;
+    const MONEY_EPS = 1e-12;
+    const roundMoneyVal = (n) => {
+        const x = Number(n);
+        if (!Number.isFinite(x)) return 0;
+        const f = 10 ** MONEY_DECIMALS;
+        return Math.round(x * f) / f;
+    };
+    const toMoneyInputStr = (n) => roundMoneyVal(n).toFixed(MONEY_DECIMALS);
+    const money = (n) => Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: MONEY_DECIMALS, maximumFractionDigits: MONEY_DECIMALS });
     const cart = {};
     const wrap = document.getElementById('cartWrap');
     const itemsEl = document.getElementById('checkoutItems');
     const totalEl = document.getElementById('cartTotal');
-    const money = (n) => Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     let searchTimer = null;
 
     const getOutOfStockIngredient = (product, qty) => {
@@ -582,7 +578,7 @@ body.branch-select-open .pos-order-summary-float {
             totalEl.textContent = '0.00';
         } else {
             let total = 0;
-            wrap.innerHTML = `<table class="table table-sm pos-cart-table"><thead><tr><th>Item</th><th class="text-center" style="width:72px;">Qty</th><th class="text-end" style="width:104px;">Subtotal</th><th class="text-end" style="width:148px;">Actions</th></tr></thead><tbody>${
+            wrap.innerHTML = `<div class="table-responsive"><table class="table table-sm pos-cart-table mb-0"><thead><tr><th>Item</th><th class="text-center" style="width:72px;">Qty</th><th class="text-end" style="width:104px;">Subtotal</th><th class="text-end" style="width:148px;">Actions</th></tr></thead><tbody>${
                 entries.map(item => {
                     const subtotal = item.price * item.quantity;
                     total += subtotal;
@@ -599,7 +595,7 @@ body.branch-select-open .pos-order-summary-float {
                         </td>
                     </tr>`;
                 }).join('')
-            }</tbody></table>`;
+            }</tbody></table></div>`;
             itemsEl.innerHTML = entries.map((item, idx) => `<input type="hidden" name="items[${idx}][product_id]" value="${item.product_id}"><input type="hidden" name="items[${idx}][quantity]" value="${item.quantity}">`).join('');
             totalEl.textContent = money(total);
         }
@@ -720,9 +716,22 @@ body.branch-select-open .pos-order-summary-float {
         lines.push('<div class="receipt-dash"></div>');
         lines.push('<div class="receipt-row receipt-bold"><span class="left">Item</span><span class="right">Amount</span></div>');
         lines.push('<div class="receipt-dash"></div>');
+        const formatQty = (q) => {
+            const x = Number(q);
+            if (!Number.isFinite(x)) return '0';
+            if (Math.abs(x - Math.round(x)) < 1e-9) return String(Math.round(x));
+            let s = x.toFixed(4).replace(/\.?0+$/, '');
+            return s || '0';
+        };
         (r.items || []).forEach((it) => {
-            lines.push(`<div class="receipt-row"><span class="left">${escapeHtml(it.name)}</span><span class="right">${money(it.line_total)}</span></div>`);
-            lines.push(`<div class="receipt-row receipt-muted"><span class="left">${Number(it.quantity || 0)} x ${money(it.unit_price)}</span><span class="right"></span></div>`);
+            const q = Number(it.quantity);
+            const lt = Number(it.line_total);
+            let unit = Number(it.unit_price);
+            if (!Number.isFinite(unit) || Math.abs(unit) <= MONEY_EPS) {
+                unit = Number.isFinite(q) && q > MONEY_EPS && Number.isFinite(lt) ? lt / q : 0;
+            }
+            lines.push(`<div class="receipt-item-name">${escapeHtml(it.name)}</div>`);
+            lines.push(`<div class="receipt-row receipt-item-price-line"><span class="left">${money(unit)} × ${formatQty(it.quantity)}</span><span class="right">${money(it.line_total)}</span></div>`);
         });
         lines.push('<div class="receipt-dash"></div>');
         lines.push(`<div class="receipt-row receipt-bold"><span class="left">TOTAL</span><span class="right">${money(r.grand_total)}</span></div>`);
@@ -751,9 +760,9 @@ body.branch-select-open .pos-order-summary-float {
             ? Math.max(0, baseAfterRefund + addedAfterRefund)
             : null;
         if (pm === 'cash' && basePaid != null) {
-            lines.push(`<div class="receipt-row"><span class="left">NET TO ORDER (initial)</span><span class="right">${money(basePaid)}</span></div>`);
-            if (tendered != null && Number.isFinite(tendered) && Math.abs(tendered - basePaid) > 0.009) {
-                lines.push(`<div class="receipt-row receipt-muted"><span class="left">Cash tendered (reference)</span><span class="right">${money(tendered)}</span></div>`);
+            lines.push(`<div class="receipt-row"><span class="left">NET TO ORDER</span><span class="right">${money(basePaid)}</span></div>`);
+            if (tendered != null && Number.isFinite(tendered) && Math.abs(tendered - basePaid) > MONEY_EPS) {
+                lines.push(`<div class="receipt-row receipt-muted"><span class="left">Cash tendered</span><span class="right">${money(tendered)}</span></div>`);
             }
         } else if (basePaid != null) {
             lines.push(`<div class="receipt-row"><span class="left">AMOUNT PAID</span><span class="right">${money(baseAfterRefund ?? basePaid)}</span></div>`);
@@ -786,6 +795,7 @@ body.branch-select-open .pos-order-summary-float {
             lines.push(`<div class="receipt-center receipt-muted">${meta}</div>`);
         }
         lines.push('<div class="receipt-center">Thank you for your purchase!</div>');
+        lines.push('<div class="receipt-bottom-spacer" aria-hidden="true"></div>');
         if (footerNote) {
             lines.push(`<div class="receipt-center receipt-muted">${escapeHtml(footerNote).replace(/\\n/g, '<br>')}</div>`);
         }
@@ -802,8 +812,8 @@ body.branch-select-open .pos-order-summary-float {
                     if (typeof Swal !== 'undefined') {
                         Swal.fire({
                             icon: 'info',
-                            title: 'Hindi na-block lang ang bagong tab',
-                            text: 'Susubukan ang print sa loob ng page. Kung kailangan pa rin ng bagong window, payagan ang pop-ups para sa site na ito.',
+                            title: 'Pop-up may have been blocked',
+                            text: 'Printing in this page instead. If you still need a new window, allow pop-ups for this site.',
                         });
                     }
                 },
@@ -843,28 +853,34 @@ body.branch-select-open .pos-order-summary-float {
         const r = lastReceiptObject;
         if (!r) return Swal.fire({ icon: 'warning', title: 'No receipt', text: 'Complete a sale first.' });
         if (!window.isSecureContext) {
-            return Swal.fire({ icon: 'info', title: 'Kailangan ang HTTPS', text: 'Buksan ang app sa HTTPS (o localhost) para sa Web Bluetooth.' });
+            return Swal.fire({ icon: 'info', title: 'HTTPS required', text: 'Open the app over HTTPS (or localhost) for Web Bluetooth.' });
         }
         const hints = typeof window.mpgReceiptDeviceHints === 'function' ? window.mpgReceiptDeviceHints() : null;
         if (hints && !hints.hasWebBluetooth) {
+            var bleHtml = hints.isIOS
+                ? 'Safari on iPhone/iPad does not support Web Bluetooth. Use <strong>Print</strong> (AirPrint) or <strong>Wi‑Fi / LAN</strong> if the printer is configured on the server.'
+                : hints.isAndroidWebView
+                    ? 'The APK <strong>WebView</strong> (embedded browser) does not support <strong>Web Bluetooth</strong> — an Android limitation, unlike full <strong>Chrome</strong>. For Bluetooth thermal, open the same kiosk URL in the <strong>Chrome</strong> app, or use <strong>Print</strong> / <strong>Wi‑Fi / LAN</strong>.'
+                    : 'This browser does not support Web Bluetooth. Try Chrome on Android, or use <strong>Print</strong> / <strong>Wi‑Fi / LAN</strong>.';
             return Swal.fire({
                 icon: 'info',
-                title: 'Hindi available ang Bluetooth print dito',
-                html: hints.isIOS
-                    ? 'Walang Web Bluetooth ang Safari sa iPhone/iPad. Gamitin ang <strong>Print</strong> (AirPrint) o <strong>Wi‑Fi / LAN</strong> kung naka-set ang printer sa server.'
-                    : 'Ang browser na ito ay walang Web Bluetooth. Subukan ang Chrome sa Android, o gamitin ang <strong>Print</strong> / <strong>Wi‑Fi / LAN</strong>.',
+                title: 'Bluetooth printing is not available here',
+                html: bleHtml,
             });
         }
         try {
             Swal.fire({ title: 'Preparing data…', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
             const bytes = await fetchEscposBytes(r);
             Swal.close();
-            await writeEscposBluetooth(bytes);
-            Swal.fire({ icon: 'success', title: 'Naipadala sa Bluetooth printer', timer: 1800, showConfirmButton: false });
+            if (typeof window.mpgWriteEscposBluetooth !== 'function') {
+                throw new Error('Bluetooth print module not loaded. Refresh the page.');
+            }
+            await window.mpgWriteEscposBluetooth(bytes);
+            Swal.fire({ icon: 'success', title: 'Sent to Bluetooth printer', timer: 1800, showConfirmButton: false });
         } catch (err) {
             Swal.close();
             if (err?.name === 'NotFoundError' || err?.name === 'SecurityError') return;
-            Swal.fire({ icon: 'error', title: 'Hindi nagawa ang Bluetooth print', text: String(err?.message || err) });
+            Swal.fire({ icon: 'error', title: 'Bluetooth printing failed', text: String(err?.message || err) });
         }
     });
 
@@ -913,17 +929,17 @@ body.branch-select-open .pos-order-summary-float {
                 const sync = () => {
                     const method = String(methodEl?.value || 'cash');
                     if (method !== 'cash' && method !== 'free') {
-                        amtEl.value = String(total.toFixed(2));
+                        amtEl.value = toMoneyInputStr(total);
                         amtEl.disabled = true;
                         if (quickWrap) quickWrap.innerHTML = '';
                     } else if (method === 'free') {
-                        amtEl.value = '0.00';
+                        amtEl.value = toMoneyInputStr(0);
                         amtEl.disabled = true;
                         if (quickWrap) quickWrap.innerHTML = '';
                     } else {
                         // CASH: keep the field disabled unless user explicitly taps "Enter amount".
                         amtEl.disabled = true;
-                        if (!amtEl.value) amtEl.value = String(total.toFixed(2));
+                        if (!amtEl.value) amtEl.value = toMoneyInputStr(total);
                         if (quickWrap) {
                             const opts = [50, 100, 200, 500, 1000];
                             quickWrap.innerHTML = opts.map(v => `<button type="button" class="btn btn-sm btn-outline-secondary" data-amt="${v}">${v}</button>`).join('')
@@ -938,7 +954,7 @@ body.branch-select-open .pos-order-summary-float {
                                     } else {
                                         const n = Number(val);
                                         if (Number.isFinite(n)) {
-                                            amtEl.value = String(n.toFixed(2));
+                                            amtEl.value = toMoneyInputStr(n);
                                             // Keep the field disabled; quick buttons are the intended input.
                                         }
                                     }

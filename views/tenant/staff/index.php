@@ -21,7 +21,7 @@ $required_baseline_labels = $required_baseline_labels ?? [];
         <div class="card border-0 shadow-sm">
             <div class="card-body p-3 p-md-4">
                 <h6 class="mb-3">Add cashier</h6>
-                <p class="small text-muted">Every cashier can always use Create Transaction, Transactions, and Activity log. Turn on extra areas below if this person should help with inventory, products, reports, and more.</p>
+                <p class="small text-muted">Every cashier can always use Create Transaction, Transactions, and Activity log. Turn on extra areas below if this person should help with inventory, products, expenses, and more. Reports are only available to the store owner.</p>
                 <form method="POST" action="<?= e(route('tenant.staff.store')) ?>" class="vstack gap-2">
                     <?= csrf_field() ?>
                     <div>

@@ -8,7 +8,7 @@
             </div>
             <div class="col-6 col-md-3">
                 <label class="form-label mb-1" for="expense_amount">Amount</label>
-                <input class="form-control" id="expense_amount" type="number" step="0.01" min="0.01" inputmode="decimal" name="amount" required>
+                <input class="form-control" id="expense_amount" type="number" step="any" min="0" inputmode="decimal" name="amount" required>
             </div>
             <div class="col-6 col-md-1">
                 <label class="form-label mb-1" for="expense_add_btn">Add</label>
@@ -55,6 +55,8 @@
     };
 
     const table = initServerDataTable('#expensesTable', {
+        printButton: true,
+        order: [[4, 'desc']],
         ajax: {
             url: '<?= e(route('tenant.expenses.index')) ?>',
             data: { datatable: 1 }

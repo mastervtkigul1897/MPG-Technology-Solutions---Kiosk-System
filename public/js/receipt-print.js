@@ -176,9 +176,12 @@
             /iPad|iPhone|iPod/.test(ua) ||
             (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1);
         var isAndroid = /Android/i.test(ua);
+        // Android WebView (e.g. APK) — no Web Bluetooth API; "; wv)" in UA string
+        var isAndroidWebView = isAndroid && /; wv\)/.test(ua);
         return {
             isIOS: isIOS,
             isAndroid: isAndroid,
+            isAndroidWebView: isAndroidWebView,
             hasWebBluetooth: typeof navigator.bluetooth !== 'undefined',
             prefersIframePrint: prefersIframePrint(),
         };
@@ -230,6 +233,209 @@
         if (!ok) {
             onPopupBlocked();
             runIframe();
+        }
+    };
+
+    /** UUIDs common on BLE thermal printers (Nordic UART, HM-10 style, etc.) */
+    var MPG_BLE_OPTIONAL_SERVICES = [
+        '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+        '0000ffe0-0000-1000-8000-00805f9b34fb',
+        '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+    ];
+
+    var MPG_BLE_DEVICE_ID_KEY = 'mpg_ble_thermal_device_id';
+
+    function mpgBleFindWritableCharacteristic(server) {
+        var idx = 0;
+        function tryNext() {
+            if (idx >= MPG_BLE_OPTIONAL_SERVICES.length) {
+                return Promise.resolve(null);
+            }
+            var sid = MPG_BLE_OPTIONAL_SERVICES[idx];
+            idx += 1;
+            return server
+                .getPrimaryService(sid)
+                .then(function (svc) {
+                    return svc.getCharacteristics();
+                })
+                .then(function (chars) {
+                    for (var j = 0; j < chars.length; j += 1) {
+                        var ch = chars[j];
+                        if (ch.properties.write || ch.properties.writeWithoutResponse) {
+                            return ch;
+                        }
+                    }
+                    return tryNext();
+                })
+                .catch(function () {
+                    return tryNext();
+                });
+        }
+        return tryNext();
+    }
+
+    function mpgBleWriteChunks(ch, bytes) {
+        var chunkSize = ch.properties.writeWithoutResponse ? 180 : 20;
+        var i = 0;
+        function next() {
+            if (i >= bytes.length) {
+                return Promise.resolve();
+            }
+            var slice = bytes.slice(i, i + chunkSize);
+            i += chunkSize;
+            var p = ch.properties.writeWithoutResponse
+                ? ch.writeValueWithoutResponse(slice)
+                : ch.writeValueWithResponse(slice);
+            return p.then(next);
+        }
+        return next();
+    }
+
+    /**
+     * Connect to a BluetoothDevice, find a writable GATT characteristic, send ESC/POS bytes.
+     * @returns {Promise<boolean>} true if printed successfully
+     */
+    function mpgBleTryPrintOnDevice(device, bytes) {
+        if (!device || !device.gatt) {
+            return Promise.resolve(false);
+        }
+        return device.gatt
+            .connect()
+            .then(function (server) {
+                return mpgBleFindWritableCharacteristic(server).then(function (ch) {
+                    if (!ch) {
+                        try {
+                            device.gatt.disconnect();
+                        } catch (e) {
+                            /* ignore */
+                        }
+                        return false;
+                    }
+                    return mpgBleWriteChunks(ch, bytes).then(function () {
+                        try {
+                            device.gatt.disconnect();
+                        } catch (e2) {
+                            /* ignore */
+                        }
+                        return true;
+                    });
+                });
+            })
+            .catch(function () {
+                return false;
+            });
+    }
+
+    /**
+     * ESC/POS over BLE thermal printer.
+     * First print: requestDevice (pair/select printer). Later: getDevices + saved id — no picker while permission remains.
+     */
+    window.mpgWriteEscposBluetooth = function (bytes) {
+        if (!navigator.bluetooth) {
+            return Promise.reject(
+                new Error(
+                    'Web Bluetooth not available. Use Chrome or Edge over HTTPS, or use Print / Wi‑Fi printing.'
+                )
+            );
+        }
+        var savedId = null;
+        try {
+            savedId = sessionStorage.getItem(MPG_BLE_DEVICE_ID_KEY);
+        } catch (e) {
+            savedId = null;
+        }
+
+        var tryGetDevices = typeof navigator.bluetooth.getDevices === 'function'
+            ? navigator.bluetooth.getDevices()
+            : Promise.resolve([]);
+
+        return tryGetDevices.then(function (devices) {
+            var list = Array.isArray(devices) ? devices.slice() : [];
+            if (savedId && list.length) {
+                list.sort(function (a, b) {
+                    var ma = a && a.id === savedId ? 0 : 1;
+                    var mb = b && b.id === savedId ? 0 : 1;
+                    return ma - mb;
+                });
+            }
+            function tryList(idx) {
+                if (idx >= list.length) {
+                    return Promise.resolve(false);
+                }
+                return mpgBleTryPrintOnDevice(list[idx], bytes).then(function (ok) {
+                    if (ok && list[idx] && list[idx].id) {
+                        try {
+                            sessionStorage.setItem(MPG_BLE_DEVICE_ID_KEY, list[idx].id);
+                        } catch (e) {
+                            /* ignore */
+                        }
+                        return true;
+                    }
+                    return tryList(idx + 1);
+                });
+            }
+            return tryList(0);
+        }).then(function (done) {
+            if (done) {
+                return;
+            }
+            return navigator.bluetooth
+                .requestDevice({ acceptAllDevices: true, optionalServices: MPG_BLE_OPTIONAL_SERVICES })
+                .then(function (device) {
+                    return mpgBleTryPrintOnDevice(device, bytes).then(function (ok) {
+                        if (!ok) {
+                            throw new Error(
+                                'No writable Bluetooth characteristic found. Pair the printer or use Wi‑Fi/LAN raw printing.'
+                            );
+                        }
+                        if (device && device.id) {
+                            try {
+                                sessionStorage.setItem(MPG_BLE_DEVICE_ID_KEY, device.id);
+                            } catch (e) {
+                                /* ignore */
+                            }
+                        }
+                    });
+                });
+        });
+    };
+
+    /** Clear remembered printer (next print shows the device picker again). */
+    window.mpgClearEscposBluetoothDevice = function () {
+        try {
+            sessionStorage.removeItem(MPG_BLE_DEVICE_ID_KEY);
+        } catch (e) {
+            /* ignore */
+        }
+    };
+
+    /**
+     * Web Bluetooth thermal: Chrome/Edge + HTTPS only; not available in Android WebView (APK), Safari, and most embedded browsers.
+     */
+    window.mpgSupportsBluetoothThermalPrint = function () {
+        try {
+            if (typeof window.isSecureContext === 'boolean' && !window.isSecureContext) {
+                return false;
+            }
+            return typeof navigator !== 'undefined' && typeof navigator.bluetooth !== 'undefined';
+        } catch (e) {
+            return false;
+        }
+    };
+
+    /**
+     * APK / tablet / WebView: hide Bluetooth thermal button; show hint (Print / Wi‑Fi LAN).
+     * Call from DOMContentLoaded in layouts/app.php.
+     */
+    window.mpgApplyEmbeddedShellReceiptUi = function () {
+        try {
+            if (window.mpgSupportsBluetoothThermalPrint()) {
+                document.body.classList.remove('mpg-shell-no-web-bluetooth');
+            } else {
+                document.body.classList.add('mpg-shell-no-web-bluetooth');
+            }
+        } catch (e) {
+            document.body.classList.add('mpg-shell-no-web-bluetooth');
         }
     };
 })();

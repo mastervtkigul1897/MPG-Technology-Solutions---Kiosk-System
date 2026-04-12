@@ -13,7 +13,11 @@
             </div>
             <div class="col-6 col-md-3">
                 <label class="form-label mb-1" for="damaged_quantity">Quantity</label>
-                <input class="form-control" id="damaged_quantity" type="number" step="0.01" min="0.01" inputmode="decimal" name="quantity" required>
+                <input class="form-control" id="damaged_quantity" type="number" step="any" min="0" inputmode="decimal" name="quantity" required>
+            </div>
+            <div class="col-12 col-md-9">
+                <label class="form-label mb-1" for="damaged_note">Notes (optional)</label>
+                <input class="form-control" id="damaged_note" type="text" name="note" maxlength="255" placeholder="e.g. expired, spilled, broken seal">
             </div>
             <div class="col-6 col-md-3">
                 <label class="form-label mb-1" for="damaged_add_btn">Add</label>
@@ -34,6 +38,7 @@
                     <th>ID</th>
                     <th>Item</th>
                     <th>Quantity</th>
+                    <th>Notes</th>
                     <th>Created</th>
                     <th>Actions</th>
                 </tr>
@@ -64,7 +69,11 @@
                     </div>
                     <div class="mb-1">
                         <label class="form-label mb-1" for="edit_damaged_quantity">Quantity</label>
-                        <input class="form-control" id="edit_damaged_quantity" type="number" step="0.01" min="0.01" inputmode="decimal" name="quantity" required>
+                        <input class="form-control" id="edit_damaged_quantity" type="number" step="any" min="0" inputmode="decimal" name="quantity" required>
+                    </div>
+                    <div class="mt-3">
+                        <label class="form-label mb-1" for="edit_damaged_note">Notes (optional)</label>
+                        <input class="form-control" id="edit_damaged_note" type="text" name="note" maxlength="255" placeholder="e.g. expired, spilled, broken seal">
                     </div>
                     <div class="form-text">When you save, stock will be adjusted automatically based on the difference.</div>
                 </div>
@@ -101,6 +110,7 @@
     };
 
     const table = initServerDataTable('#damagedItemsTable', {
+        printButton: true,
         ajax: {
             url: '<?= e(route('tenant.damaged-items.index')) ?>',
             data: { datatable: 1 },
@@ -110,8 +120,9 @@
             { targets: 1, responsivePriority: 100 },
             { targets: 2, responsivePriority: 2 },
             { targets: 3, responsivePriority: 3 },
-            { targets: 4, responsivePriority: 50 },
-            { targets: 5, orderable: false, searchable: false, responsivePriority: 4 },
+            { targets: 4, responsivePriority: 4 },
+            { targets: 5, responsivePriority: 50 },
+            { targets: 6, orderable: false, searchable: false, responsivePriority: 5 },
         ],
         columns: [
             { data: null },
@@ -122,6 +133,12 @@
                 render: function (data, type, row) {
                     // quantity already formatted to 2 decimals; unit is a separate field.
                     return `${data} ${row.unit || ''}`.trim();
+                }
+            },
+            {
+                data: 'note',
+                render: function (data) {
+                    return data || '';
                 }
             },
             { data: 'created_at' },
@@ -172,6 +189,7 @@
     const editForm = document.getElementById('damagedEditForm');
     const editIngredientSel = document.getElementById('edit_damaged_ingredient_id');
     const editQtyInput = document.getElementById('edit_damaged_quantity');
+    const editNoteInput = document.getElementById('edit_damaged_note');
 
     const baseUrl = '<?= e(url('/tenant/damaged-items')) ?>';
 
@@ -220,6 +238,7 @@
         }
         if (editIngredientSel) editIngredientSel.value = rowData.ingredient_id;
         if (editQtyInput) editQtyInput.value = rowData.quantity_value;
+        if (editNoteInput) editNoteInput.value = rowData.note || '';
 
         editModal?.show();
     });

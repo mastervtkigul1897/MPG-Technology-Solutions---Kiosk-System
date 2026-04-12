@@ -5,18 +5,25 @@ declare(strict_types=1);
 namespace App\Services;
 
 /**
- * Minimal ESC/POS for common 80mm thermal printers (raw TCP port 9100, or BLE chunk write).
+ * Minimal ESC/POS for common 55–58mm narrow thermal rolls (raw TCP port 9100, or BLE chunk write).
  * ASCII-only output for widest printer compatibility.
  */
 final class ThermalEscPosReceipt
 {
-    private const LINE_WIDTH = 42;
+    /**
+     * Characters per line (Font B). ~55mm printable width; adjust if printer wraps too early/late.
+     */
+    private const LINE_WIDTH = 32;
+
+    private const RIGHT_COL_WIDTH = 11;
 
     /** @param  array<string, mixed>  $r  Same shape as POS receipt JSON */
     public static function build(array $r): string
     {
         $b = '';
         $b .= "\x1B\x40"; // Initialize
+        $b .= "\x1B\x4D\x01"; // Font B (smaller / denser)
+        $b .= "\x1B\x33\x12"; // Tighter line spacing (18 dots; default ~30)
 
         $append = static function (string $line, bool $center = false) use (&$b): void {
             $line = self::asciiLine($line);
@@ -82,10 +89,16 @@ final class ThermalEscPosReceipt
             }
             $name = (string) ($it['name'] ?? '');
             $qty = (float) ($it['quantity'] ?? 0);
-            $unit = (float) ($it['unit_price'] ?? 0);
             $lineTot = (float) ($it['line_total'] ?? 0);
-            $append(self::lrPad(self::truncate($name, 26), self::money($lineTot)));
-            $append('  '.$qty.' x '.self::money($unit));
+            $unit = (float) ($it['unit_price'] ?? 0);
+            if ($unit <= money_epsilon() && $qty > money_epsilon()) {
+                $unit = $lineTot / $qty;
+            }
+            if ($name !== '') {
+                $append(self::truncate(self::ascii($name), self::LINE_WIDTH));
+            }
+            $priceQtyLeft = self::money($unit).' x '.self::qtyStr($qty);
+            $append(self::lrPad($priceQtyLeft, self::money($lineTot)));
         }
 
         $sep();
@@ -112,7 +125,7 @@ final class ThermalEscPosReceipt
 
         $basePaid = null;
         if ($pm === 'cash') {
-            if ($ap0 > 0.009) {
+            if ($ap0 > money_epsilon()) {
                 $basePaid = $ap0;
             } elseif ($tendered !== null) {
                 $basePaid = max(0.0, $tendered - $ch0);
@@ -131,25 +144,25 @@ final class ThermalEscPosReceipt
         $netPaid = $baseAfterRefund !== null ? max(0.0, $baseAfterRefund + $addedAfterRefund) : null;
 
         if ($pm === 'cash' && $basePaid !== null) {
-            $append(self::lrPad('NET TO ORDER (initial)', self::money($basePaid)));
-            if ($tendered !== null && abs($tendered - $basePaid) > 0.009) {
-                $append(self::lrPad('Cash tendered (ref)', self::money($tendered)));
+            $append(self::lrPad('NET TO ORDER', self::money($basePaid)));
+            if ($tendered !== null && abs($tendered - $basePaid) > money_epsilon()) {
+                $append(self::lrPad('Cash tendered', self::money($tendered)));
             }
         } elseif ($basePaid !== null) {
             $append(self::lrPad('AMOUNT PAID', self::money($baseAfterRefund ?? $basePaid)));
         }
 
-        if ($refunded > 0.009) {
+        if ($refunded > money_epsilon()) {
             $append(self::lrPad('REFUND', '-'.self::money($refunded)));
         }
-        if ($addedAfterRefund > 0.009) {
+        if ($addedAfterRefund > money_epsilon()) {
             $append(self::lrPad('ADDITIONAL PAID', self::money($addedAfterRefund)));
         }
         if ($netPaid !== null) {
             $append(self::lrPad('NET PAID', self::money($netPaid)));
         }
 
-        $hasAdjust = ($refunded > 0.009) || ($added > 0.009);
+        $hasAdjust = ($refunded > money_epsilon()) || ($added > money_epsilon());
         $finalChange = $hasAdjust ? 0.0 : $change;
         if ($finalChange !== null && is_finite($finalChange)) {
             $append(self::lrPad('CHANGE', self::money((float) $finalChange)));
@@ -167,6 +180,7 @@ final class ThermalEscPosReceipt
             $append($meta, true);
         }
         $append('Thank you for your purchase!', true);
+        $b .= "\n\n";
 
         $footer = trim((string) ($r['footer_note'] ?? ''));
         if ($footer !== '') {
@@ -178,15 +192,27 @@ final class ThermalEscPosReceipt
             }
         }
 
-        $b .= "\n\n";
+        $b .= "\n\n\n\n";
+        $b .= "\x1B\x32"; // Default line spacing (next job)
+        $b .= "\x1B\x4D\x00"; // Font A (next job)
         $b .= "\x1D\x56\x00"; // Full cut (common)
 
         return $b;
     }
 
+    private static function qtyStr(float $q): string
+    {
+        if (abs($q - round($q)) < 1e-9) {
+            return (string) (int) round($q);
+        }
+        $s = rtrim(rtrim(sprintf('%.4f', $q), '0'), '.');
+
+        return $s === '' ? '0' : $s;
+    }
+
     private static function money(float $n): string
     {
-        return number_format($n, 2, '.', ',');
+        return format_money($n);
     }
 
     private static function asciiLine(string $s): string
@@ -217,10 +243,14 @@ final class ThermalEscPosReceipt
     private static function lrPad(string $left, string $right): string
     {
         $w = self::LINE_WIDTH;
+        $rw = self::RIGHT_COL_WIDTH;
         $right = self::ascii($right);
-        $left = self::truncate($left, $w - 12);
-        $rp = str_pad($right, 12, ' ', STR_PAD_LEFT);
+        if (strlen($right) > $rw) {
+            $right = substr($right, 0, $rw);
+        }
+        $left = self::truncate($left, $w - $rw);
+        $rp = str_pad($right, $rw, ' ', STR_PAD_LEFT);
 
-        return str_pad($left, $w - 12, ' ', STR_PAD_RIGHT).$rp;
+        return str_pad($left, $w - $rw, ' ', STR_PAD_RIGHT).$rp;
     }
 }

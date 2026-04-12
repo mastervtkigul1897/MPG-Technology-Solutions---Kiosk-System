@@ -27,7 +27,7 @@ final class TenantController
             if ($chk !== false && $chk->fetch()) {
                 return;
             }
-            $pdo->exec('ALTER TABLE tenants ADD COLUMN paid_amount DECIMAL(12,2) NULL DEFAULT NULL');
+            $pdo->exec('ALTER TABLE tenants ADD COLUMN paid_amount DECIMAL(38,16) NULL DEFAULT NULL');
         } catch (\Throwable) {
             // Column may already exist or no ALTER privilege
         }
@@ -195,7 +195,7 @@ final class TenantController
 
                 $paidRaw = $t['paid_amount'] ?? null;
                 $paidCell = ($paidRaw !== null && $paidRaw !== '')
-                    ? '<span class="text-nowrap">'.e(number_format((float) $paidRaw, 2)).'</span>'
+                    ? '<span class="text-nowrap">'.e(format_money((float) $paidRaw)).'</span>'
                     : '<span class="text-muted">—</span>';
                 $mainBranchName = trim((string) ($t['main_branch_name'] ?? ''));
                 $branchDetails = (bool) ($t['is_main_branch'] ?? false)
@@ -261,7 +261,7 @@ final class TenantController
             if (! is_numeric($paidRaw) || (float) $paidRaw < 0) {
                 $errors[] = 'Paid amount must be a valid number zero or greater.';
             } else {
-                $paidAmount = round((float) $paidRaw, 2);
+                $paidAmount = round_money((float) $paidRaw);
             }
         }
 

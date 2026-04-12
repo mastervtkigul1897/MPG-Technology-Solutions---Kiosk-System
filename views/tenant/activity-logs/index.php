@@ -32,6 +32,7 @@
 <script>
 (() => {
     initServerDataTable('#activityLogsTable', {
+        printButton: true,
         ajax: {
             url: '<?= e(route('tenant.activity-logs.index')) ?>',
             data: { datatable: 1 }

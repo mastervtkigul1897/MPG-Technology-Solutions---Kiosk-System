@@ -84,7 +84,7 @@ final class ProductController
                         'ingredient_id' => $ingredientId,
                         'quantity_required' => $qty,
                     ];
-                    $ingHtml .= '<li>'.e($row['name']).' - '.number_format((float) $row['quantity_required'], 2).' '.e($row['unit']).'</li>';
+                    $ingHtml .= '<li>'.e($row['name']).' - '.format_stock((float) $row['quantity_required']).' '.e($row['unit']).'</li>';
                 }
                 $ingHtml .= '</ul>';
 
@@ -105,7 +105,7 @@ final class ProductController
                 $data[] = [
                     'id' => $pid,
                     'name' => e((string) $product['name']),
-                    'price' => number_format((float) $product['price'], 2),
+                    'price' => format_money((float) $product['price']),
                     'image_path' => (string) ($product['image_path'] ?? ''),
                     'status' => '<span class="badge '.($product['is_active'] ? 'text-bg-success' : 'text-bg-danger').'">'
                         .($product['is_active'] ? 'Active' : 'Inactive').'</span>',
@@ -158,7 +158,7 @@ final class ProductController
         }
         $tenantId = (int) $user['tenant_id'];
         $name = trim((string) $request->input('name'));
-        $price = (float) $request->input('price');
+        $price = round_money((float) $request->input('price'));
         $existingImagePath = trim((string) $request->input('existing_image_path', ''));
         $recipe = $request->input('recipe') ?? [];
         if (! is_array($recipe)) {
@@ -201,8 +201,8 @@ final class ProductController
                 continue;
             }
             $iid = (int) ($row['ingredient_id'] ?? 0);
-            $qty = (float) ($row['quantity_required'] ?? 0);
-            if ($iid < 1 || $qty <= 0) {
+            $qty = round_stock((float) ($row['quantity_required'] ?? 0));
+            if ($iid < 1 || $qty < stock_min_positive()) {
                 continue;
             }
             $pdo->prepare(
@@ -232,7 +232,7 @@ final class ProductController
         }
 
         $name = trim((string) $request->input('name'));
-        $price = (float) $request->input('price');
+        $price = round_money((float) $request->input('price'));
         $isActive = $request->boolean('is_active');
         $existingImagePath = trim((string) $request->input('existing_image_path', ''));
         $recipe = $request->input('recipe') ?? [];
@@ -285,8 +285,8 @@ final class ProductController
                 continue;
             }
             $iid = (int) ($row['ingredient_id'] ?? 0);
-            $qty = (float) ($row['quantity_required'] ?? 0);
-            if ($iid < 1 || $qty <= 0) {
+            $qty = round_stock((float) ($row['quantity_required'] ?? 0));
+            if ($iid < 1 || $qty < stock_min_positive()) {
                 continue;
             }
             $pdo->prepare(

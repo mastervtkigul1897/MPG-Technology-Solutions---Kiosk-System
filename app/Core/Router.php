@@ -256,8 +256,8 @@ final class Router
         $r(['DELETE'], '#^/tenant/products/(\d+)$#', ProductController::class.'::destroy', 'tenant.products.destroy', array_merge($ta, ['tenant.access:products']));
         $r(['PATCH'], '#^/tenant/products/(\d+)/toggle-status$#', ProductController::class.'::toggleStatus', 'tenant.products.toggle-status', array_merge($ta, ['tenant.access:products']));
 
-        $r(['GET'], '#^/tenant/reports$#', ReportController::class.'::index', 'tenant.reports.index', array_merge($ta, ['tenant.access:reports']));
-        $r(['GET'], '#^/tenant/reports/daily-outs$#', ReportController::class.'::dailyOuts', 'tenant.reports.daily-outs', array_merge($ta, ['tenant.access:reports']));
+        $r(['GET'], '#^/tenant/reports$#', ReportController::class.'::index', 'tenant.reports.index', $tenantAdmin);
+        $r(['GET'], '#^/tenant/reports/daily-outs$#', ReportController::class.'::dailyOuts', 'tenant.reports.daily-outs', $tenantAdmin);
         $r(['GET'], '#^/tenant/transactions/(\d+)/receipt$#', ReportController::class.'::receipt', 'tenant.transactions.receipt', array_merge($ta, ['tenant.access:transactions']));
         $r(['DELETE'], '#^/tenant/transactions/(\d+)$#', ReportController::class.'::destroyTransaction', 'tenant.transactions.destroy', $tenantAdmin);
     }

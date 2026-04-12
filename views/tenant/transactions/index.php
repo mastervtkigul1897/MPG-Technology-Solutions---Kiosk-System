@@ -42,20 +42,24 @@
 </div>
 
 <div class="modal fade" id="transactionReceiptModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-labelledby="transactionReceiptModalTitle">
-    <div class="modal-dialog modal-dialog-scrollable">
-        <div class="modal-content">
-            <div class="modal-header">
+    <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-md-down">
+        <div class="modal-content mpg-receipt-modal-content">
+            <div class="modal-header border-bottom">
                 <h5 class="modal-title" id="transactionReceiptModalTitle">Receipt</h5>
             </div>
             <div class="modal-body">
                 <div id="transactionReceiptPrintArea" class="receipt-print-area small"></div>
             </div>
-            <div class="modal-footer flex-column flex-sm-row flex-wrap gap-2 justify-content-stretch justify-content-sm-end w-100">
+            <div class="modal-footer flex-column flex-sm-row flex-wrap gap-2 justify-content-stretch justify-content-sm-end w-100 mpg-receipt-modal-footer">
                 <div class="d-grid d-sm-flex gap-2 w-100 flex-sm-grow-0 flex-sm-wrap justify-content-sm-end">
-                    <button type="button" class="btn btn-outline-secondary" id="transactionReceiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
-                    <button type="button" class="btn btn-outline-dark <?= empty($thermal_receipt_network_enabled) ? 'd-none' : '' ?>" id="transactionReceiptPrintWifiBtn" title="Server → printer sa LAN (OK sa phone kung naka-set ang host)"><i class="fa-solid fa-wifi me-1"></i>Wi‑Fi / LAN</button>
-                    <button type="button" class="btn btn-outline-dark" id="transactionReceiptPrintBleBtn" title="Mag-print sa Bluetooth thermal printer (Chrome/Android, HTTPS; hindi sa Safari sa iPhone)"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
-                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary text-white w-100 mpg-receipt-action-btn" id="transactionReceiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
+                    <button type="button" class="btn btn-success text-white <?= empty($thermal_receipt_network_enabled) ? 'd-none' : '' ?> w-100 mpg-receipt-action-btn" id="transactionReceiptPrintWifiBtn" title="Server sends raw data to printer on LAN (phone/tablet/APK when host is configured)"><i class="fa-solid fa-wifi me-1"></i>Wi‑Fi / LAN</button>
+                    <button type="button" class="btn btn-outline-primary mpg-btn-bluetooth-thermal w-100 mpg-receipt-action-btn" id="transactionReceiptPrintBleBtn" title="Bluetooth thermal (Chrome desktop/Android app; not available in WebView APK)"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
+                    <button type="button" class="btn btn-secondary text-white w-100 mpg-receipt-action-btn" data-bs-dismiss="modal">Close</button>
+                </div>
+                <div class="mpg-webview-receipt-hint w-100 small text-muted mt-2 mb-0 text-center text-sm-start">
+                    <i class="fa-solid fa-tablet-screen-button me-1" aria-hidden="true"></i>
+                    <strong>APK / tablet / WebView:</strong> Bluetooth thermal is not available here. Use <strong>Print</strong><?= empty($thermal_receipt_network_enabled) ? '' : ' or <strong>Wi‑Fi / LAN</strong>' ?> for the receipt.
                 </div>
             </div>
         </div>
@@ -146,29 +150,35 @@
 .receipt-print-area { display: flex; justify-content: center; }
 .receipt-paper {
     width: 100%;
-    max-width: 80mm;
+    max-width: 55mm;
     margin: 0 auto;
-    padding: .55rem .65rem;
+    padding: .45rem .55rem;
     border: 1px dashed #adb5bd;
     border-radius: .35rem;
     background: #fff;
     font-family: "Courier New", Courier, monospace;
-    font-size: 13px;
-    line-height: 1.45;
+    font-size: 10px;
+    line-height: 1.25;
     color: #111;
+}
+.receipt-bottom-spacer {
+    height: 2.5em;
+    min-height: 2.5em;
 }
 .receipt-center { text-align: center; }
 .receipt-bold { font-weight: 700; }
 .receipt-muted { color: #4b5563; }
-.receipt-dash { border-top: 1px dashed #666; margin: .35rem 0; }
+.receipt-dash { border-top: 1px dashed #666; margin: .22rem 0; }
 .receipt-row { display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem; }
 .receipt-row .left { min-width: 0; flex: 1 1 auto; }
 .receipt-row .right { flex: 0 0 auto; text-align: right; white-space: nowrap; }
+.receipt-item-name { font-weight: 600; margin-bottom: 0.06rem; word-break: break-word; }
+.receipt-item-price-line { margin-bottom: 0.35rem; }
 
 @media print {
-    /* Thermal receipt: 80mm roll, black & white, avoid extra blank page */
+    /* Thermal receipt: 55mm roll, black & white, avoid extra blank page */
     @page {
-        size: 80mm auto;
+        size: 55mm auto;
         margin: 0;
     }
     html, body {
@@ -192,7 +202,7 @@
     #transactionReceiptModal {
         position: absolute !important;
         inset: 0 auto auto 0 !important;
-        width: 80mm !important;
+        width: 55mm !important;
         max-width: 100% !important;
         margin: 0 !important;
         padding: 0 !important;
@@ -202,8 +212,8 @@
         filter: none !important;
     }
     #transactionReceiptModal .modal-dialog {
-        max-width: 80mm !important;
-        width: 80mm !important;
+        max-width: 55mm !important;
+        width: 55mm !important;
         margin: 0 !important;
         transform: none !important;
         height: auto !important;
@@ -242,8 +252,8 @@
         background: #fff !important;
         color: #000 !important;
         font-family: "Courier New", Courier, monospace !important;
-        font-size: 11px !important;
-        line-height: 1.3 !important;
+        font-size: 9px !important;
+        line-height: 1.22 !important;
         page-break-after: avoid !important;
         break-after: avoid-page !important;
         page-break-inside: auto;
@@ -267,7 +277,16 @@
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
-    const money = (n) => Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const MONEY_DECIMALS = 2;
+    const MONEY_EPS = 1e-12;
+    const roundMoneyVal = (n) => {
+        const x = Number(n);
+        if (!Number.isFinite(x)) return 0;
+        const f = 10 ** MONEY_DECIMALS;
+        return Math.round(x * f) / f;
+    };
+    const toMoneyInputStr = (n) => roundMoneyVal(n).toFixed(MONEY_DECIMALS);
+    const money = (n) => Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: MONEY_DECIMALS, maximumFractionDigits: MONEY_DECIMALS });
 
     const thermalCfg = <?= json_embed([
         'networkUrl' => $thermal_receipt_network_url ?? '',
@@ -300,35 +319,6 @@
         return out;
     };
 
-    const writeEscposBluetooth = async (bytes) => {
-        if (!navigator.bluetooth) {
-            throw new Error('Web Bluetooth not available. Use Chrome or Edge over HTTPS, or pair the printer with the device and use Print.');
-        }
-        const optionalServices = [
-            '49535343-fe7d-4ae5-8fa9-9fafd205e455',
-            '0000ffe0-0000-1000-8000-00805f9b34fb',
-            '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
-        ];
-        const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices });
-        const server = await device.gatt.connect();
-        for (const sid of optionalServices) {
-            let svc;
-            try { svc = await server.getPrimaryService(sid); } catch { continue; }
-            const chars = await svc.getCharacteristics();
-            for (const ch of chars) {
-                if (!ch.properties.write && !ch.properties.writeWithoutResponse) continue;
-                const chunkSize = ch.properties.writeWithoutResponse ? 180 : 20;
-                for (let i = 0; i < bytes.length; i += chunkSize) {
-                    const slice = bytes.slice(i, i + chunkSize);
-                    if (ch.properties.writeWithoutResponse) await ch.writeValueWithoutResponse(slice);
-                    else await ch.writeValueWithResponse(slice);
-                }
-                return;
-            }
-        }
-        throw new Error('No writable Bluetooth characteristic found. Pair the printer with the OS and use Print, or use Wi‑Fi/LAN raw printing.');
-    };
-
         const buildReceiptHtml = (r) => {
         const c = r.contact || {};
         const displayName = String(r.display_name || '').trim() || String(r.store_name || 'Store').trim() || 'Store';
@@ -349,9 +339,22 @@
         lines.push('<div class="receipt-dash"></div>');
         lines.push('<div class="receipt-row receipt-bold"><span class="left">Item</span><span class="right">Amount</span></div>');
         lines.push('<div class="receipt-dash"></div>');
+        const formatQty = (q) => {
+            const x = Number(q);
+            if (!Number.isFinite(x)) return '0';
+            if (Math.abs(x - Math.round(x)) < 1e-9) return String(Math.round(x));
+            let s = x.toFixed(4).replace(/\.?0+$/, '');
+            return s || '0';
+        };
         (r.items || []).forEach((it) => {
-            lines.push(`<div class="receipt-row"><span class="left">${escapeHtml(it.name)}</span><span class="right">${money(it.line_total)}</span></div>`);
-            lines.push(`<div class="receipt-row receipt-muted"><span class="left">${Number(it.quantity || 0)} x ${money(it.unit_price)}</span><span class="right"></span></div>`);
+            const q = Number(it.quantity);
+            const lt = Number(it.line_total);
+            let unit = Number(it.unit_price);
+            if (!Number.isFinite(unit) || Math.abs(unit) <= MONEY_EPS) {
+                unit = Number.isFinite(q) && q > MONEY_EPS && Number.isFinite(lt) ? lt / q : 0;
+            }
+            lines.push(`<div class="receipt-item-name">${escapeHtml(it.name)}</div>`);
+            lines.push(`<div class="receipt-row receipt-item-price-line"><span class="left">${money(unit)} × ${formatQty(it.quantity)}</span><span class="right">${money(it.line_total)}</span></div>`);
         });
         lines.push('<div class="receipt-dash"></div>');
         lines.push(`<div class="receipt-row receipt-bold"><span class="left">TOTAL</span><span class="right">${money(r.grand_total)}</span></div>`);
@@ -371,7 +374,7 @@
         // Base paid (first payment, net to order): cash prefers amount_paid (364) so tendered−change stays correct after edits zero out change.
         const ap = r.amount_paid != null ? Number(r.amount_paid) : 0;
         const basePaid = pm === 'cash'
-            ? (ap > 0.009 ? ap : (tendered != null ? Math.max(0, tendered - ch0) : null))
+            ? (ap > MONEY_EPS ? ap : (tendered != null ? Math.max(0, tendered - ch0) : null))
             : (r.amount_paid != null ? Number(r.amount_paid) : (tendered != null ? tendered : null));
         // Apply refunds FIFO: refund reduces base first, then additional.
         const baseAfterRefund = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, basePaid - refunded) : null;
@@ -381,9 +384,9 @@
             ? Math.max(0, baseAfterRefund + addedAfterRefund)
             : null;
         if (pm === 'cash' && basePaid != null) {
-            lines.push(`<div class="receipt-row"><span class="left">NET TO ORDER (initial)</span><span class="right">${money(basePaid)}</span></div>`);
-            if (tendered != null && Number.isFinite(tendered) && Math.abs(tendered - basePaid) > 0.009) {
-                lines.push(`<div class="receipt-row receipt-muted"><span class="left">Cash tendered (reference)</span><span class="right">${money(tendered)}</span></div>`);
+            lines.push(`<div class="receipt-row"><span class="left">NET TO ORDER</span><span class="right">${money(basePaid)}</span></div>`);
+            if (tendered != null && Number.isFinite(tendered) && Math.abs(tendered - basePaid) > MONEY_EPS) {
+                lines.push(`<div class="receipt-row receipt-muted"><span class="left">Cash tendered</span><span class="right">${money(tendered)}</span></div>`);
             }
         } else if (basePaid != null) {
             lines.push(`<div class="receipt-row"><span class="left">AMOUNT PAID</span><span class="right">${money(baseAfterRefund ?? basePaid)}</span></div>`);
@@ -411,6 +414,7 @@
         if (meta) lines.push(`<div class="receipt-center receipt-muted">${meta}</div>`);
         const defaultThanks = 'thank you for your purchase!';
         lines.push('<div class="receipt-center">Thank you for your purchase!</div>');
+        lines.push('<div class="receipt-bottom-spacer" aria-hidden="true"></div>');
         if (footerNote && footerNote.toLowerCase().trim() !== defaultThanks) {
             lines.push(`<div class="receipt-center receipt-muted">${escapeHtml(footerNote).replace(/\\n/g, '<br>')}</div>`);
         }
@@ -431,8 +435,8 @@
                     if (typeof Swal !== 'undefined') {
                         Swal.fire({
                             icon: 'info',
-                            title: 'Hindi na-block lang ang bagong tab',
-                            text: 'Susubukan ang print sa loob ng page. Kung kailangan pa rin ng bagong window, payagan ang pop-ups para sa site na ito.',
+                            title: 'Pop-up may have been blocked',
+                            text: 'Printing in this page instead. If you still need a new window, allow pop-ups for this site.',
                         });
                     }
                 },
@@ -472,28 +476,34 @@
         const r = lastTxReceiptObject;
         if (!r) return Swal.fire({ icon: 'warning', title: 'No receipt', text: 'Open a receipt first.' });
         if (!window.isSecureContext) {
-            return Swal.fire({ icon: 'info', title: 'Kailangan ang HTTPS', text: 'Buksan ang app sa HTTPS (o localhost) para sa Web Bluetooth.' });
+            return Swal.fire({ icon: 'info', title: 'HTTPS required', text: 'Open the app over HTTPS (or localhost) for Web Bluetooth.' });
         }
         const hints = typeof window.mpgReceiptDeviceHints === 'function' ? window.mpgReceiptDeviceHints() : null;
         if (hints && !hints.hasWebBluetooth) {
+            var bleHtml = hints.isIOS
+                ? 'Safari on iPhone/iPad does not support Web Bluetooth. Use <strong>Print</strong> (AirPrint) or <strong>Wi‑Fi / LAN</strong> if the printer is configured on the server.'
+                : hints.isAndroidWebView
+                    ? 'The APK <strong>WebView</strong> (embedded browser) does not support <strong>Web Bluetooth</strong> — an Android limitation, unlike full <strong>Chrome</strong>. For Bluetooth thermal, open the same kiosk URL in the <strong>Chrome</strong> app, or use <strong>Print</strong> / <strong>Wi‑Fi / LAN</strong>.'
+                    : 'This browser does not support Web Bluetooth. Try Chrome on Android, or use <strong>Print</strong> / <strong>Wi‑Fi / LAN</strong>.';
             return Swal.fire({
                 icon: 'info',
-                title: 'Hindi available ang Bluetooth print dito',
-                html: hints.isIOS
-                    ? 'Walang Web Bluetooth ang Safari sa iPhone/iPad. Gamitin ang <strong>Print</strong> (AirPrint) o <strong>Wi‑Fi / LAN</strong> kung naka-set ang printer sa server.'
-                    : 'Ang browser na ito ay walang Web Bluetooth. Subukan ang Chrome sa Android, o gamitin ang <strong>Print</strong> / <strong>Wi‑Fi / LAN</strong>.',
+                title: 'Bluetooth printing is not available here',
+                html: bleHtml,
             });
         }
         try {
             Swal.fire({ title: 'Preparing data…', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
             const bytes = await fetchEscposBytes(r);
             Swal.close();
-            await writeEscposBluetooth(bytes);
-            Swal.fire({ icon: 'success', title: 'Naipadala sa Bluetooth printer', timer: 1800, showConfirmButton: false });
+            if (typeof window.mpgWriteEscposBluetooth !== 'function') {
+                throw new Error('Bluetooth print module not loaded. Refresh the page.');
+            }
+            await window.mpgWriteEscposBluetooth(bytes);
+            Swal.fire({ icon: 'success', title: 'Sent to Bluetooth printer', timer: 1800, showConfirmButton: false });
         } catch (err) {
             Swal.close();
             if (err?.name === 'NotFoundError' || err?.name === 'SecurityError') return;
-            Swal.fire({ icon: 'error', title: 'Hindi nagawa ang Bluetooth print', text: String(err?.message || err) });
+            Swal.fire({ icon: 'error', title: 'Bluetooth printing failed', text: String(err?.message || err) });
         }
     });
 
@@ -646,11 +656,11 @@
                 const sync = () => {
                     const method = String(methodEl?.value || 'cash');
                     if (method !== 'cash') {
-                        amtEl.value = String(total.toFixed(2));
+                        amtEl.value = toMoneyInputStr(total);
                         amtEl.disabled = true;
                     } else {
                         amtEl.disabled = false;
-                        if (!amtEl.value) amtEl.value = String(total.toFixed(2));
+                        if (!amtEl.value) amtEl.value = toMoneyInputStr(total);
                     }
                 };
                 methodEl?.addEventListener('change', sync);
@@ -848,7 +858,7 @@
             const pmNow = String(currentEdit.payment_method || 'cash').toLowerCase();
             const ap0 = Number(currentEdit.amount_paid || 0);
             const baseNet = pmNow === 'cash'
-                ? (ap0 > 0.009 ? ap0 : Math.max(0, Number(currentEdit.amount_tendered || 0) - Number(currentEdit.change_amount || 0)))
+                ? (ap0 > MONEY_EPS ? ap0 : Math.max(0, Number(currentEdit.amount_tendered || 0) - Number(currentEdit.change_amount || 0)))
                 : Math.max(0, ap0);
             currentEdit.baseline_paid = Math.max(0, baseNet + Number(currentEdit.added_paid_amount || 0) - Number(currentEdit.refunded_amount || 0));
             const status = String(tx.status || '');
@@ -1000,11 +1010,11 @@
                     return unit * qty;
                 })
                 .reduce((a, b) => a + b, 0);
-            return Number((existing + adds).toFixed(2));
+            return roundMoneyVal(existing + adds);
         })();
 
-        const baselinePaid = Number(currentEdit.baseline_paid || 0);
-        const diff = Number((newTotal - baselinePaid).toFixed(2));
+        const baselinePaid = roundMoneyVal(Number(currentEdit.baseline_paid || 0));
+        const diff = roundMoneyVal(newTotal - baselinePaid);
         let refundAmount = 0;
         let additionalPaidAmount = 0;
 
@@ -1036,7 +1046,7 @@
                 didOpen: () => {
                     const el = document.getElementById('swalAdjustAmount');
                     // Default exact difference. For non-cash, still record the adjustment.
-                    el.value = String(deltaAbs.toFixed(2));
+                    el.value = toMoneyInputStr(deltaAbs);
                     setTimeout(() => el?.focus(), 50);
                     // show payment method context
                     if (paymentMethod && paymentMethod !== 'cash') {
@@ -1052,7 +1062,7 @@
                         return false;
                     }
                     // Keep accounting consistent: require exact difference.
-                    if (Number(n.toFixed(2)) !== Number(deltaAbs.toFixed(2))) {
+                    if (Math.abs(roundMoneyVal(n) - roundMoneyVal(deltaAbs)) > MONEY_EPS) {
                         Swal.showValidationMessage(`Amount must equal PHP ${money(deltaAbs)}.`);
                         return false;
                     }

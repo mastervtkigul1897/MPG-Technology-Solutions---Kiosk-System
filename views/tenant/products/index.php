@@ -26,7 +26,7 @@
                     </div>
                     <div class="col-12 col-lg-2">
                         <label class="form-label mb-1" for="product_price">Price</label>
-                        <input type="number" step="0.01" min="0" class="form-control" id="product_price" name="price" inputmode="decimal" required>
+                        <input type="number" step="any" min="0" class="form-control" id="product_price" name="price" inputmode="decimal" required>
                     </div>
                     <div class="col-12 col-lg-3">
                         <label class="form-label mb-1" for="product_existing_image_path">Use existing image (optional)</label>
@@ -63,7 +63,7 @@
                     </div>
                     <div class="col-12 col-md-3">
                         <label class="form-label mb-1">Quantity required</label>
-                        <input type="number" step="0.01" min="0.01" class="form-control" name="recipe[0][quantity_required]" inputmode="decimal">
+                        <input type="number" step="any" min="0" class="form-control" name="recipe[0][quantity_required]" inputmode="decimal">
                     </div>
                     <div class="col-12 col-md-1">
                         <label class="form-label mb-1 small text-muted">Remove</label>
@@ -112,7 +112,7 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="edit_product_price">Price</label>
-                        <input type="number" step="0.01" min="0" class="form-control" id="edit_product_price" name="price" inputmode="decimal" required>
+                        <input type="number" step="any" min="0" class="form-control" id="edit_product_price" name="price" inputmode="decimal" required>
                     </div>
                     <div class="mb-3">
                         <div class="form-check">
@@ -227,6 +227,15 @@ foreach ($ingredients as $i) {
 ?>
 <script>
 (() => {
+    const DECIMAL_SCALE = 16;
+    const toDecInputStr = (v) => {
+        const x = Number(v);
+        if (!Number.isFinite(x)) return '0';
+        const f = 10 ** DECIMAL_SCALE;
+        let s = (Math.round(x * f) / f).toFixed(DECIMAL_SCALE);
+        if (s.includes('.')) s = s.replace(/\.?0+$/, '') || '0';
+        return s === '-0' ? '0' : s;
+    };
     const rows = document.getElementById('recipeRows');
     const addBtn = document.getElementById('addRecipeRow');
     const ingredientOptions = <?= json_embed($ingredientOptionsHtml) ?>;
@@ -241,7 +250,7 @@ foreach ($ingredients as $i) {
                 <select class="form-select js-ingredient-select" name="recipe[${idx}][ingredient_id]"><option value="">Select item</option>${ingredientOptions}</select></div>
             <div class="col-12 col-md-3">
                 <label class="form-label mb-1">Quantity required</label>
-                <input type="number" step="0.01" min="0.01" class="form-control" name="recipe[${idx}][quantity_required]" inputmode="decimal"></div>
+                <input type="number" step="any" min="0" class="form-control" name="recipe[${idx}][quantity_required]" inputmode="decimal"></div>
             <div class="col-12 col-md-1">
                 <label class="form-label mb-1 small text-muted">Remove</label>
                 <button type="button" class="btn btn-danger w-100 remove-row" title="Remove row" aria-label="Remove recipe row"><i class="fa fa-trash"></i></button></div>`;
@@ -293,6 +302,7 @@ foreach ($ingredients as $i) {
     };
 
     const table = initServerDataTable('#productsTable', {
+        printButton: true,
         ajax: {
             url: '<?= e(route('tenant.products.index')) ?>',
             data: { datatable: 1 }
@@ -423,7 +433,7 @@ foreach ($ingredients as $i) {
     const addEditRecipeRow = (item = {}, autoScroll = false) => {
         if (!editRecipeRows) return;
         const selectedIngredientId = item.ingredient_id ?? '';
-        const qty = item.quantity_required ?? '0.01';
+        const qty = item.quantity_required ?? '1';
         const rowHtml = `
             <div class="edit-recipe-row card border-0 shadow-sm">
                 <div class="card-body p-2 p-sm-3">
@@ -437,8 +447,8 @@ foreach ($ingredients as $i) {
                         </div>
                         <div class="col-12 col-md-4">
                             <label class="form-label mb-1">Quantity required</label>
-                            <input type="number" step="0.01" min="0.01" inputmode="decimal" class="form-control"
-                                   name="recipe[${editIdx}][quantity_required]" value="${Number(qty).toFixed(2)}">
+                            <input type="number" step="any" min="0" inputmode="decimal" class="form-control"
+                                   name="recipe[${editIdx}][quantity_required]" value="${toDecInputStr(qty)}">
                         </div>
                         <div class="col-12">
                             <button type="button" class="btn btn-sm btn-danger remove-edit-recipe-row w-100">

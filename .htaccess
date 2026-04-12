@@ -6,14 +6,14 @@
     RewriteRule ^storage/backups(?:/|$) - [F,L,NC]
     RewriteRule ^public/storage/backups(?:/|$) - [F,L,NC]
 
-    # Kung may direktang /public/ sa address bar, i-301 papunta sa malinis na URL (walang /public)
+    # If /public/ appears in the address bar, 301 to a clean URL (no /public)
     RewriteCond %{THE_REQUEST} \s/+public/ [NC]
     RewriteRule ^public/(.*)$ /$1 [R=301,L]
 
-    # Ilipat ang lahat ng request sa public/ (internal rewrite — domain lang ang makikita)
+    # Route all requests to public/ (internal rewrite — only the domain is visible)
     RewriteCond %{REQUEST_URI} !^/public/
     RewriteRule ^(.*)$ public/$1 [L]
 </IfModule>
 
-# Huwag ipakita ang directory listing sa root
+# Do not show directory listing at the document root
 Options -Indexes

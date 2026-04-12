@@ -20,7 +20,6 @@ final class StaffModules
         'products' => 'Products',
         'expenses' => 'Expenses',
         'damaged_items' => 'Damaged items',
-        'reports' => 'Reports',
     ];
 
     /** Always granted to every cashier; store owner adds optional modules on top. */

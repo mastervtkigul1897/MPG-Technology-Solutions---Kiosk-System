@@ -62,8 +62,8 @@ final class IngredientController
                     'id' => $ingredient['id'],
                     'name' => e((string) $ingredient['name']),
                     'unit' => e((string) $ingredient['unit']),
-                    'stock_quantity' => number_format((float) $ingredient['stock_quantity'], 2),
-                    'low_stock_threshold' => number_format((float) $ingredient['low_stock_threshold'], 2),
+                    'stock_quantity' => format_stock((float) $ingredient['stock_quantity']),
+                    'low_stock_threshold' => format_stock((float) $ingredient['low_stock_threshold']),
                     'actions' => $actions,
                 ];
             }
@@ -127,8 +127,8 @@ final class IngredientController
                     'id' => $ingredient['id'],
                     'name' => e((string) $ingredient['name']),
                     'unit' => e((string) $ingredient['unit']),
-                    'stock_quantity' => number_format((float) $ingredient['stock_quantity'], 2),
-                    'low_stock_threshold' => number_format((float) $ingredient['low_stock_threshold'], 2),
+                    'stock_quantity' => format_stock((float) $ingredient['stock_quantity']),
+                    'low_stock_threshold' => format_stock((float) $ingredient['low_stock_threshold']),
                     'actions' => $actions,
                 ];
             }
@@ -165,9 +165,9 @@ final class IngredientController
 
         $name = trim((string) $request->input('name'));
         $unit = (string) $request->input('unit');
-        $stock = (float) $request->input('stock_quantity');
+        $stock = round_stock((float) $request->input('stock_quantity'));
         $low = $request->input('low_stock_threshold');
-        $low = $low === null || $low === '' ? 0.0 : (float) $low;
+        $low = $low === null || $low === '' ? 0.0 : round_stock((float) $low);
 
         $units = explode(',', self::UNITS);
         if (! in_array($unit, $units, true)) {
@@ -226,9 +226,9 @@ final class IngredientController
         $previousStock = (float) $ingredient['stock_quantity'];
         $name = trim((string) $request->input('name'));
         $unit = (string) $request->input('unit');
-        $stock = (float) $request->input('stock_quantity');
+        $stock = round_stock((float) $request->input('stock_quantity'));
         $low = $request->input('low_stock_threshold');
-        $low = $low === null || $low === '' ? 0.0 : (float) $low;
+        $low = $low === null || $low === '' ? 0.0 : round_stock((float) $low);
 
         $units = explode(',', self::UNITS);
         if (! in_array($unit, $units, true)) {
@@ -255,12 +255,12 @@ final class IngredientController
         // Log only low-stock / notification restocks (not every ingredient edit) to limit storage.
         if ($source === 'notifications') {
             $desc = sprintf(
-                'Restock (notifications) [ID: %d, %s] stock change: %+0.2f (was %.2f → %.2f)',
+                'Restock (notifications) [ID: %d, %s] stock change: %s (was %s → %s)',
                 (int) $id,
                 (string) $fresh['name'],
-                $delta,
-                $previousStock,
-                $newStock
+                format_stock_plain($delta),
+                format_stock_plain($previousStock),
+                format_stock_plain($newStock)
             );
             ActivityLogger::log(
                 $tenantId,

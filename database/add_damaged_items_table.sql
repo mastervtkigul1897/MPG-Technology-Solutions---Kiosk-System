@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS `damaged_items` (
   `tenant_id` bigint unsigned NOT NULL,
   `user_id` bigint unsigned DEFAULT NULL,
   `ingredient_id` bigint unsigned NOT NULL,
-  `quantity` decimal(12,3) NOT NULL,
+  `quantity` decimal(38,16) NOT NULL,
   `note` varchar(255) NULL DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
