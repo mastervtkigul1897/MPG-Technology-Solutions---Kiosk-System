@@ -24,6 +24,7 @@ final class TenantReceiptFields
             'receipt_address' => 'TEXT NULL',
             'receipt_email' => 'VARCHAR(255) NULL DEFAULT NULL',
             'receipt_footer_note' => 'TEXT NULL',
+            'receipt_lan_print_copies' => 'TINYINT UNSIGNED NOT NULL DEFAULT 1',
         ];
         foreach ($cols as $name => $def) {
             try {

@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Core\App;
 use App\Core\Auth;
 use App\Core\Csrf;
+use App\Core\TenantReceiptFields;
 use App\Core\Request;
 use App\Core\Response;
 
@@ -196,11 +197,30 @@ function thermal_receipt_client_config(string $context = 'pos'): array
     $host = trim((string) ($tp['host'] ?? ''));
     $prefix = $context === 'transactions' ? '/tenant/transactions' : '/tenant/pos';
 
+    $lanCopies = 1;
+    $u = auth_user();
+    if ($u !== null && ! empty($u['tenant_id'])) {
+        try {
+            $pdo = App::db();
+            TenantReceiptFields::ensure($pdo);
+            $st = $pdo->prepare('SELECT receipt_lan_print_copies FROM tenants WHERE id = ? LIMIT 1');
+            $st->execute([(int) $u['tenant_id']]);
+            $row = $st->fetch(\PDO::FETCH_ASSOC);
+            if ($row !== false) {
+                $c = (int) ($row['receipt_lan_print_copies'] ?? 1);
+                $lanCopies = max(1, min(10, $c > 0 ? $c : 1));
+            }
+        } catch (\Throwable) {
+            $lanCopies = 1;
+        }
+    }
+
     return [
         'thermal_receipt_network_url' => url($prefix.'/receipt-print-network'),
         'thermal_receipt_escpos_url' => url($prefix.'/receipt-escpos'),
         'thermal_receipt_network_enabled' => $host !== '',
         'thermal_receipt_show_bluetooth' => (bool) App::config('thermal_receipt_show_bluetooth', false),
+        'thermal_receipt_lan_copies' => $lanCopies,
     ];
 }
 

@@ -52,7 +52,7 @@ return [
     ],
     /**
      * Show the Web Bluetooth thermal button (Chrome/HTTPS). Code stays loaded; false = hide UI only.
-     * Use false while testing Wi‑Fi/LAN; set THERMAL_RECEIPT_SHOW_BLUETOOTH=true in .env to show again.
+     * Default off so receipt modals stay Print + Wi‑Fi/LAN only. Set true here to show Bluetooth again.
      */
-    'thermal_receipt_show_bluetooth' => filter_var($get('THERMAL_RECEIPT_SHOW_BLUETOOTH', 'false'), FILTER_VALIDATE_BOOL),
+    'thermal_receipt_show_bluetooth' => false,
 ];

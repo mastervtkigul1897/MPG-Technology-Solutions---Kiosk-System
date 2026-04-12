@@ -106,7 +106,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         .mpg-webview-receipt-hint { display: none; }
         body.mpg-shell-no-web-bluetooth .mpg-btn-bluetooth-thermal { display: none !important; }
         body.mpg-shell-no-web-bluetooth .mpg-webview-receipt-hint { display: block !important; }
-        /* Hide Bluetooth print button only (handlers stay; toggle via THERMAL_RECEIPT_SHOW_BLUETOOTH in .env) */
+        /* Hide Bluetooth print button only (handlers stay; toggle via config/app.php thermal_receipt_show_bluetooth) */
         body.mpg-hide-bluetooth-print .mpg-btn-bluetooth-thermal { display: none !important; }
 
         /* Receipt modals: readable labels (no “hover to see text”), safe-area on mobile */

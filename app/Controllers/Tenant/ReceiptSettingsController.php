@@ -23,7 +23,7 @@ final class ReceiptSettingsController
         $pdo = App::db();
         TenantReceiptFields::ensure($pdo);
         $st = $pdo->prepare(
-            'SELECT name, receipt_display_name, receipt_business_style, receipt_tax_id, receipt_phone, receipt_address, receipt_email, receipt_footer_note
+            'SELECT name, receipt_display_name, receipt_business_style, receipt_tax_id, receipt_phone, receipt_address, receipt_email, receipt_footer_note, receipt_lan_print_copies
              FROM tenants
              WHERE id = ?
              LIMIT 1'
@@ -41,6 +41,7 @@ final class ReceiptSettingsController
                 'receipt_address' => (string) ($row['receipt_address'] ?? ''),
                 'receipt_email' => (string) ($row['receipt_email'] ?? ''),
                 'receipt_footer_note' => (string) ($row['receipt_footer_note'] ?? ''),
+                'receipt_lan_print_copies' => (int) ($row['receipt_lan_print_copies'] ?? 1),
             ],
         ]);
     }
@@ -59,6 +60,13 @@ final class ReceiptSettingsController
         $address = trim((string) $request->input('receipt_address'));
         $email = trim((string) $request->input('receipt_email'));
         $footerNote = trim((string) $request->input('receipt_footer_note'));
+        $lanCopies = (int) $request->input('receipt_lan_print_copies', 1);
+        if ($lanCopies < 1) {
+            $lanCopies = 1;
+        }
+        if ($lanCopies > 10) {
+            $lanCopies = 10;
+        }
 
         $errors = [];
         if (strlen($displayName) > 255) {
@@ -94,7 +102,7 @@ final class ReceiptSettingsController
         $pdo->prepare(
             'UPDATE tenants
              SET receipt_display_name = ?, receipt_business_style = ?, receipt_tax_id = ?, receipt_phone = ?,
-                 receipt_address = ?, receipt_email = ?, receipt_footer_note = ?, updated_at = NOW()
+                 receipt_address = ?, receipt_email = ?, receipt_footer_note = ?, receipt_lan_print_copies = ?, updated_at = NOW()
              WHERE id = ?'
         )->execute([
             $displayName !== '' ? $displayName : null,
@@ -104,6 +112,7 @@ final class ReceiptSettingsController
             $address !== '' ? $address : null,
             $email !== '' ? $email : null,
             $footerNote !== '' ? $footerNote : null,
+            $lanCopies,
             (int) $user['tenant_id'],
         ]);
 

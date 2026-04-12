@@ -54,7 +54,9 @@
                 <div class="d-grid d-sm-flex gap-2 w-100 flex-sm-grow-0 flex-sm-wrap justify-content-sm-end">
                     <button type="button" class="btn btn-primary text-white w-100 mpg-receipt-action-btn" id="transactionReceiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
                     <button type="button" class="btn btn-success text-white <?= empty($thermal_receipt_network_enabled) ? 'd-none' : '' ?> w-100 mpg-receipt-action-btn" id="transactionReceiptPrintWifiBtn" title="Server sends raw data to printer on LAN (phone/tablet/APK when host is configured)"><i class="fa-solid fa-wifi me-1"></i>Wi‑Fi / LAN</button>
+                    <?php if (! empty($thermal_receipt_show_bluetooth)): ?>
                     <button type="button" class="btn btn-outline-primary mpg-btn-bluetooth-thermal w-100 mpg-receipt-action-btn" id="transactionReceiptPrintBleBtn" title="Bluetooth thermal (Chrome desktop/Android app; not available in WebView APK)"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
+                    <?php endif; ?>
                     <button type="button" class="btn btn-secondary text-white w-100 mpg-receipt-action-btn" data-bs-dismiss="modal">Close</button>
                 </div>
                 <div class="mpg-webview-receipt-hint w-100 small text-muted mt-2 mb-0 text-center text-sm-start">
@@ -296,6 +298,7 @@
         'networkUrl' => $thermal_receipt_network_url ?? '',
         'escposUrl' => $thermal_receipt_escpos_url ?? '',
         'networkEnabled' => ! empty($thermal_receipt_network_enabled),
+        'lanCopies' => max(1, min(10, (int) ($thermal_receipt_lan_copies ?? 1))),
     ]) ?>;
     let lastTxReceiptObject = null;
 
@@ -469,7 +472,17 @@
             const body = await postReceiptJson(thermalCfg.networkUrl, r);
             Swal.close();
             if (!body.success) throw new Error(body.message || 'Failed');
-            Swal.fire({ icon: 'success', title: 'Sent', text: 'Raw data sent to network printer.', timer: 1800, showConfirmButton: false });
+            const n = body.copies != null ? Number(body.copies) : thermalCfg.lanCopies;
+            const copies = Number.isFinite(n) && n > 0 ? n : 1;
+            const sentText = copies > 1
+                ? `Raw data sent to network printer (${copies} copies).`
+                : 'Raw data sent to network printer.';
+            Swal.fire({ icon: 'success', title: 'Sent', text: sentText, timer: 1800, showConfirmButton: false });
+            const txRmEl = document.getElementById('transactionReceiptModal');
+            if (txRmEl) {
+                const inst = bootstrap.Modal.getInstance(txRmEl) ?? bootstrap.Modal.getOrCreateInstance(txRmEl);
+                inst.hide();
+            }
         } catch (err) {
             Swal.close();
             Swal.fire({ icon: 'error', title: 'Network print failed', text: String(err?.message || err) });

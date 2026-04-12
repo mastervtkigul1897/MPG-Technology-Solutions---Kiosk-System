@@ -241,14 +241,35 @@ final class PosController
         }
         $port = (int) ($tp['port'] ?? 9100);
         $timeout = (float) ($tp['timeout'] ?? 3);
+
+        $user = Auth::user();
+        $tenantId = (int) ($user['tenant_id'] ?? 0);
+        if ($tenantId <= 0) {
+            return json_response(['success' => false, 'message' => 'Could not resolve store.'], 403);
+        }
+        $pdo = App::db();
+        TenantReceiptFields::ensure($pdo);
+        $st = $pdo->prepare('SELECT receipt_lan_print_copies FROM tenants WHERE id = ? LIMIT 1');
+        $st->execute([$tenantId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        $copies = (int) ($row['receipt_lan_print_copies'] ?? 1);
+        if ($copies < 1) {
+            $copies = 1;
+        }
+        if ($copies > 10) {
+            $copies = 10;
+        }
+
         try {
             $bytes = ThermalEscPosReceipt::build($receipt);
-            ThermalPrinterClient::sendRaw($host, $port, $timeout, $bytes);
+            for ($i = 0; $i < $copies; $i++) {
+                ThermalPrinterClient::sendRaw($host, $port, $timeout, $bytes);
+            }
         } catch (\Throwable $e) {
             return json_response(['success' => false, 'message' => $e->getMessage()], 422);
         }
 
-        return json_response(['success' => true]);
+        return json_response(['success' => true, 'copies' => $copies]);
     }
 
     /** @return array<string, mixed>|null */

@@ -56,6 +56,14 @@
                                   placeholder="e.g. Thank you for your purchase!"><?= e((string) ($receipt['receipt_footer_note'] ?? '')) ?></textarea>
                     </div>
 
+                    <div class="col-md-6">
+                        <label class="form-label" for="receipt_lan_print_copies">Wi‑Fi / LAN copies per tap</label>
+                        <input type="number" class="form-control" id="receipt_lan_print_copies" name="receipt_lan_print_copies"
+                               min="1" max="10" step="1" inputmode="numeric"
+                               value="<?= e((string) max(1, min(10, (int) ($receipt['receipt_lan_print_copies'] ?? 1)))) ?>">
+                        <div class="form-text">How many receipts the server prints to the network thermal printer each time you tap <strong>Wi‑Fi / LAN</strong> on POS or Transactions (e.g. 2 for counter + kitchen). Range 1–10. Default 1.</div>
+                    </div>
+
                     <div class="col-12">
                         <button type="submit" class="btn btn-primary">Save Receipt Data</button>
                     </div>
