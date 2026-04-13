@@ -136,20 +136,32 @@ def write_main_activity(pkg: str, url: str) -> str:
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothSocket
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Base64
 import android.view.View
 import android.view.animation.AccelerateDecelerateInterpolator
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ImageView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import java.io.IOException
+import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
+    private val bluetoothPermReqCode = 9041
+    private val sppUuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+    private val prefName = "mpg_bt_print"
+    private val prefAddressKey = "printer_address"
     private lateinit var webView: WebView
     private lateinit var splashOverlay: View
     private var splashPulse: ObjectAnimator? = null
@@ -186,11 +198,13 @@ class MainActivity : AppCompatActivity() {
                 start()
             }
         webView = findViewById(R.id.webview)
+        requestBluetoothPermissionIfNeeded()
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
         webView.settings.setSupportZoom(true)
         webView.settings.builtInZoomControls = true
         webView.settings.displayZoomControls = false
+        webView.addJavascriptInterface(AndroidBluetoothBridge(), "MpgAndroidBluetooth")
         webView.webViewClient =
             object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -238,6 +252,150 @@ class MainActivity : AppCompatActivity() {
         mainHandler.removeCallbacks(dismissSplashRunnable)
         splashPulse?.cancel()
         super.onDestroy()
+    }
+
+    private fun hasConnectPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
+
+    private fun requestBluetoothPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return
+        }
+        if (hasConnectPermission()) {
+            return
+        }
+        requestPermissions(arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT), bluetoothPermReqCode)
+    }
+
+    private fun getSavedPrinterAddress(): String? {
+        val prefs = getSharedPreferences(prefName, MODE_PRIVATE)
+        val raw = prefs.getString(prefAddressKey, null)?.trim()
+        return if (raw.isNullOrEmpty()) null else raw
+    }
+
+    private fun setSavedPrinterAddress(address: String) {
+        getSharedPreferences(prefName, MODE_PRIVATE)
+            .edit()
+            .putString(prefAddressKey, address.trim())
+            .apply()
+    }
+
+    private fun esc(s: String): String {
+        return s.replace("\\\\", "\\\\\\\\").replace("\\\"", "\\\\\\\"")
+    }
+
+    private fun jsonOk(extra: String = ""): String {
+        return if (extra.isEmpty()) "{\\"ok\\":true}" else "{\\"ok\\":true,%s}".format(extra)
+    }
+
+    private fun jsonErr(message: String): String {
+        return "{\\"ok\\":false,\\"message\\":\\"%s\\"}".format(esc(message))
+    }
+
+    private fun canUseBluetooth(adapter: BluetoothAdapter?): String? {
+        if (adapter == null) return "Bluetooth is not available on this device."
+        if (!adapter.isEnabled) return "Bluetooth is turned off."
+        if (!hasConnectPermission()) {
+            return "Bluetooth permission is not granted. Allow Nearby devices in Android settings."
+        }
+        return null
+    }
+
+    private inner class AndroidBluetoothBridge {
+        @JavascriptInterface
+        fun isAvailable(): Boolean {
+            val adapter = BluetoothAdapter.getDefaultAdapter()
+            return canUseBluetooth(adapter) == null
+        }
+
+        @JavascriptInterface
+        fun getBondedPrintersJson(): String {
+            val adapter = BluetoothAdapter.getDefaultAdapter()
+            val why = canUseBluetooth(adapter)
+            if (why != null) return jsonErr(why)
+            return try {
+                val list = adapter!!.bondedDevices.orEmpty().map { d ->
+                    "{\\"name\\":\\"%s\\",\\"address\\":\\"%s\\"}".format(esc(d.name ?: "Printer"), esc(d.address ?: ""))
+                }
+                jsonOk("\\"devices\\":[%s]".format(list.joinToString(",")))
+            } catch (e: Exception) {
+                jsonErr(e.message ?: "Could not read paired printers.")
+            }
+        }
+
+        @JavascriptInterface
+        fun setPrinterAddress(address: String?): String {
+            val v = address?.trim().orEmpty()
+            if (v.isEmpty()) return jsonErr("Missing printer address.")
+            setSavedPrinterAddress(v)
+            return jsonOk()
+        }
+
+        @JavascriptInterface
+        fun printBase64(payload: String?): String {
+            if (payload.isNullOrBlank()) return jsonErr("Missing print payload.")
+            val adapter = BluetoothAdapter.getDefaultAdapter()
+            val why = canUseBluetooth(adapter)
+            if (why != null) return jsonErr(why)
+
+            val bytes = try {
+                Base64.decode(payload, Base64.DEFAULT)
+            } catch (e: IllegalArgumentException) {
+                return jsonErr("Invalid print payload.")
+            }
+            if (bytes.isEmpty()) return jsonErr("Empty print payload.")
+
+            val target = resolveTargetDevice(adapter!!)
+                ?: return jsonErr("No paired printer found. Pair the Bluetooth printer first.")
+
+            val result = sendRaw(target, bytes)
+            if (result != null) return jsonErr(result)
+            setSavedPrinterAddress(target.address ?: "")
+            return jsonOk(
+                "\\"printer\\":{\\"name\\":\\"%s\\",\\"address\\":\\"%s\\"}".format(
+                    esc(target.name ?: "Printer"),
+                    esc(target.address ?: "")
+                )
+            )
+        }
+
+        private fun resolveTargetDevice(adapter: BluetoothAdapter): BluetoothDevice? {
+            val bonded = adapter.bondedDevices.orEmpty().toList()
+            if (bonded.isEmpty()) return null
+            val saved = getSavedPrinterAddress()
+            if (!saved.isNullOrEmpty()) {
+                bonded.firstOrNull { it.address.equals(saved, ignoreCase = true) }?.let { return it }
+            }
+            return bonded.firstOrNull { d ->
+                val n = (d.name ?: "").lowercase()
+                n.contains("printer") || n.contains("pos") || n.contains("bt")
+            } ?: bonded.first()
+        }
+
+        private fun sendRaw(device: BluetoothDevice, data: ByteArray): String? {
+            var socket: BluetoothSocket? = null
+            try {
+                socket = device.createRfcommSocketToServiceRecord(sppUuid)
+                socket.connect()
+                val out = socket.outputStream ?: return "Could not open printer output stream."
+                out.write(data)
+                out.flush()
+                return null
+            } catch (e: IOException) {
+                return e.message ?: "Bluetooth print failed."
+            } finally {
+                try {
+                    socket?.close()
+                } catch (_: Exception) {
+                }
+            }
+        }
     }
 }
 """
@@ -288,6 +446,9 @@ def write_manifest(app_id: str, name: str) -> str:
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application
         android:allowBackup="true"

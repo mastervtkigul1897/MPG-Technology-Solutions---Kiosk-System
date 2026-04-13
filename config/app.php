@@ -51,8 +51,8 @@ return [
         'timeout' => max(0.5, min(30.0, (float) ($get('THERMAL_PRINTER_TIMEOUT', '3') ?: 3))),
     ],
     /**
-     * Show the Web Bluetooth thermal button (Chrome/HTTPS). Code stays loaded; false = hide UI only.
-     * Default off so receipt modals stay Print + Wi‑Fi/LAN only. Set true here to show Bluetooth again.
+     * Show the Bluetooth print button in receipt modals.
+     * Uses Web Bluetooth on supported browsers, and Android native bridge in WebView APK wrappers.
      */
-    'thermal_receipt_show_bluetooth' => false,
+    'thermal_receipt_show_bluetooth' => true,
 ];

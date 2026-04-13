@@ -193,22 +193,12 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
             <div class="modal-body">
                 <div id="receiptPrintArea" class="receipt-print-area small"></div>
             </div>
-            <div class="modal-footer flex-column flex-sm-row flex-wrap gap-2 justify-content-stretch justify-content-sm-end w-100 mpg-receipt-modal-footer">
-                <div class="d-grid d-sm-flex gap-2 w-100 flex-sm-grow-0 flex-sm-wrap justify-content-sm-end">
+            <div class="modal-footer flex-column flex-sm-row flex-wrap gap-2 justify-content-stretch justify-content-sm-center w-100 mpg-receipt-modal-footer">
+                <div class="d-grid d-sm-flex gap-2 w-100 flex-sm-grow-0 flex-sm-wrap justify-content-sm-center">
                     <button type="button" class="btn btn-primary text-white w-100 mpg-receipt-action-btn" id="receiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
                     <button type="button" class="btn btn-success text-white <?= empty($thermal_receipt_network_enabled) ? 'd-none' : '' ?> w-100 mpg-receipt-action-btn" id="receiptPrintWifiBtn" title="Server sends raw data to printer on LAN (phone/tablet/APK when host is configured)"><i class="fa-solid fa-wifi me-1"></i>Wi‑Fi / LAN</button>
-                    <?php if (! empty($thermal_receipt_show_bluetooth)): ?>
-                    <button type="button" class="btn btn-outline-primary mpg-btn-bluetooth-thermal w-100 mpg-receipt-action-btn" id="receiptPrintBleBtn" title="Bluetooth thermal (Chrome desktop/Android app; not available in WebView APK)"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
-                    <?php endif; ?>
+                    <button type="button" class="btn btn-primary text-white mpg-btn-bluetooth-thermal w-100 mpg-receipt-action-btn" id="receiptPrintBleBtn" title="Bluetooth print"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
                     <button type="button" class="btn btn-secondary text-white w-100 mpg-receipt-action-btn" id="receiptOkBtn" data-bs-dismiss="modal">OK</button>
-                </div>
-                <div class="mpg-webview-receipt-hint w-100 small text-muted mt-2 mb-0 text-center text-sm-start">
-                    <i class="fa-solid fa-tablet-screen-button me-1" aria-hidden="true"></i>
-                    <?php if (! empty($thermal_receipt_show_bluetooth)): ?>
-                        <strong>APK / tablet / WebView:</strong> Bluetooth thermal is not available here. Use <strong>Print</strong><?= empty($thermal_receipt_network_enabled) ? '' : ' or <strong>Wi‑Fi / LAN</strong>' ?> for the receipt.
-                    <?php else: ?>
-                        <strong>APK / tablet / WebView:</strong> Use <strong>Print</strong><?= empty($thermal_receipt_network_enabled) ? '' : ' or <strong>Wi‑Fi / LAN</strong>' ?> for the receipt.
-                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -869,22 +859,6 @@ body.branch-select-open .pos-order-summary-float {
     document.getElementById('receiptPrintBleBtn')?.addEventListener('click', async () => {
         const r = lastReceiptObject;
         if (!r) return Swal.fire({ icon: 'warning', title: 'No receipt', text: 'Complete a sale first.' });
-        if (!window.isSecureContext) {
-            return Swal.fire({ icon: 'info', title: 'HTTPS required', text: 'Open the app over HTTPS (or localhost) for Web Bluetooth.' });
-        }
-        const hints = typeof window.mpgReceiptDeviceHints === 'function' ? window.mpgReceiptDeviceHints() : null;
-        if (hints && !hints.hasWebBluetooth) {
-            var bleHtml = hints.isIOS
-                ? 'Safari on iPhone/iPad does not support Web Bluetooth. Use <strong>Print</strong> (AirPrint) or <strong>Wi‑Fi / LAN</strong> if the printer is configured on the server.'
-                : hints.isAndroidWebView
-                    ? 'The APK <strong>WebView</strong> (embedded browser) does not support <strong>Web Bluetooth</strong> — an Android limitation, unlike full <strong>Chrome</strong>. For Bluetooth thermal, open the same kiosk URL in the <strong>Chrome</strong> app, or use <strong>Print</strong> / <strong>Wi‑Fi / LAN</strong>.'
-                    : 'This browser does not support Web Bluetooth. Try Chrome on Android, or use <strong>Print</strong> / <strong>Wi‑Fi / LAN</strong>.';
-            return Swal.fire({
-                icon: 'info',
-                title: 'Bluetooth printing is not available here',
-                html: bleHtml,
-            });
-        }
         try {
             Swal.fire({ title: 'Preparing data…', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
             const bytes = await fetchEscposBytes(r);

@@ -102,12 +102,13 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
             touch-action: manipulation;
             -webkit-tap-highlight-color: rgba(13, 110, 253, 0.15);
         }
-        /* APK WebView / embedded shell: no Web Bluetooth — hide BT button, show hint */
-        .mpg-webview-receipt-hint { display: none; }
-        body.mpg-shell-no-web-bluetooth .mpg-btn-bluetooth-thermal { display: none !important; }
-        body.mpg-shell-no-web-bluetooth .mpg-webview-receipt-hint { display: block !important; }
-        /* Hide Bluetooth print button only (handlers stay; toggle via config/app.php thermal_receipt_show_bluetooth) */
-        body.mpg-hide-bluetooth-print .mpg-btn-bluetooth-thermal { display: none !important; }
+        /* Always show Bluetooth print button across devices, centered like Print. */
+        .mpg-btn-bluetooth-thermal {
+            display: inline-flex !important;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
 
         /* Receipt modals: readable labels (no “hover to see text”), safe-area on mobile */
         #receiptModal .mpg-receipt-modal-footer .btn-outline-primary,
@@ -145,6 +146,8 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
             #receiptModal .mpg-receipt-modal-footer .mpg-receipt-action-btn,
             #transactionReceiptModal .mpg-receipt-modal-footer .mpg-receipt-action-btn {
                 width: auto !important;
+                min-width: 170px;
+                justify-content: center;
             }
         }
 
@@ -184,7 +187,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         }
     </style>
 </head>
-<body class="bg-light d-flex flex-column min-vh-100<?= \App\Core\App::config('thermal_receipt_show_bluetooth', false) ? '' : ' mpg-hide-bluetooth-print' ?>">
+<body class="bg-light d-flex flex-column min-vh-100">
 <div class="d-flex flex-grow-1 min-vh-100">
     <aside class="desktop-sidebar bg-dark text-white p-3">
         <h5 class="mb-3"><?= e($appName) ?></h5>

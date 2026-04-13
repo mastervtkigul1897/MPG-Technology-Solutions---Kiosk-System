@@ -291,6 +291,45 @@
         return next();
     }
 
+    function mpgNativeBridgeParse(raw) {
+        if (raw == null) return null;
+        if (typeof raw === 'object') return raw;
+        if (typeof raw !== 'string') return null;
+        try {
+            return JSON.parse(raw);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function mpgAndroidBridge() {
+        if (typeof window === 'undefined') return null;
+        var b = window.MpgAndroidBluetooth;
+        if (!b || typeof b.printBase64 !== 'function') return null;
+        return b;
+    }
+
+    function mpgWriteEscposAndroidBridge(bytes) {
+        var bridge = mpgAndroidBridge();
+        if (!bridge) return Promise.resolve(false);
+        return Promise.resolve().then(function () {
+            var base64 = '';
+            try {
+                var bin = '';
+                for (var i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+                base64 = btoa(bin);
+            } catch (e) {
+                throw new Error('Could not encode print payload for Android bridge.');
+            }
+            var raw = bridge.printBase64(base64);
+            var out = mpgNativeBridgeParse(raw) || {};
+            if (!out.ok) {
+                throw new Error(out.message || 'Native Bluetooth print failed.');
+            }
+            return true;
+        });
+    }
+
     /**
      * Connect to a BluetoothDevice, find a writable GATT characteristic, send ESC/POS bytes.
      * @returns {Promise<boolean>} true if printed successfully
@@ -331,6 +370,12 @@
      * First print: requestDevice (pair/select printer). Later: getDevices + saved id — no picker while permission remains.
      */
     window.mpgWriteEscposBluetooth = function (bytes) {
+        var androidBridge = mpgAndroidBridge();
+        if (androidBridge) {
+            return mpgWriteEscposAndroidBridge(bytes).then(function () {
+                return;
+            });
+        }
         if (!navigator.bluetooth) {
             return Promise.reject(
                 new Error(
@@ -414,6 +459,14 @@
      */
     window.mpgSupportsBluetoothThermalPrint = function () {
         try {
+            var bridge = mpgAndroidBridge();
+            if (bridge && typeof bridge.isAvailable === 'function') {
+                try {
+                    return !!bridge.isAvailable();
+                } catch (e0) {
+                    return true;
+                }
+            }
             if (typeof window.isSecureContext === 'boolean' && !window.isSecureContext) {
                 return false;
             }
@@ -423,19 +476,12 @@
         }
     };
 
-    /**
-     * APK / tablet / WebView: hide Bluetooth thermal button; show hint (Print / Wi‑Fi LAN).
-     * Call from DOMContentLoaded in layouts/app.php.
-     */
+    /** Always show Bluetooth print UI across devices. */
     window.mpgApplyEmbeddedShellReceiptUi = function () {
         try {
-            if (window.mpgSupportsBluetoothThermalPrint()) {
-                document.body.classList.remove('mpg-shell-no-web-bluetooth');
-            } else {
-                document.body.classList.add('mpg-shell-no-web-bluetooth');
-            }
+            document.body.classList.remove('mpg-shell-no-web-bluetooth');
         } catch (e) {
-            document.body.classList.add('mpg-shell-no-web-bluetooth');
+            /* ignore */
         }
     };
 })();
