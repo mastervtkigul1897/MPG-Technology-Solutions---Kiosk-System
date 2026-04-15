@@ -1,0 +1,406 @@
+:root {
+    --app-toolbar-height: 56px;
+    --app-bg: #f3f4f8;
+    --app-surface: #ffffff;
+    --app-surface-muted: #f7f8fc;
+    --app-border: #eaecf3;
+    --app-text: #1f2430;
+    --app-text-muted: #6f7686;
+    --app-primary: #6d43f8;
+    --app-primary-soft: #f1edff;
+    --app-danger-soft: #fef2f2;
+    --app-radius-sm: 12px;
+    --app-radius-md: 16px;
+    --app-radius-lg: 20px;
+    --app-shadow-sm: 0 8px 24px rgba(21, 25, 38, 0.06);
+    --app-shadow-md: 0 16px 40px rgba(21, 25, 38, 0.1);
+}
+
+body.app-theme {
+    background: var(--app-bg);
+    color: var(--app-text);
+    letter-spacing: 0.01em;
+    font-size: 0.95rem;
+}
+
+body.app-theme .app-shell {
+    min-height: 100vh;
+    align-items: stretch;
+}
+
+body.app-theme .desktop-sidebar {
+    display: none !important;
+}
+
+body.app-theme .app-main {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+body.app-theme .app-main-scroll {
+    min-width: 0;
+    width: 100%;
+}
+
+body.app-theme .app-content-area {
+    min-width: 0;
+}
+
+body.app-theme .app-content-area .card {
+    max-width: 100%;
+    min-width: 0;
+}
+
+body.app-theme .mobile-sidebar-toggle { display: inline-flex; }
+
+body.app-theme main h4 {
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 1rem;
+}
+
+body.app-theme .card {
+    border: 1px solid var(--app-border);
+    border-radius: var(--app-radius-md);
+    box-shadow: var(--app-shadow-sm);
+    background: var(--app-surface);
+    overflow: hidden;
+}
+
+body.app-theme .card .card-header {
+    background: transparent;
+    border-bottom: 1px solid var(--app-border);
+    font-weight: 600;
+}
+
+body.app-theme .table {
+    --bs-table-bg: transparent;
+    --bs-table-striped-bg: #f8faff;
+    --bs-table-hover-bg: #f1f5ff;
+    color: var(--app-text);
+}
+
+body.app-theme .table td,
+body.app-theme .table th {
+    vertical-align: middle;
+}
+
+body.app-theme .table-responsive {
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+}
+
+body.app-theme .table thead th {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--app-text-muted);
+    border-bottom-color: var(--app-border);
+}
+
+body.app-theme .table td {
+    border-color: #edf1f7;
+}
+
+body.app-theme .form-control,
+body.app-theme .form-select {
+    border: 1px solid var(--app-border);
+    border-radius: var(--app-radius-sm);
+    background: #fff;
+    color: var(--app-text);
+    box-shadow: none;
+}
+
+body.app-theme .form-control:focus,
+body.app-theme .form-select:focus {
+    border-color: #b39eff;
+    box-shadow: 0 0 0 0.2rem rgba(109, 67, 248, 0.14);
+}
+
+body.app-theme .form-label {
+    color: #334155;
+    font-weight: 600;
+    font-size: 0.88rem;
+}
+
+body.app-theme .btn {
+    border-radius: 10px;
+    font-weight: 600;
+    box-shadow: none;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(13, 110, 253, 0.15);
+}
+
+body.app-theme .btn-primary {
+    background: linear-gradient(135deg, #7b4dff, #6236f5);
+    border-color: #6236f5;
+}
+
+body.app-theme .btn-primary:hover,
+body.app-theme .btn-primary:focus {
+    background: linear-gradient(135deg, #6b3df8, #5427e8);
+    border-color: #5427e8;
+}
+
+body.app-theme .btn-outline-primary {
+    border-color: #d4c8ff;
+    color: #5a2fe6;
+    background: #fff;
+}
+
+body.app-theme .btn-outline-primary:hover {
+    background: var(--app-primary-soft);
+    color: #4f23db;
+    border-color: #b8a4ff;
+}
+
+body.app-theme .btn-outline-secondary {
+    border-color: #d5deea;
+    color: #475569;
+}
+
+body.app-theme .btn-outline-danger {
+    border-color: #fecaca;
+    color: #b91c1c;
+}
+
+body.app-theme .alert {
+    border-radius: 12px;
+    border: 1px solid var(--app-border);
+}
+
+body.app-theme .badge {
+    border-radius: 999px;
+    font-weight: 600;
+}
+
+body.app-theme .app-top-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 1030;
+    background: rgba(255, 255, 255, 0.92) !important;
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--app-border);
+    border-radius: var(--app-radius-md);
+    padding: 0.5rem 0.75rem !important;
+    box-shadow: var(--app-shadow-sm);
+    margin-bottom: 0.9rem !important;
+}
+
+body.app-theme .desktop-sidebar,
+body.app-theme .offcanvas.app-sidebar-mobile {
+    background: linear-gradient(180deg, #fcfcff 0%, #f8f8fd 100%) !important;
+}
+
+body.app-theme .desktop-sidebar .nav-link,
+body.app-theme .offcanvas .nav-link {
+    border-radius: 11px;
+    padding: 0.58rem 0.72rem;
+    color: #3b4252 !important;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+body.app-theme .desktop-sidebar .nav-link:hover,
+body.app-theme .offcanvas .nav-link:hover {
+    color: #1f2430 !important;
+    background: #f2f1fb;
+    border-color: #ece9fc;
+}
+
+body.app-theme .desktop-sidebar .nav-link.bg-secondary,
+body.app-theme .offcanvas .nav-link.bg-secondary {
+    background: linear-gradient(135deg, #7d4dff, #5b36e8) !important;
+    color: #fff !important;
+    border-color: transparent !important;
+}
+
+body.app-theme .desktop-sidebar h5,
+body.app-theme .offcanvas h5 {
+    color: #141826 !important;
+    font-weight: 700;
+}
+
+body.app-theme .desktop-sidebar .text-secondary,
+body.app-theme .offcanvas .text-secondary {
+    color: #7b8192 !important;
+}
+
+body.app-theme .modal-content {
+    border: 1px solid var(--app-border);
+    border-radius: var(--app-radius-lg);
+    box-shadow: var(--app-shadow-md);
+}
+
+body.app-theme .mpg-btn-bluetooth-thermal {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+body.app-theme #receiptModal .mpg-receipt-modal-footer .btn-outline-primary,
+body.app-theme #transactionReceiptModal .mpg-receipt-modal-footer .btn-outline-primary {
+    color: var(--bs-primary) !important;
+    border-color: var(--bs-primary) !important;
+    background-color: #fff !important;
+}
+
+body.app-theme #receiptModal .mpg-receipt-modal-footer .btn-outline-primary:hover,
+body.app-theme #transactionReceiptModal .mpg-receipt-modal-footer .btn-outline-primary:hover {
+    color: #fff !important;
+    background-color: var(--bs-primary) !important;
+}
+
+body.app-theme .modal-header,
+body.app-theme .modal-footer {
+    border-color: var(--app-border);
+}
+
+body.app-theme div.dataTables_wrapper .dataTables_length,
+body.app-theme div.dataTables_wrapper .dataTables_filter,
+body.app-theme div.dataTables_wrapper .dataTables_info,
+body.app-theme div.dataTables_wrapper .dataTables_paginate {
+    color: var(--app-text-muted);
+    font-size: 0.88rem;
+}
+
+body.app-theme div.dataTables_wrapper {
+    width: 100% !important;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+body.app-theme table.dataTable {
+    width: 100% !important;
+}
+
+body.app-theme div.dataTables_wrapper .dataTables_paginate .paginate_button {
+    border-radius: 8px !important;
+}
+
+body.app-theme .dataTables_wrapper .dataTables_filter input {
+    border: 1px solid var(--app-border);
+    border-radius: 10px;
+    padding: 0.35rem 0.6rem;
+}
+
+body.app-theme .dataTables_wrapper .dataTables_filter input {
+    margin-left: 0.5rem;
+}
+
+body.app-theme table.dataTable.dtr-inline.collapsed > tbody > tr > td.dtr-control:before,
+body.app-theme table.dataTable.dtr-inline.collapsed > tbody > tr > th.dtr-control:before {
+    top: 50%;
+    transform: translateY(-50%);
+    background-color: #6d43f8;
+}
+
+body.app-theme .app-site-footer {
+    color: var(--app-text-muted) !important;
+}
+
+body.app-theme .modern-page-header {
+    background: var(--app-surface);
+    border: 1px solid var(--app-border);
+    border-radius: var(--app-radius-md);
+    box-shadow: var(--app-shadow-sm);
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.75rem;
+}
+
+body.app-theme .modern-page-note {
+    color: var(--app-text-muted);
+    font-size: 0.9rem;
+}
+
+body.app-theme .modern-section {
+    margin-bottom: 0.8rem;
+}
+
+@media (max-width: 767.98px) {
+    body.app-theme .card {
+        border-radius: 12px;
+    }
+
+    body.app-theme .app-top-toolbar {
+        border-radius: 12px;
+    }
+
+    body.app-theme .mpg-receipt-modal-content {
+        min-height: 100dvh;
+        max-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+    }
+
+    body.app-theme .mpg-receipt-modal-content .modal-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    body.app-theme .mpg-receipt-modal-footer {
+        flex-shrink: 0;
+        background: #fff !important;
+        border-top: 1px solid var(--bs-border-color) !important;
+        padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px)) !important;
+    }
+
+    body.app-theme main .table .btn-sm {
+        min-width: 2.75rem;
+        min-height: 2.75rem;
+    }
+
+    body.app-theme main .btn.w-100:not(.btn-sm):not(.btn-lg),
+    body.app-theme main form .btn.btn-primary:not(.btn-sm):not(.btn-lg) {
+        min-height: 2.75rem;
+    }
+
+    body.app-theme main .modal-footer.flex-column .btn,
+    body.app-theme main #receiptModal .modal-footer .btn,
+    body.app-theme main #transactionReceiptModal .modal-footer .btn {
+        min-height: 2.75rem;
+    }
+
+    body.app-theme div.dataTables_wrapper > .row {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        --bs-gutter-x: 0.75rem;
+    }
+}
+
+@media (min-width: 576px) {
+    body.app-theme #receiptModal .mpg-receipt-modal-footer .mpg-receipt-action-btn,
+    body.app-theme #transactionReceiptModal .mpg-receipt-modal-footer .mpg-receipt-action-btn {
+        width: auto !important;
+        min-width: 170px;
+        justify-content: center;
+    }
+}
+
+@media print {
+    body.app-theme aside.desktop-sidebar,
+    body.app-theme aside.offcanvas,
+    body.app-theme .app-top-toolbar,
+    body.app-theme .mobile-sidebar-toggle,
+    body.app-theme .d-print-none {
+        display: none !important;
+    }
+
+    body.app-theme main {
+        padding: 0.5rem !important;
+    }
+
+    body.app-theme main h4 {
+        font-size: 1.1rem;
+    }
+}

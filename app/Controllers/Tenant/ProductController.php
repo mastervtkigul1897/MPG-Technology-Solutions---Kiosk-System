@@ -10,6 +10,7 @@ use App\Core\FlavorSchema;
 use App\Core\Request;
 use App\Core\Response;
 use PDO;
+use PDOException;
 use RuntimeException;
 
 final class ProductController
@@ -187,6 +188,17 @@ final class ProductController
         if (! is_array($recipe)) {
             $recipe = [];
         }
+        $recipeRows = [];
+        foreach ($recipe as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $iid = (int) ($row['ingredient_id'] ?? 0);
+            $qty = round_stock((float) ($row['quantity_required'] ?? 0));
+            if ($iid > 0 && $qty >= stock_min_positive()) {
+                $recipeRows[$iid] = $qty;
+            }
+        }
         if (! is_array($flavorRecipe)) {
             $flavorRecipe = [];
         }
@@ -205,69 +217,72 @@ final class ProductController
         $pdo = App::db();
         FlavorSchema::ensure($pdo);
         $hasImagePath = self::hasImagePathColumn($pdo);
-        if ($hasImagePath) {
-            $imagePath = '';
-            if ($existingImagePath !== '') {
-                $imagePath = $this->resolveExistingImagePath($existingImagePath);
-                if ($imagePath === '') {
-                    session_flash('errors', ['Selected existing image is invalid or missing.']);
-                    return redirect(url('/tenant/products'));
-                }
-            } else {
-                try {
-                    $imagePath = $this->handleImageUpload($request->files['image'] ?? null, $tenantId, $name);
-                } catch (\Throwable $e) {
-                    $msg = $e instanceof RuntimeException ? $e->getMessage() : 'Image upload failed on server. Please check hosting upload settings and folder permissions.';
-                    session_flash('errors', [$msg]);
-                    return redirect(url('/tenant/products'));
-                }
-            }
-            $pdo->prepare(
-                'INSERT INTO products (tenant_id, category_id, name, price, image_path, is_active, created_at, updated_at)
-                 VALUES (?, NULL, ?, ?, ?, 1, NOW(), NOW())'
-            )->execute([$tenantId, $name, $price, $imagePath]);
-        } else {
-            $pdo->prepare(
-                'INSERT INTO products (tenant_id, category_id, name, price, is_active, created_at, updated_at)
-                 VALUES (?, NULL, ?, ?, 1, NOW(), NOW())'
-            )->execute([$tenantId, $name, $price]);
+        $stDup = $pdo->prepare('SELECT id FROM products WHERE tenant_id = ? AND LOWER(name) = LOWER(?) LIMIT 1');
+        $stDup->execute([$tenantId, $name]);
+        $dup = $stDup->fetch(PDO::FETCH_ASSOC);
+        if ($dup) {
+            return $this->validationError($request, 'Product already exists. Product ID: '.(int) ($dup['id'] ?? 0));
         }
-        $productId = (int) $pdo->lastInsertId();
-        $pdo->prepare('UPDATE products SET has_flavor_options = ? WHERE tenant_id = ? AND id = ?')
-            ->execute([$hasFlavorOptions ? 1 : 0, $tenantId, $productId]);
-
-        foreach ($recipe as $row) {
-            if (! is_array($row)) {
-                continue;
-            }
-            $iid = (int) ($row['ingredient_id'] ?? 0);
-            $qty = round_stock((float) ($row['quantity_required'] ?? 0));
-            if ($iid < 1 || $qty < stock_min_positive()) {
-                continue;
-            }
-            $pdo->prepare(
-                'INSERT INTO product_ingredients (tenant_id, product_id, ingredient_id, quantity_required, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, NOW(), NOW())'
-            )->execute([$tenantId, $productId, $iid, $qty]);
-        }
-        if ($hasFlavorOptions && $flavorRows !== []) {
-            $flavorIds = array_keys($flavorRows);
-            $place = implode(',', array_fill(0, count($flavorIds), '?'));
-            $stFl = $pdo->prepare(
-                "SELECT id FROM ingredients
-                 WHERE tenant_id = ? AND id IN ($place) AND LOWER(COALESCE(category, 'general')) = 'flavor'"
-            );
-            $stFl->execute(array_merge([$tenantId], $flavorIds));
-            $valid = array_map(static fn ($r): int => (int) ($r['id'] ?? 0), $stFl->fetchAll(PDO::FETCH_ASSOC));
-            foreach ($valid as $fid) {
-                if ($fid < 1) {
-                    continue;
+        try {
+            if ($hasImagePath) {
+                $imagePath = '';
+                if ($existingImagePath !== '') {
+                    $imagePath = $this->resolveExistingImagePath($existingImagePath);
+                    if ($imagePath === '') {
+                        return $this->validationError($request, 'Selected existing image is invalid or missing.');
+                    }
+                } else {
+                    try {
+                        $imagePath = $this->handleImageUpload($request->files['image'] ?? null, $tenantId, $name);
+                    } catch (\Throwable $e) {
+                        $msg = $e instanceof RuntimeException ? $e->getMessage() : 'Image upload failed on server. Please check hosting upload settings and folder permissions.';
+                        return $this->validationError($request, $msg);
+                    }
                 }
                 $pdo->prepare(
-                    'INSERT INTO product_flavor_ingredients (tenant_id, product_id, ingredient_id, quantity_required, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, NOW(), NOW())'
-                )->execute([$tenantId, $productId, $fid, round_stock((float) ($flavorRows[$fid] ?? 1))]);
+                    'INSERT INTO products (tenant_id, category_id, name, price, image_path, is_active, created_at, updated_at)
+                     VALUES (?, NULL, ?, ?, ?, 1, NOW(), NOW())'
+                )->execute([$tenantId, $name, $price, $imagePath]);
+            } else {
+                $pdo->prepare(
+                    'INSERT INTO products (tenant_id, category_id, name, price, is_active, created_at, updated_at)
+                     VALUES (?, NULL, ?, ?, 1, NOW(), NOW())'
+                )->execute([$tenantId, $name, $price]);
             }
+            $productId = (int) $pdo->lastInsertId();
+            $pdo->prepare('UPDATE products SET has_flavor_options = ? WHERE tenant_id = ? AND id = ?')
+                ->execute([$hasFlavorOptions ? 1 : 0, $tenantId, $productId]);
+
+            foreach ($recipeRows as $iid => $qty) {
+                $pdo->prepare(
+                    'INSERT INTO product_ingredients (tenant_id, product_id, ingredient_id, quantity_required, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, NOW(), NOW())'
+                )->execute([$tenantId, $productId, (int) $iid, $qty]);
+            }
+            if ($hasFlavorOptions && $flavorRows !== []) {
+                $flavorIds = array_keys($flavorRows);
+                $place = implode(',', array_fill(0, count($flavorIds), '?'));
+                $stFl = $pdo->prepare(
+                    "SELECT id FROM ingredients
+                     WHERE tenant_id = ? AND id IN ($place) AND LOWER(COALESCE(category, 'general')) = 'flavor'"
+                );
+                $stFl->execute(array_merge([$tenantId], $flavorIds));
+                $valid = array_map(static fn ($r): int => (int) ($r['id'] ?? 0), $stFl->fetchAll(PDO::FETCH_ASSOC));
+                foreach ($valid as $fid) {
+                    if ($fid < 1) {
+                        continue;
+                    }
+                    $pdo->prepare(
+                        'INSERT INTO product_flavor_ingredients (tenant_id, product_id, ingredient_id, quantity_required, created_at, updated_at)
+                         VALUES (?, ?, ?, ?, NOW(), NOW())'
+                    )->execute([$tenantId, $productId, $fid, round_stock((float) ($flavorRows[$fid] ?? 1))]);
+                }
+            }
+        } catch (PDOException $e) {
+            if (($e->errorInfo[0] ?? '') === '23000') {
+                return $this->validationError($request, 'Duplicate product or ingredient entry detected. Please remove duplicates and try again.');
+            }
+            throw $e;
         }
 
         return redirect(url('/tenant/products'));
@@ -301,6 +316,17 @@ final class ProductController
         if (! is_array($recipe)) {
             $recipe = [];
         }
+        $recipeRows = [];
+        foreach ($recipe as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $iid = (int) ($row['ingredient_id'] ?? 0);
+            $qty = round_stock((float) ($row['quantity_required'] ?? 0));
+            if ($iid > 0 && $qty >= stock_min_positive()) {
+                $recipeRows[$iid] = $qty;
+            }
+        }
         if (! is_array($flavorRecipe)) {
             $flavorRecipe = [];
         }
@@ -316,6 +342,14 @@ final class ProductController
             }
         }
 
+        $stDup = $pdo->prepare('SELECT id FROM products WHERE tenant_id = ? AND LOWER(name) = LOWER(?) AND id <> ? LIMIT 1');
+        $stDup->execute([$tenantId, $name, (int) $id]);
+        $dup = $stDup->fetch(PDO::FETCH_ASSOC);
+        if ($dup) {
+            return $this->validationError($request, 'Product already exists. Product ID: '.(int) ($dup['id'] ?? 0));
+        }
+
+        try {
         if ($hasImagePath) {
             $imagePath = (string) ($product['image_path'] ?? '');
             $removeImage = $request->boolean('remove_image');
@@ -323,16 +357,14 @@ final class ProductController
             if ($existingImagePath !== '') {
                 $newImagePath = $this->resolveExistingImagePath($existingImagePath);
                 if ($newImagePath === '') {
-                    session_flash('errors', ['Selected existing image is invalid or missing.']);
-                    return redirect(url('/tenant/products'));
+                    return $this->validationError($request, 'Selected existing image is invalid or missing.');
                 }
             } else {
                 try {
                     $newImagePath = $this->handleImageUpload($request->files['image'] ?? null, $tenantId, $name);
                 } catch (\Throwable $e) {
                     $msg = $e instanceof RuntimeException ? $e->getMessage() : 'Image upload failed on server. Please check hosting upload settings and folder permissions.';
-                    session_flash('errors', [$msg]);
-                    return redirect(url('/tenant/products'));
+                    return $this->validationError($request, $msg);
                 }
             }
 
@@ -356,19 +388,11 @@ final class ProductController
         }
 
         $pdo->prepare('DELETE FROM product_ingredients WHERE tenant_id = ? AND product_id = ?')->execute([$tenantId, (int) $id]);
-        foreach ($recipe as $row) {
-            if (! is_array($row)) {
-                continue;
-            }
-            $iid = (int) ($row['ingredient_id'] ?? 0);
-            $qty = round_stock((float) ($row['quantity_required'] ?? 0));
-            if ($iid < 1 || $qty < stock_min_positive()) {
-                continue;
-            }
+        foreach ($recipeRows as $iid => $qty) {
             $pdo->prepare(
                 'INSERT INTO product_ingredients (tenant_id, product_id, ingredient_id, quantity_required, created_at, updated_at)
                  VALUES (?, ?, ?, ?, NOW(), NOW())'
-            )->execute([$tenantId, (int) $id, $iid, $qty]);
+            )->execute([$tenantId, (int) $id, (int) $iid, $qty]);
         }
         $pdo->prepare('DELETE FROM product_flavor_ingredients WHERE tenant_id = ? AND product_id = ?')->execute([$tenantId, (int) $id]);
         if ($hasFlavorOptions && $flavorRows !== []) {
@@ -389,6 +413,12 @@ final class ProductController
                      VALUES (?, ?, ?, ?, NOW(), NOW())'
                 )->execute([$tenantId, (int) $id, $fid, round_stock((float) ($flavorRows[$fid] ?? 1))]);
             }
+        }
+        } catch (PDOException $e) {
+            if (($e->errorInfo[0] ?? '') === '23000') {
+                return $this->validationError($request, 'Duplicate product or ingredient entry detected. Please remove duplicates and try again.');
+            }
+            throw $e;
         }
 
         return redirect(url('/tenant/products'));
@@ -768,5 +798,18 @@ final class ProductController
         }
 
         return $base;
+    }
+
+    private function validationError(Request $request, string $message): Response
+    {
+        if ($request->wantsJson() || $request->ajax()) {
+            return json_response([
+                'message' => $message,
+                'errors' => ['name' => [$message]],
+            ], 422);
+        }
+        session_flash('errors', [$message]);
+
+        return redirect(url('/tenant/products'));
     }
 }

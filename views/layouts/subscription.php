@@ -11,6 +11,7 @@ $subTitleParts[] = $appName;
 if ($brandSuffix !== '') {
     $subTitleParts[] = $brandSuffix;
 }
+$brandLogoPath = url('images/branding/mpg-kis-logo.png');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -19,6 +20,9 @@ if ($brandSuffix !== '') {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
     <title><?= e(implode(' — ', $subTitleParts)) ?></title>
+    <link rel="icon" type="image/png" sizes="512x512" href="<?= e($brandLogoPath) ?>">
+    <link rel="shortcut icon" href="<?= e($brandLogoPath) ?>">
+    <link rel="apple-touch-icon" href="<?= e($brandLogoPath) ?>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
     <style>
@@ -62,6 +66,9 @@ if ($brandSuffix !== '') {
 <div class="subscription-glow"></div>
 <main class="position-relative flex-grow-1 d-flex align-items-center justify-content-center px-3 py-5">
     <div class="w-100" style="max-width: 32rem;">
+        <div class="d-flex justify-content-center mb-3">
+            <img src="<?= e($brandLogoPath) ?>" alt="<?= e($appName) ?> logo" width="64" height="64" class="rounded-circle border border-light border-opacity-25">
+        </div>
         <?= $content ?? '' ?>
     </div>
 </main>

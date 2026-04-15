@@ -13,6 +13,7 @@ if ($brandSuffix !== '') {
     $docTitleParts[] = $brandSuffix;
 }
 $documentTitle = implode(' — ', $docTitleParts);
+$brandLogoPath = url('images/branding/mpg-kis-logo.png');
 
 $branchSwitcherRows = [];
 $currentBranchIsMain = false;
@@ -39,212 +40,82 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
     <title><?= e($documentTitle) ?></title>
+    <link rel="icon" type="image/png" sizes="512x512" href="<?= e($brandLogoPath) ?>">
+    <link rel="shortcut icon" href="<?= e($brandLogoPath) ?>">
+    <link rel="apple-touch-icon" href="<?= e($brandLogoPath) ?>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
     <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
     <link href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
     <link rel="stylesheet" href="https://cdn.datatables.net/responsive/2.5.0/css/responsive.bootstrap5.min.css">
+    <link rel="stylesheet" href="<?= e(url('css/app-theme.css')) ?>">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-    <style>
-        :root { --app-toolbar-height: 56px; }
-        .desktop-sidebar { display: none !important; }
-        .table td, .table th { vertical-align: middle; }
-        /* Tables: respect device width — flex children can shrink; scroll inside wrappers, not the whole page */
-        main.flex-grow-1 {
-            min-width: 0;
-            max-width: 100%;
-            box-sizing: border-box;
-        }
-        .app-main-scroll {
-            min-width: 0;
-            width: 100%;
-        }
-        main .flex-grow-1.overflow-auto {
-            min-width: 0;
-        }
-        main .card {
-            max-width: 100%;
-            min-width: 0;
-        }
-        .table-responsive {
-            max-width: 100%;
-            -webkit-overflow-scrolling: touch;
-        }
-        div.dataTables_wrapper {
-            width: 100% !important;
-            max-width: 100%;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-        }
-        table.dataTable {
-            width: 100% !important;
-        }
-        .dataTables_wrapper .dataTables_filter input { margin-left: .5rem; }
-        table.dataTable.dtr-inline.collapsed > tbody > tr > td.dtr-control:before,
-        table.dataTable.dtr-inline.collapsed > tbody > tr > th.dtr-control:before {
-            top: 50%; transform: translateY(-50%); background-color: #0d6efd;
-        }
-        /* All platforms: use hamburger + offcanvas menu */
-        .mobile-sidebar-toggle { display: inline-flex; }
-        .app-top-toolbar {
-            position: sticky;
-            top: 0;
-            z-index: 1030;
-            background: #f8f9fa;
-            border-bottom: 1px solid #e9ecef;
-            padding-top: .25rem;
-            padding-bottom: .25rem;
-        }
-        /* Touch-friendly controls (all modules): iOS/Android reliable taps */
-        main .btn {
-            cursor: pointer;
-            touch-action: manipulation;
-            -webkit-tap-highlight-color: rgba(13, 110, 253, 0.15);
-        }
-        /* Always show Bluetooth print button across devices, centered like Print. */
-        .mpg-btn-bluetooth-thermal {
-            display: inline-flex !important;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-        }
-
-        /* Receipt modals: readable labels (no “hover to see text”), safe-area on mobile */
-        #receiptModal .mpg-receipt-modal-footer .btn-outline-primary,
-        #transactionReceiptModal .mpg-receipt-modal-footer .btn-outline-primary {
-            color: var(--bs-primary) !important;
-            border-color: var(--bs-primary) !important;
-            background-color: #fff !important;
-        }
-        #receiptModal .mpg-receipt-modal-footer .btn-outline-primary:hover,
-        #transactionReceiptModal .mpg-receipt-modal-footer .btn-outline-primary:hover {
-            color: #fff !important;
-            background-color: var(--bs-primary) !important;
-        }
-        @media (max-width: 767.98px) {
-            .mpg-receipt-modal-content {
-                min-height: 100dvh;
-                max-height: 100dvh;
-                display: flex;
-                flex-direction: column;
-            }
-            .mpg-receipt-modal-content .modal-body {
-                flex: 1 1 auto;
-                min-height: 0;
-                overflow-y: auto;
-                -webkit-overflow-scrolling: touch;
-            }
-            .mpg-receipt-modal-footer {
-                flex-shrink: 0;
-                background: #fff !important;
-                border-top: 1px solid var(--bs-border-color) !important;
-                padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px)) !important;
-            }
-        }
-        @media (min-width: 576px) {
-            #receiptModal .mpg-receipt-modal-footer .mpg-receipt-action-btn,
-            #transactionReceiptModal .mpg-receipt-modal-footer .mpg-receipt-action-btn {
-                width: auto !important;
-                min-width: 170px;
-                justify-content: center;
-            }
-        }
-
-        @media print {
-            aside.desktop-sidebar,
-            aside.offcanvas,
-            .app-top-toolbar,
-            .mobile-sidebar-toggle,
-            .d-print-none {
-                display: none !important;
-            }
-            main { padding: 0.5rem !important; }
-            main h4 { font-size: 1.1rem; }
-        }
-
-        @media (max-width: 767.98px) {
-            main .table .btn-sm {
-                min-width: 2.75rem;
-                min-height: 2.75rem;
-            }
-            main .btn.w-100:not(.btn-sm):not(.btn-lg),
-            main form .btn.btn-primary:not(.btn-sm):not(.btn-lg) {
-                min-height: 2.75rem;
-            }
-            /* Receipt / checkout modals: full-width tap targets on narrow screens */
-            main .modal-footer.flex-column .btn,
-            main #receiptModal .modal-footer .btn,
-            main #transactionReceiptModal .modal-footer .btn {
-                min-height: 2.75rem;
-            }
-            /* DataTables toolbar: avoid horizontal overflow from negative row margins */
-            div.dataTables_wrapper > .row {
-                margin-left: 0 !important;
-                margin-right: 0 !important;
-                --bs-gutter-x: 0.75rem;
-            }
-        }
-    </style>
 </head>
-<body class="bg-light d-flex flex-column min-vh-100">
-<div class="d-flex flex-grow-1 min-vh-100">
+<body class="app-theme bg-light d-flex flex-column min-vh-100">
+<div class="app-shell d-flex flex-grow-1 min-vh-100">
     <aside class="desktop-sidebar bg-dark text-white p-3">
-        <h5 class="mb-3"><?= e($appName) ?></h5>
+        <div class="d-flex align-items-center gap-2 mb-3">
+            <img src="<?= e($brandLogoPath) ?>" alt="<?= e($appName) ?> logo" width="36" height="36" class="rounded-circle border border-secondary-subtle">
+            <h5 class="mb-0"><?= e($appName) ?></h5>
+        </div>
         <div class="small text-secondary mb-3"><?= e(strtoupper((string) ($u['role'] ?? ''))) ?></div>
         <nav class="nav flex-column gap-1">
-            <a class="nav-link text-white <?= route_is('dashboard') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/dashboard')) ?>">Dashboard</a>
+            <a class="nav-link text-white <?= route_is('dashboard') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/dashboard')) ?>"><i class="fa-solid fa-house"></i><span>Dashboard</span></a>
             <?php if (($u['role'] ?? null) === 'super_admin'): ?>
-                <a class="nav-link text-white <?= route_is('super-admin.tenants.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/tenants')) ?>">Tenants</a>
-                <a class="nav-link text-white <?= route_is('super-admin.backups.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/backups/runner')) ?>">Backup Runner</a>
-                <a class="nav-link text-white <?= route_is('super-admin.settings.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/settings')) ?>">Settings</a>
+                <a class="nav-link text-white <?= route_is('super-admin.tenants.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/tenants')) ?>"><i class="fa-solid fa-building"></i><span>Tenants</span></a>
+                <a class="nav-link text-white <?= route_is('super-admin.backups.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/backups/runner')) ?>"><i class="fa-solid fa-database"></i><span>Backup Runner</span></a>
+                <a class="nav-link text-white <?= route_is('super-admin.settings.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/settings')) ?>"><i class="fa-solid fa-gear"></i><span>Settings</span></a>
             <?php else: ?>
                 <?php if (user_can_module('pos')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.pos.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/pos')) ?>">Create Transaction</a>
+                    <a class="nav-link text-white <?= route_is('tenant.pos.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/pos')) ?>"><i class="fa-solid fa-cart-plus"></i><span>Create Transaction</span></a>
                 <?php endif; ?>
                 <?php if (user_can_module('transactions')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.transactions.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/transactions')) ?>">Transactions</a>
+                    <a class="nav-link text-white <?= route_is('tenant.transactions.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/transactions')) ?>"><i class="fa-solid fa-receipt"></i><span>Transactions</span></a>
                 <?php endif; ?>
                 <?php if (user_can_module('ingredients')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.ingredients.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/ingredients')) ?>">Inventory Items</a>
+                    <a class="nav-link text-white <?= route_is('tenant.ingredients.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/ingredients')) ?>"><i class="fa-solid fa-boxes-stacked"></i><span>Inventory Items</span></a>
                 <?php endif; ?>
                 <?php if (user_can_module('products')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.products.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/products')) ?>">Products</a>
+                    <a class="nav-link text-white <?= route_is('tenant.products.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/products')) ?>"><i class="fa-solid fa-tags"></i><span>Products</span></a>
                 <?php endif; ?>
                 <?php if (user_can_module('expenses')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.expenses.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/expenses')) ?>">Expenses</a>
+                    <a class="nav-link text-white <?= route_is('tenant.expenses.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/expenses')) ?>"><i class="fa-solid fa-money-bill-wave"></i><span>Expenses</span></a>
                 <?php endif; ?>
                 <?php if (user_can_module('damaged_items')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.damaged-items.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/damaged-items')) ?>">Damaged Items</a>
+                    <a class="nav-link text-white <?= route_is('tenant.damaged-items.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/damaged-items')) ?>"><i class="fa-solid fa-triangle-exclamation"></i><span>Damaged Items</span></a>
                 <?php endif; ?>
                 <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.reports.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/reports')) ?>">Reports</a>
+                    <a class="nav-link text-white <?= route_is('tenant.reports.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/reports')) ?>"><i class="fa-solid fa-chart-line"></i><span>Reports</span></a>
                 <?php endif; ?>
                 <?php if (user_can_module('notifications')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.notifications.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/notifications')) ?>">Notifications</a>
+                    <a class="nav-link text-white <?= route_is('tenant.notifications.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/notifications')) ?>"><i class="fa-solid fa-bell"></i><span>Notifications</span></a>
                 <?php endif; ?>
                 <hr class="border-secondary my-2 opacity-50">
                 <?php if (user_can_module('activity_logs')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.activity-logs.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/activity-logs')) ?>">Activity Log</a>
+                    <a class="nav-link text-white <?= route_is('tenant.activity-logs.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/activity-logs')) ?>"><i class="fa-solid fa-clock-rotate-left"></i><span>Activity Log</span></a>
                 <?php endif; ?>
                 <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.staff.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/staff')) ?>">Staff</a>
-                    <a class="nav-link text-white <?= route_is('tenant.receipt-settings.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.receipt-settings.edit')) ?>">Receipt Data</a>
+                    <a class="nav-link text-white <?= route_is('tenant.staff.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/staff')) ?>"><i class="fa-solid fa-users"></i><span>Staff</span></a>
+                    <a class="nav-link text-white <?= route_is('tenant.receipt-settings.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.receipt-settings.edit')) ?>"><i class="fa-solid fa-file-lines"></i><span>Receipt Data</span></a>
                     <?php if ($currentBranchIsMain): ?>
-                        <a class="nav-link text-white <?= route_is('tenant.branches.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/branches')) ?>">Branches</a>
+                        <a class="nav-link text-white <?= route_is('tenant.branches.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch"></i><span>Branches</span></a>
                     <?php endif; ?>
                 <?php endif; ?>
             <?php endif; ?>
         </nav>
     </aside>
 
-    <aside class="offcanvas offcanvas-start bg-dark text-white p-3" tabindex="-1" id="appSidebarMobile" style="width: 260px;">
+    <aside class="offcanvas offcanvas-start app-sidebar-mobile text-white p-3" tabindex="-1" id="appSidebarMobile" style="width: 260px;">
         <div class="offcanvas-header px-0 pt-0">
             <h5 class="offcanvas-title">Menu</h5>
             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" data-bs-target="#appSidebarMobile"></button>
         </div>
         <div class="offcanvas-body p-0 d-flex flex-column">
-            <h5 class="mb-3"><?= e($appName) ?></h5>
+            <div class="d-flex align-items-center gap-2 mb-3">
+                <img src="<?= e($brandLogoPath) ?>" alt="<?= e($appName) ?> logo" width="34" height="34" class="rounded-circle border border-secondary-subtle">
+                <h5 class="mb-0"><?= e($appName) ?></h5>
+            </div>
             <div class="small text-secondary mb-3"><?= e(strtoupper((string) ($u['role'] ?? ''))) ?></div>
             <nav class="nav flex-column gap-1">
                 <a class="nav-link text-white" href="<?= e(url('/dashboard')) ?>">Dashboard</a>
@@ -331,7 +202,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         </div>
     </aside>
 
-    <main class="flex-grow-1 d-flex flex-column min-vh-100 min-w-0 p-3 p-md-4">
+    <main class="app-main flex-grow-1 d-flex flex-column min-vh-100 min-w-0 p-3 p-md-4">
         <?php /* Load jQuery + DataTables + initServerDataTable before $content so inline scripts in views run after they exist */ ?>
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
         <script src="<?= e(url('js/receipt-print.js')) ?>"></script>
@@ -448,10 +319,16 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         </script>
         <div class="app-main-scroll flex-grow-1 d-flex flex-column min-h-0 min-w-0 w-100">
         <div class="app-top-toolbar d-flex justify-content-between align-items-center mb-2">
+            <div class="d-flex align-items-center gap-2">
             <div class="mobile-sidebar-toggle">
                 <button class="btn btn-dark btn-sm" type="button" data-bs-toggle="offcanvas" data-bs-target="#appSidebarMobile" aria-controls="appSidebarMobile">
                     <i class="fa-solid fa-bars"></i>
                 </button>
+            </div>
+                <div class="d-flex align-items-center gap-2">
+                    <img src="<?= e($brandLogoPath) ?>" alt="<?= e($appName) ?> logo" width="30" height="30" class="rounded-circle border border-secondary-subtle">
+                    <span class="fw-semibold small d-none d-sm-inline"><?= e($appName) ?></span>
+                </div>
             </div>
             <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
                 <a href="<?= e(url('/profile')) ?>" class="btn btn-outline-secondary btn-sm" title="Profile" aria-label="Profile"><i class="fa-solid fa-user"></i></a>
@@ -461,9 +338,12 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
                 </form>
             </div>
         </div>
-        <h4 class="mb-3"><?= e($title ?? 'Dashboard') ?></h4>
+        <div class="modern-page-header">
+            <h4 class="mb-1"><?= e($title ?? 'Dashboard') ?></h4>
+            <div class="modern-page-note">Manage and monitor your kiosk operations.</div>
+        </div>
         <?php require dirname(__DIR__).'/partials/alerts.php'; ?>
-        <div class="flex-grow-1 min-h-0 min-w-0 overflow-auto"><?= $content ?? '' ?></div>
+        <div class="app-content-area flex-grow-1 min-h-0 min-w-0 overflow-auto"><?= $content ?? '' ?></div>
         <?php
         $footerCreditClass = 'text-muted mt-auto pt-3 border-top';
         require dirname(__DIR__).'/partials/footer_credit.php';

@@ -1,96 +1,125 @@
-<div class="card mb-3">
-    <div class="card-body">
-        <?php $imgColAvailable = (bool) ($image_path_column_available ?? false); ?>
-        <?php
-        $existingImageMap = [];
-        foreach (($existing_image_paths ?? []) as $imgPath) {
-            $p = (string) $imgPath;
-            if ($p !== '') {
-                $existingImageMap[$p] = url($p);
-            }
-        }
-        ?>
-        <?php if (! $imgColAvailable): ?>
-            <div class="alert alert-warning small mb-3">
-                Product image upload is not active yet. Run SQL file <code>database/add_products_image_path.sql</code> on your database, then reload this page.
+<?php $imgColAvailable = (bool) ($image_path_column_available ?? false); ?>
+<?php
+$existingImageMap = [];
+foreach (($existing_image_paths ?? []) as $imgPath) {
+    $p = (string) $imgPath;
+    if ($p !== '') {
+        $existingImageMap[$p] = url($p);
+    }
+}
+?>
+
+<div class="d-flex justify-content-end mb-3">
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createProductModal">
+        <i class="fa fa-plus me-1"></i>Create product
+    </button>
+</div>
+
+<div class="modal fade" id="createProductModal" tabindex="-1" aria-labelledby="createProductModalLabel" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable modal-fullscreen-sm-down">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title" id="createProductModalLabel">Create product</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-        <?php endif; ?>
-        <form method="POST" action="<?= e(route('tenant.products.store')) ?>" id="createProductForm" enctype="multipart/form-data">
-            <?= csrf_field() ?>
-            <div class="mb-3">
-                <h6 class="mb-2 text-body">Product details</h6>
-                <div class="row g-2">
-                    <div class="col-12 col-lg-4">
-                        <label class="form-label mb-1" for="product_name">Product name</label>
-                        <input class="form-control" id="product_name" name="name" required maxlength="255" autocomplete="off">
-                    </div>
-                    <div class="col-12 col-lg-2">
-                        <label class="form-label mb-1" for="product_price">Price</label>
-                        <input type="number" step="any" min="0" class="form-control" id="product_price" name="price" inputmode="decimal" required>
-                    </div>
-                    <div class="col-12 col-lg-3">
-                        <label class="form-label mb-1" for="product_existing_image_path">Use existing image (optional)</label>
-                        <select class="form-select js-existing-image-select" id="product_existing_image_path" name="existing_image_path" <?= $imgColAvailable ? '' : 'disabled' ?>>
-                            <option value="">None (use upload or SVG fallback)</option>
-                            <?php foreach (($existing_image_paths ?? []) as $i => $imgPath): ?>
-                                <?php $pathStr = (string) $imgPath; ?>
-                                <option value="<?= e($pathStr) ?>" data-image="<?= e(url($pathStr)) ?>">Image #<?= (int) $i + 1 ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                        <div class="mt-2 d-none" id="product_existing_image_preview_wrap">
-                            <img id="product_existing_image_preview" src="" alt="Selected existing image" class="img-fluid rounded border" style="max-height:72px; object-fit:cover;">
+            <form method="POST" action="<?= e(route('tenant.products.store')) ?>" id="createProductForm" enctype="multipart/form-data">
+                <?= csrf_field() ?>
+                <div class="modal-body">
+                    <?php if (! $imgColAvailable): ?>
+                        <div class="alert alert-warning small mb-3">
+                            Product image upload is not active yet. Run SQL file <code>database/add_products_image_path.sql</code> on your database, then reload this page.
+                        </div>
+                    <?php endif; ?>
+                    <div class="mb-3">
+                        <h6 class="mb-2 text-body">Product details</h6>
+                        <div class="row g-2">
+                            <div class="col-12 col-lg-4">
+                                <label class="form-label mb-1" for="product_name">Product name</label>
+                                <input class="form-control" id="product_name" name="name" required maxlength="255" autocomplete="off">
+                            </div>
+                            <div class="col-12 col-lg-2">
+                                <label class="form-label mb-1" for="product_price">Price</label>
+                                <input type="number" step="any" min="0" class="form-control" id="product_price" name="price" inputmode="decimal" required>
+                            </div>
+                            <div class="col-12 col-lg-3">
+                                <label class="form-label mb-1" for="product_existing_image_path">Use existing image (optional)</label>
+                                <select class="form-select js-existing-image-select" id="product_existing_image_path" name="existing_image_path" <?= $imgColAvailable ? '' : 'disabled' ?>>
+                                    <option value="">None (use upload or SVG fallback)</option>
+                                    <?php foreach (($existing_image_paths ?? []) as $i => $imgPath): ?>
+                                        <?php $pathStr = (string) $imgPath; ?>
+                                        <option value="<?= e($pathStr) ?>" data-image="<?= e(url($pathStr)) ?>">Image #<?= (int) $i + 1 ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <div class="mt-2 d-none" id="product_existing_image_preview_wrap">
+                                    <img id="product_existing_image_preview" src="" alt="Selected existing image" class="img-fluid rounded border" style="max-height:72px; object-fit:cover;">
+                                </div>
+                            </div>
+                            <div class="col-12 col-lg-3">
+                                <label class="form-label mb-1" for="product_image">Product image (optional)</label>
+                                <input class="form-control" id="product_image" type="file" name="image" accept="image/jpeg,image/png,image/webp,image/gif" <?= $imgColAvailable ? '' : 'disabled' ?>>
+                            </div>
+                            <div class="col-12 col-lg-2">
+                                <div class="form-check mt-4 pt-2">
+                                    <input class="form-check-input" type="checkbox" id="product_has_flavor_options" name="has_flavor_options" value="1">
+                                    <label class="form-check-label" for="product_has_flavor_options">Has flavors</label>
+                                </div>
+                            </div>
+                            <div class="col-12" id="createFlavorSectionWrap">
+                                <div class="product-flavor-panel">
+                                    <div class="d-flex flex-column flex-md-row justify-content-md-between align-items-md-center gap-1 mb-2">
+                                        <label class="form-label mb-0">Flavor options (from Inventory)</label>
+                                        <small class="text-muted">Visible only when <strong>Has flavors</strong> is enabled.</small>
+                                    </div>
+                                    <div id="productFlavorRows" class="vstack gap-2"></div>
+                                    <button type="button" class="btn btn-sm btn-outline-primary mt-2" id="addProductFlavorRow"><i class="fa fa-plus me-1"></i>Add flavor row</button>
+                                    <div class="form-text mt-2">Set flavor stock deduction per sold item (e.g. Cheese powder 0.25 pack).</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <div class="col-12 col-lg-3">
-                        <label class="form-label mb-1" for="product_image">Product image (optional)</label>
-                        <input class="form-control" id="product_image" type="file" name="image" accept="image/jpeg,image/png,image/webp,image/gif" <?= $imgColAvailable ? '' : 'disabled' ?>>
+                    <hr class="text-secondary opacity-25 my-3">
+                    <div class="mb-2">
+                        <h6 class="mb-1 text-body">Resource requirements</h6>
+                        <p class="small text-muted mb-0">Optional: assign inventory requirements only if this product/service consumes stock per unit sold.</p>
                     </div>
-                    <div class="col-12 col-lg-2">
-                        <div class="form-check mt-4 pt-2">
-                            <input class="form-check-input" type="checkbox" id="product_has_flavor_options" name="has_flavor_options" value="1">
-                            <label class="form-check-label" for="product_has_flavor_options">Has flavors</label>
+                    <div id="recipeRows" class="vstack gap-3 mb-3">
+                        <div class="row g-2 recipe-row align-items-end">
+                            <div class="col-12 col-md-8">
+                                <label class="form-label mb-1">Inventory item</label>
+                                <select class="form-select js-ingredient-select" name="recipe[0][ingredient_id]">
+                                    <option value="">Select item</option>
+                                    <?php foreach ($ingredients as $ingredient): ?>
+                                        <?php
+                                        $ingredientCategory = strtolower(trim((string) ($ingredient['category'] ?? 'general')));
+                                        if ($ingredientCategory === 'flavor') {
+                                            continue;
+                                        }
+                                        ?>
+                                        <option value="<?= (int) $ingredient['id'] ?>"><?= e((string) $ingredient['name']) ?> (<?= e((string) $ingredient['unit']) ?>)</option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div class="col-12 col-md-3">
+                                <label class="form-label mb-1">Quantity required</label>
+                                <input type="number" step="any" min="0" class="form-control" name="recipe[0][quantity_required]" inputmode="decimal">
+                            </div>
+                            <div class="col-12 col-md-1">
+                                <label class="form-label mb-1 small text-muted">Remove</label>
+                                <button type="button" class="btn btn-danger w-100 remove-row" title="Remove row" aria-label="Remove recipe row"><i class="fa fa-trash"></i></button>
+                            </div>
                         </div>
                     </div>
-                    <div class="col-12 col-lg-6">
-                        <label class="form-label mb-1">Flavor options (from Inventory)</label>
-                        <div id="productFlavorRows" class="vstack gap-2"></div>
-                        <button type="button" class="btn btn-sm btn-outline-primary mt-2" id="addProductFlavorRow"><i class="fa fa-plus me-1"></i>Add flavor row</button>
-                        <div class="form-text">Set flavor stock deduction per sold item (e.g. Cheese powder 0.25 pack).</div>
-                    </div>
+                    <button type="button" class="btn btn-outline-primary py-2" id="addRecipeRow"><i class="fa fa-plus"></i> Add requirement row</button>
                 </div>
-            </div>
-            <hr class="text-secondary opacity-25 my-3">
-            <div class="mb-2">
-                <h6 class="mb-1 text-body">Resource requirements</h6>
-                <p class="small text-muted mb-0">Optional: assign inventory requirements only if this product/service consumes stock per unit sold.</p>
-            </div>
-            <div id="recipeRows" class="vstack gap-3 mb-3">
-                <div class="row g-2 recipe-row align-items-end">
-                    <div class="col-12 col-md-8">
-                        <label class="form-label mb-1">Inventory item</label>
-                        <select class="form-select js-ingredient-select" name="recipe[0][ingredient_id]">
-                            <option value="">Select item</option>
-                            <?php foreach ($ingredients as $ingredient): ?><option value="<?= (int) $ingredient['id'] ?>"><?= e((string) $ingredient['name']) ?> (<?= e((string) $ingredient['unit']) ?>)</option><?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="col-12 col-md-3">
-                        <label class="form-label mb-1">Quantity required</label>
-                        <input type="number" step="any" min="0" class="form-control" name="recipe[0][quantity_required]" inputmode="decimal">
-                    </div>
-                    <div class="col-12 col-md-1">
-                        <label class="form-label mb-1 small text-muted">Remove</label>
-                        <button type="button" class="btn btn-danger w-100 remove-row" title="Remove row" aria-label="Remove recipe row"><i class="fa fa-trash"></i></button>
-                    </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary py-2"><i class="fa fa-plus me-1"></i>Create product</button>
                 </div>
-            </div>
-            <div class="d-flex flex-column flex-sm-row gap-2">
-                <button type="button" class="btn btn-outline-primary py-2" id="addRecipeRow"><i class="fa fa-plus"></i> Add requirement row</button>
-                <button type="submit" class="btn btn-primary py-2"><i class="fa fa-plus"></i> Create product</button>
-            </div>
-        </form>
+            </form>
+        </div>
     </div>
 </div>
-<div class="card">
+<div class="card modern-section">
     <div class="card-body table-responsive">
         <table class="table table-striped w-100" id="productsTable">
             <thead>
@@ -132,10 +161,15 @@
                             <label class="form-check-label" for="edit_product_has_flavor_options">Has flavors</label>
                         </div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">Flavor options (from Inventory)</label>
-                        <div id="editProductFlavorRows" class="vstack gap-2"></div>
-                        <button type="button" class="btn btn-sm btn-outline-primary mt-2" id="addEditFlavorRow"><i class="fa fa-plus me-1"></i>Add flavor row</button>
+                    <div class="mb-3" id="editFlavorSectionWrap">
+                        <div class="product-flavor-panel">
+                            <div class="d-flex flex-column flex-md-row justify-content-md-between align-items-md-center gap-1 mb-2">
+                                <label class="form-label mb-0">Flavor options (from Inventory)</label>
+                                <small class="text-muted">Visible only when <strong>Has flavors</strong> is enabled.</small>
+                            </div>
+                            <div id="editProductFlavorRows" class="vstack gap-2"></div>
+                            <button type="button" class="btn btn-sm btn-outline-primary mt-2" id="addEditFlavorRow"><i class="fa fa-plus me-1"></i>Add flavor row</button>
+                        </div>
                     </div>
                     <div class="mb-3">
                         <div class="form-check">
@@ -241,10 +275,21 @@
     border: 1px solid #dee2e6;
     background: #f8f9fa;
 }
+
+.product-flavor-panel {
+    border: 1px solid #e9ecef;
+    border-radius: .75rem;
+    padding: .85rem;
+    background: #fcfcff;
+}
 </style>
 <?php
 $ingredientOptionsHtml = '';
 foreach ($ingredients as $i) {
+    $category = strtolower(trim((string) ($i['category'] ?? 'general')));
+    if ($category === 'flavor') {
+        continue;
+    }
     $ingredientOptionsHtml .= '<option value="'.(int) $i['id'].'">'.e((string) $i['name']).' ('.e((string) $i['unit']).')</option>';
 }
 ?>
@@ -269,7 +314,9 @@ foreach ($ingredients as $i) {
     const addBtn = document.getElementById('addRecipeRow');
     const ingredientOptions = <?= json_embed($ingredientOptionsHtml) ?>;
     const ingredientList = <?= json_embed($ingredients) ?>;
-    const flavorIngredients = (Array.isArray(ingredientList) ? ingredientList : []).filter((i) => String(i?.category || 'general').toLowerCase() === 'flavor');
+    const allIngredients = Array.isArray(ingredientList) ? ingredientList : [];
+    const flavorIngredients = allIngredients.filter((i) => String(i?.category || 'general').toLowerCase() === 'flavor');
+    const generalIngredients = allIngredients.filter((i) => String(i?.category || 'general').toLowerCase() !== 'flavor');
     const existingImageMap = <?= json_embed($existingImageMap) ?>;
     let idx = 1;
     addBtn?.addEventListener('click', () => {
@@ -387,6 +434,8 @@ foreach ($ingredients as $i) {
     const editHasFlavor = document.getElementById('edit_product_has_flavor_options');
     const createFlavorRows = document.getElementById('productFlavorRows');
     const editFlavorRows = document.getElementById('editProductFlavorRows');
+    const createFlavorWrap = document.getElementById('createFlavorSectionWrap');
+    const editFlavorWrap = document.getElementById('editFlavorSectionWrap');
     const addCreateFlavorBtn = document.getElementById('addProductFlavorRow');
     const addEditFlavorBtn = document.getElementById('addEditFlavorRow');
     const editExistingImage = document.getElementById('edit_existing_image_path');
@@ -467,6 +516,7 @@ foreach ($ingredients as $i) {
                     <input type="number" step="any" min="0" class="form-control" name="${prefix}[${idx}][quantity_required]" value="${toDecInputStr(qtyRequired)}" inputmode="decimal">
                 </div>
                 <div class="col-4 col-md-1">
+                    <label class="form-label mb-1 small text-muted">Remove</label>
                     <button type="button" class="btn btn-danger w-100 remove-flavor-row" title="Remove flavor row"><i class="fa fa-trash"></i></button>
                 </div>
             </div>
@@ -502,6 +552,8 @@ foreach ($ingredients as $i) {
     const syncFlavorEnabled = (checkboxEl, rowsEl, addBtn) => {
         if (!checkboxEl || !rowsEl) return;
         const enabled = checkboxEl.checked;
+        const wrapEl = rowsEl === editFlavorRows ? editFlavorWrap : createFlavorWrap;
+        if (wrapEl) wrapEl.classList.toggle('d-none', !enabled);
         rowsEl.querySelectorAll('select,input,button').forEach((el) => { el.disabled = !enabled; });
         if (addBtn) addBtn.disabled = !enabled;
         if (!enabled) {
@@ -527,7 +579,7 @@ foreach ($ingredients as $i) {
     syncFlavorEnabled(createHasFlavor, createFlavorRows, addCreateFlavorBtn);
 
     const renderIngredientOptions = (selectedId) => {
-        return ingredientList.map((i) => {
+        return generalIngredients.map((i) => {
             const sid = String(i.id ?? '');
             const val = String(selectedId ?? '');
             const selected = sid !== '' && sid === val ? 'selected' : '';

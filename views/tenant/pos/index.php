@@ -38,7 +38,7 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
 }
 ?>
 
-<div class="row g-3 align-items-start">
+<div class="row g-3 modern-section">
     <div class="col-md-8 pos-products-col">
         <div class="card">
             <div class="card-body">
@@ -148,26 +148,73 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
 
     <div class="col-md-4 pos-order-summary-anchor">
         <div class="card pos-order-summary-float" id="orderSummaryCard">
-            <div class="card-body">
+            <div class="card-body pos-summary-body">
                 <h6 class="mb-2">Transaction Summary</h6>
                 <div id="cartWrap" class="small text-muted mb-2">No items yet.</div>
-                <form id="checkoutForm" method="POST" action="<?= e(url('/tenant/pos/checkout')) ?>">
+                <form id="checkoutForm" method="POST" action="<?= e(url('/tenant/pos/checkout')) ?>" class="pos-checkout-form">
                     <?= csrf_field() ?>
                     <div id="checkoutItems"></div>
-                    <div class="d-flex justify-content-between mb-2"><span>Total</span><strong id="cartTotal">0.00</strong></div>
-                    <div class="d-grid gap-2">
-                        <button type="button" class="btn btn-success w-100" id="checkoutBtn">
-                            <span class="d-inline-flex align-items-center justify-content-center me-2" style="width: 1.25em;">
-                                <i class="fa-solid fa-money-bill-wave"></i>
-                            </span>
-                            <span>Checkout to Pay</span>
-                        </button>
-                        <button type="button" class="btn btn-danger w-100" id="savePendingBtn">
-                            <span class="d-inline-flex align-items-center justify-content-center me-2" style="width: 1.25em;">
-                                <i class="fa-solid fa-clock-rotate-left"></i>
-                            </span>
-                            <span>Checkout as Pending</span>
-                        </button>
+                    <div class="pos-checkout-actions">
+                        <div class="d-flex justify-content-between mb-2"><span>Total</span><strong id="cartTotal">0.00</strong></div>
+                        <div class="d-grid gap-2">
+                            <button type="button" class="btn btn-success w-100" id="checkoutBtn">
+                                <span class="d-inline-flex align-items-center justify-content-center me-2" style="width: 1.25em;">
+                                    <i class="fa-solid fa-money-bill-wave"></i>
+                                </span>
+                                <span>Checkout to Pay</span>
+                            </button>
+                            <button type="button" class="btn btn-danger w-100" id="savePendingBtn">
+                                <span class="d-inline-flex align-items-center justify-content-center me-2" style="width: 1.25em;">
+                                    <i class="fa-solid fa-clock-rotate-left"></i>
+                                </span>
+                                <span>Checkout as Pending</span>
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="pos-mobile-cart-dock d-md-none">
+    <div class="pos-mobile-cart-dock-inner">
+        <div class="small text-muted">Cart: <strong id="mobileCartCount">0</strong> item(s)</div>
+        <div class="fw-semibold">Total: PHP <span id="mobileCartTotalMini">0.00</span></div>
+        <button type="button" class="btn btn-primary btn-sm w-100 mt-2" data-bs-toggle="modal" data-bs-target="#mobileCartModal">
+            <i class="fa fa-shopping-cart me-1"></i>View cart / Checkout
+        </button>
+    </div>
+</div>
+
+<div class="modal fade" id="mobileCartModal" tabindex="-1" aria-labelledby="mobileCartModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-sm-down">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title" id="mobileCartModalLabel">Transaction Summary</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="mobileCartWrap" class="small text-muted mb-2">No items yet.</div>
+                <form id="mobileCheckoutForm" method="POST" action="<?= e(url('/tenant/pos/checkout')) ?>" class="pos-checkout-form">
+                    <?= csrf_field() ?>
+                    <div id="mobileCheckoutItems"></div>
+                    <div class="pos-checkout-actions">
+                        <div class="d-flex justify-content-between mb-2"><span>Total</span><strong id="mobileCartTotal">0.00</strong></div>
+                        <div class="d-grid gap-2">
+                            <button type="button" class="btn btn-success w-100" id="mobileCheckoutBtn">
+                                <span class="d-inline-flex align-items-center justify-content-center me-2" style="width: 1.25em;">
+                                    <i class="fa-solid fa-money-bill-wave"></i>
+                                </span>
+                                <span>Checkout to Pay</span>
+                            </button>
+                            <button type="button" class="btn btn-danger w-100" id="mobileSavePendingBtn">
+                                <span class="d-inline-flex align-items-center justify-content-center me-2" style="width: 1.25em;">
+                                    <i class="fa-solid fa-clock-rotate-left"></i>
+                                </span>
+                                <span>Checkout as Pending</span>
+                            </button>
+                        </div>
                     </div>
                 </form>
             </div>
@@ -339,62 +386,134 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
     }
 }
 
-/* Floating + sticky checkout summary (all devices) */
+/* Checkout summary layout */
+.pos-order-summary-anchor {
+    align-self: stretch;
+    padding-top: 0;
+}
+
 .pos-order-summary-float {
-    position: fixed;
-    z-index: 1035;
+    position: static;
+    z-index: 1;
     background: #fff;
     border: 1px solid #dee2e6;
     box-shadow: 0 8px 22px rgba(0, 0, 0, .12);
+    overflow: auto;
+}
+
+.pos-summary-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    gap: .35rem;
+}
+
+#cartWrap {
+    flex: 1 1 auto;
+    min-height: 3.25rem;
+    max-height: none;
+    overflow: visible;
+}
+
+.pos-checkout-form {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.pos-checkout-actions {
+    position: sticky;
+    bottom: 0;
+    background: #fff;
+    padding-top: .5rem;
+    border-top: 1px solid #eef1f4;
+    z-index: 2;
 }
 
 @media (min-width: 992px) {
-    .pos-order-summary-float {
-        top: calc(var(--app-toolbar-height, 56px) + .9rem);
-        right: 1rem;
-        width: min(360px, 30vw);
-        max-height: calc(100vh - var(--app-toolbar-height, 56px) - 1.8rem);
-        overflow: auto;
-    }
-    /* keep product area visible while panel floats */
     .pos-products-col {
-        padding-right: .5rem;
+        flex: 0 0 100%;
+        max-width: 100%;
+        padding-right: calc(min(340px, 29vw) + .9rem);
+    }
+    .pos-order-summary-anchor {
+        position: static;
+        flex: 0 0 0;
+        max-width: 0;
+        width: 0;
+        padding: 0;
+        margin: 0;
+        overflow: visible;
+    }
+    .pos-order-summary-float {
+        position: fixed;
+        z-index: 1032;
+        top: calc(var(--app-toolbar-height, 56px) + 8rem);
+        right: 1rem;
+        width: min(340px, 29vw);
+        max-height: calc(100vh - 1.5rem);
     }
 }
 
 @media (min-width: 768px) and (max-width: 991.98px) {
+    .pos-products-col {
+        flex: 0 0 100%;
+        max-width: 100%;
+        padding-right: calc(min(300px, 36vw) + .85rem);
+    }
+    .pos-order-summary-anchor {
+        position: static;
+        flex: 0 0 0;
+        max-width: 0;
+        width: 0;
+        padding: 0;
+        margin: 0;
+        overflow: visible;
+    }
     .pos-order-summary-float {
-        top: calc(var(--app-toolbar-height, 56px) + .75rem);
+        position: fixed;
+        z-index: 1032;
+        top: calc(var(--app-toolbar-height, 56px) + 7.5rem);
         right: .75rem;
-        width: min(340px, 42vw);
-        max-height: calc(100vh - var(--app-toolbar-height, 56px) - 1.5rem);
-        overflow: auto;
+        width: min(300px, 36vw);
+        max-height: calc(100vh - 1.5rem);
     }
 }
 
 /* When branch dropdown is open, move floating checkout lower
    so the popout list remains fully visible. */
 body.branch-select-open .pos-order-summary-float {
-    top: calc(var(--app-toolbar-height, 56px) + 4.5rem);
+    top: calc(var(--app-toolbar-height, 56px) + 11rem);
+}
+body.branch-select-open .pos-order-summary-anchor {
+    top: auto;
 }
 
 @media (max-width: 767.98px) {
-    .pos-order-summary-float {
+    .pos-order-summary-anchor { display: none; }
+    .pos-mobile-cart-dock {
+        position: fixed;
         left: .5rem;
         right: .5rem;
         bottom: .5rem;
-        width: auto;
-        max-height: 52vh;
-        overflow: auto;
+        z-index: 1035;
+    }
+    .pos-mobile-cart-dock-inner {
+        background: #fff;
+        border: 1px solid #dee2e6;
         border-radius: .75rem;
+        box-shadow: 0 8px 22px rgba(0, 0, 0, .12);
+        padding: .6rem .7rem;
     }
-    /* prevent floating summary from covering end content */
     .app-main-scroll {
-        padding-bottom: 19rem;
+        padding-bottom: 6.5rem;
     }
-    #cartWrap {
-        max-height: 35vh;
-        overflow: auto;
+}
+
+@media (max-width: 767.98px) and (orientation: landscape) {
+    .pos-mobile-cart-dock { bottom: .4rem; }
+    .app-main-scroll {
+        padding-bottom: 6rem;
     }
 }
 
@@ -585,8 +704,15 @@ body.branch-select-open .pos-order-summary-float {
         .replace(/"/g, '&quot;');
     const cart = {};
     const wrap = document.getElementById('cartWrap');
+    const mobileWrap = document.getElementById('mobileCartWrap');
     const itemsEl = document.getElementById('checkoutItems');
+    const mobileItemsEl = document.getElementById('mobileCheckoutItems');
     const totalEl = document.getElementById('cartTotal');
+    const mobileTotalEl = document.getElementById('mobileCartTotal');
+    const mobileTotalMiniEl = document.getElementById('mobileCartTotalMini');
+    const mobileCountEl = document.getElementById('mobileCartCount');
+    const mobileCartModalEl = document.getElementById('mobileCartModal');
+    const mobileCartModal = mobileCartModalEl ? bootstrap.Modal.getOrCreateInstance(mobileCartModalEl) : null;
     let searchTimer = null;
 
     const getOutOfStockIngredient = (product, qty) => {
@@ -609,13 +735,19 @@ body.branch-select-open .pos-order-summary-float {
 
     const renderCart = () => {
         const entries = Object.values(cart);
+        const renderNoItems = '<div class="text-muted">No items yet.</div>';
         if (!entries.length) {
-            wrap.innerHTML = '<div class="text-muted">No items yet.</div>';
-            itemsEl.innerHTML = '';
-            totalEl.textContent = '0.00';
+            if (wrap) wrap.innerHTML = renderNoItems;
+            if (mobileWrap) mobileWrap.innerHTML = renderNoItems;
+            if (itemsEl) itemsEl.innerHTML = '';
+            if (mobileItemsEl) mobileItemsEl.innerHTML = '';
+            if (totalEl) totalEl.textContent = '0.00';
+            if (mobileTotalEl) mobileTotalEl.textContent = '0.00';
+            if (mobileTotalMiniEl) mobileTotalMiniEl.textContent = '0.00';
+            if (mobileCountEl) mobileCountEl.textContent = '0';
         } else {
             let total = 0;
-            wrap.innerHTML = `<div class="table-responsive"><table class="table table-sm pos-cart-table mb-0"><thead><tr><th>Item</th><th class="text-center" style="width:72px;">Qty</th><th class="text-end" style="width:104px;">Subtotal</th><th class="text-end" style="width:148px;">Actions</th></tr></thead><tbody>${
+            const tableHtml = `<div class="table-responsive"><table class="table table-sm pos-cart-table mb-0"><thead><tr><th>Item</th><th class="text-center" style="width:72px;">Qty</th><th class="text-end" style="width:104px;">Subtotal</th><th class="text-end" style="width:148px;">Actions</th></tr></thead><tbody>${
                 entries.map(item => {
                     const subtotal = item.price * item.quantity;
                     total += subtotal;
@@ -634,8 +766,17 @@ body.branch-select-open .pos-order-summary-float {
                     </tr>`;
                 }).join('')
             }</tbody></table></div>`;
-            itemsEl.innerHTML = entries.map((item, idx) => `<input type="hidden" name="items[${idx}][product_id]" value="${item.product_id}"><input type="hidden" name="items[${idx}][quantity]" value="${item.quantity}"><input type="hidden" name="items[${idx}][flavor_ingredient_id]" value="${Number(item.flavor_ingredient_id || 0)}">`).join('');
-            totalEl.textContent = money(total);
+            const hiddenInputs = entries.map((item, idx) => `<input type="hidden" name="items[${idx}][product_id]" value="${item.product_id}"><input type="hidden" name="items[${idx}][quantity]" value="${item.quantity}"><input type="hidden" name="items[${idx}][flavor_ingredient_id]" value="${Number(item.flavor_ingredient_id || 0)}">`).join('');
+            if (wrap) wrap.innerHTML = tableHtml;
+            if (mobileWrap) mobileWrap.innerHTML = tableHtml;
+            if (itemsEl) itemsEl.innerHTML = hiddenInputs;
+            if (mobileItemsEl) mobileItemsEl.innerHTML = hiddenInputs;
+            const totalText = money(total);
+            if (totalEl) totalEl.textContent = totalText;
+            if (mobileTotalEl) mobileTotalEl.textContent = totalText;
+            if (mobileTotalMiniEl) mobileTotalMiniEl.textContent = totalText;
+            const totalQty = entries.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+            if (mobileCountEl) mobileCountEl.textContent = String(totalQty);
         }
 
         // Update card visuals (danger + button color) based on current cart quantities.
@@ -740,7 +881,7 @@ body.branch-select-open .pos-order-summary-float {
         }
     });
 
-    wrap.addEventListener('click', (e) => {
+    const onCartActionClick = (e) => {
         const plus = e.target.closest('.plus');
         const minus = e.target.closest('.minus');
         const rem = e.target.closest('.rem');
@@ -773,7 +914,9 @@ body.branch-select-open .pos-order-summary-float {
             delete cart[String(rem.dataset.key || '')];
             renderCart();
         }
-    });
+    };
+    wrap?.addEventListener('click', onCartActionClick);
+    mobileWrap?.addEventListener('click', onCartActionClick);
 
     const buildReceiptHtml = (r) => {
         const c = r.contact || {};
@@ -1023,7 +1166,7 @@ body.branch-select-open .pos-order-summary-float {
     });
     refreshReceiptBleHint();
 
-    document.getElementById('checkoutBtn').addEventListener('click', async () => {
+    const runCheckout = async (form) => {
         if (!Object.keys(cart).length) return Swal.fire({ icon: 'warning', title: 'Cart is empty' });
 
         // Final client-side validation before checkout request.
@@ -1072,7 +1215,7 @@ body.branch-select-open .pos-order-summary-float {
                 const paymentCards = Array.from(document.querySelectorAll('#swalPaymentCards .swal-payment-card'));
                 const amtEl = document.getElementById('swalAmountReceived');
                 const quickWrap = document.getElementById('swalQuickAmounts');
-                const total = Number(totalEl?.textContent?.replace(/,/g, '') || 0);
+                const total = Object.values(cart).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
                 const setActiveMethodCard = (method) => {
                     paymentCards.forEach((btn) => {
                         const isActive = String(btn.getAttribute('data-method') || '') === method;
@@ -1131,7 +1274,7 @@ body.branch-select-open .pos-order-summary-float {
             },
             preConfirm: () => {
                 const method = String(document.getElementById('swalPaymentMethod')?.value || 'cash');
-                const total = Number(totalEl?.textContent?.replace(/,/g, '') || 0);
+                const total = Object.values(cart).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
                 const raw = String(document.getElementById('swalAmountReceived')?.value || '').trim();
                 const received = Number(raw);
                 const finalReceived = method === 'cash' ? received : (method === 'free' ? 0 : total);
@@ -1150,7 +1293,7 @@ body.branch-select-open .pos-order-summary-float {
         const paymentMethod = payment.value.method;
         const tendered = Number(payment.value.received || 0);
 
-        const form = document.getElementById('checkoutForm');
+        if (!form) return Swal.fire({ icon: 'error', title: 'Checkout form missing' });
         const fd = new FormData(form);
         fd.set('payment_method', String(paymentMethod));
         fd.set('amount_tendered', String(tendered));
@@ -1176,12 +1319,19 @@ body.branch-select-open .pos-order-summary-float {
             if (rmTitle) rmTitle.textContent = 'Receipt (customer)';
             document.getElementById('receiptPrintArea').innerHTML = buildReceiptHtml(body.receipt);
             bootstrap.Modal.getOrCreateInstance(document.getElementById('receiptModal')).show();
+            if (mobileCartModal) mobileCartModal.hide();
             Object.keys(cart).forEach((k) => { delete cart[k]; });
             renderCart();
         } catch {
             Swal.close();
             Swal.fire({ icon: 'error', title: 'Network error', text: 'Could not complete checkout.' });
         }
+    };
+    document.getElementById('checkoutBtn')?.addEventListener('click', async () => {
+        await runCheckout(document.getElementById('checkoutForm'));
+    });
+    document.getElementById('mobileCheckoutBtn')?.addEventListener('click', async () => {
+        await runCheckout(document.getElementById('mobileCheckoutForm'));
     });
 
     const csrf = document.querySelector('input[name="_token"]')?.value || '';
@@ -1199,14 +1349,16 @@ body.branch-select-open .pos-order-summary-float {
     const pendingContactInput = document.getElementById('pendingContactInput');
     const pendingMetaSaveBtn = document.getElementById('pendingMetaSaveBtn');
 
-    document.getElementById('savePendingBtn')?.addEventListener('click', async () => {
+    const runSavePending = async () => {
         if (!Object.keys(cart).length) return Swal.fire({ icon: 'warning', title: 'Cart is empty' });
         if (!pendingMetaModal) return;
         if (pendingNameInput) pendingNameInput.value = '';
         if (pendingContactInput) pendingContactInput.value = '';
         pendingMetaModal.show();
         setTimeout(() => pendingNameInput?.focus(), 120);
-    });
+    };
+    document.getElementById('savePendingBtn')?.addEventListener('click', runSavePending);
+    document.getElementById('mobileSavePendingBtn')?.addEventListener('click', runSavePending);
 
     pendingMetaSaveBtn?.addEventListener('click', async () => {
         const name = String(pendingNameInput?.value || '').trim();
@@ -1239,6 +1391,7 @@ body.branch-select-open .pos-order-summary-float {
             Object.keys(cart).forEach((k) => { delete cart[k]; });
             renderCart();
             pendingMetaModal?.hide();
+            if (mobileCartModal) mobileCartModal.hide();
             if (body.unpaid_prep_receipt) {
                 lastReceiptObject = body.unpaid_prep_receipt;
                 const rmTitle = document.getElementById('receiptModalTitle');

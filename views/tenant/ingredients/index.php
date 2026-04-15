@@ -1,4 +1,4 @@
-<div class="card mb-3">
+<div class="card modern-section mb-3">
     <div class="card-body">
         <form id="ingredientCreateForm" method="POST" action="<?= e(route('tenant.ingredients.store')) ?>" class="row g-2 g-md-3 align-items-end" novalidate>
             <?= csrf_field() ?>
@@ -33,7 +33,7 @@
         </form>
     </div>
 </div>
-<div class="card">
+<div class="card modern-section">
     <div class="card-body table-responsive px-2 px-md-3">
         <table class="table table-striped align-middle w-100" id="ingredientsTable">
             <thead>

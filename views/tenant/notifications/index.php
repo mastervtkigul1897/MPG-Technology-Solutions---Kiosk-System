@@ -8,7 +8,7 @@
         </div>
     </div>
 <?php endif; ?>
-<div class="card">
+<div class="card modern-section">
     <div class="card-body table-responsive">
         <table class="table table-striped align-middle w-100" id="notificationsTable">
             <thead>

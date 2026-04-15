@@ -7,6 +7,7 @@ $guestTitleParts = [$appName];
 if ($brandSuffix !== '') {
     $guestTitleParts[] = $brandSuffix;
 }
+$brandLogoPath = url('images/branding/mpg-kis-logo.png');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -15,24 +16,27 @@ if ($brandSuffix !== '') {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
     <title><?= e(implode(' — ', $guestTitleParts)) ?></title>
+    <link rel="icon" type="image/png" sizes="512x512" href="<?= e($brandLogoPath) ?>">
+    <link rel="shortcut icon" href="<?= e($brandLogoPath) ?>">
+    <link rel="apple-touch-icon" href="<?= e($brandLogoPath) ?>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+    <link rel="stylesheet" href="<?= e(url('css/app-theme.css')) ?>">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-    <style>
-        body .btn { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: rgba(13, 110, 253, 0.15); }
-        @media (max-width: 767.98px) {
-            body .btn.w-100 { min-height: 2.75rem; }
-        }
-    </style>
 </head>
-<body class="bg-light d-flex flex-column min-vh-100">
+<body class="app-theme bg-light d-flex flex-column min-vh-100">
 <div class="flex-grow-1 d-flex align-items-center py-5">
     <div class="container w-100">
         <div class="row justify-content-center">
             <div class="col-md-6">
-                <div class="card shadow-sm">
-                    <div class="card-body p-4">
-                        <h4 class="mb-3"><?= e($title ?? '') ?></h4>
+                <div class="card shadow-sm border-0">
+                    <div class="card-body p-4 p-md-5">
+                        <div class="d-flex align-items-center gap-2 mb-3">
+                            <img src="<?= e($brandLogoPath) ?>" alt="<?= e($appName) ?> logo" width="42" height="42" class="rounded-circle border">
+                            <div class="fw-semibold"><?= e($appName) ?></div>
+                        </div>
+                        <h4 class="mb-1"><?= e($title ?? '') ?></h4>
+                        <p class="modern-page-note mb-3">Securely access your kiosk workspace.</p>
                         <?php require dirname(__DIR__).'/partials/alerts.php'; ?>
                         <?= $content ?? '' ?>
                     </div>

@@ -1,4 +1,4 @@
-<div class="card border-0 shadow-sm mb-3">
+<div class="card modern-section border-0 shadow-sm mb-3">
     <div class="card-body p-3 p-md-4">
         <div class="d-flex justify-content-end mb-3">
             <a class="btn btn-outline-primary btn-sm" href="<?= e(route('super-admin.backups.runner')) ?>">
@@ -54,7 +54,7 @@
         </form>
     </div>
 </div>
-<div class="card border-0 shadow-sm">
+<div class="card modern-section border-0 shadow-sm">
     <div class="card-body table-responsive p-3 p-md-4">
         <table class="table table-striped w-100" id="tenantsTable">
             <thead>

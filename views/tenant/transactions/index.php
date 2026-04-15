@@ -1,4 +1,4 @@
-<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
+<div class="modern-page-header d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
     <div class="d-flex flex-wrap gap-2 align-items-center">
         <div class="small text-muted">Filter by status:</div>
         <div style="min-width: 220px;">
@@ -32,7 +32,7 @@
     </div>
 </div>
 
-<div class="card">
+<div class="card modern-section">
     <div class="card-body table-responsive">
         <table class="table table-striped w-100" id="transactionsTable">
             <thead>

@@ -11,6 +11,7 @@ use App\Core\FlavorSchema;
 use App\Core\Request;
 use App\Core\Response;
 use PDO;
+use PDOException;
 
 final class IngredientController
 {
@@ -192,10 +193,17 @@ final class IngredientController
             return $this->jsonOrBack($request, ['name' => ['Item already exists. Item ID: '.$existing['id']]], 422);
         }
 
-        $pdo->prepare(
-            'INSERT INTO ingredients (tenant_id, name, category, unit, unit_cost, stock_quantity, low_stock_threshold, created_at, updated_at)
-             VALUES (?, ?, ?, ?, 0, ?, ?, NOW(), NOW())'
-        )->execute([$tenantId, $name, $category, $unit, $stock, $low]);
+        try {
+            $pdo->prepare(
+                'INSERT INTO ingredients (tenant_id, name, category, unit, unit_cost, stock_quantity, low_stock_threshold, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, 0, ?, ?, NOW(), NOW())'
+            )->execute([$tenantId, $name, $category, $unit, $stock, $low]);
+        } catch (PDOException $e) {
+            if (($e->errorInfo[0] ?? '') === '23000') {
+                return $this->jsonOrBack($request, ['name' => ['Item already exists.']], 422);
+            }
+            throw $e;
+        }
 
         if ($request->wantsJson() || $request->ajax()) {
             return json_response(['message' => 'Item added successfully.']);
@@ -257,9 +265,16 @@ final class IngredientController
             return $this->jsonOrBack($request, ['name' => ['Item already exists. Item ID: '.$row['id']]], 422);
         }
 
-        $pdo->prepare(
-            'UPDATE ingredients SET name = ?, category = ?, unit = ?, stock_quantity = ?, low_stock_threshold = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?'
-        )->execute([$name, $category, $unit, $stock, $low, (int) $id, $tenantId]);
+        try {
+            $pdo->prepare(
+                'UPDATE ingredients SET name = ?, category = ?, unit = ?, stock_quantity = ?, low_stock_threshold = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?'
+            )->execute([$name, $category, $unit, $stock, $low, (int) $id, $tenantId]);
+        } catch (PDOException $e) {
+            if (($e->errorInfo[0] ?? '') === '23000') {
+                return $this->jsonOrBack($request, ['name' => ['Item already exists.']], 422);
+            }
+            throw $e;
+        }
 
         $st = $pdo->prepare('SELECT * FROM ingredients WHERE id = ? LIMIT 1');
         $st->execute([(int) $id]);
