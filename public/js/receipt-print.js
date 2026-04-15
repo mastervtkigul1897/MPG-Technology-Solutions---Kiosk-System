@@ -241,9 +241,64 @@
         '49535343-fe7d-4ae5-8fa9-9fafd205e455',
         '0000ffe0-0000-1000-8000-00805f9b34fb',
         '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+        '0000fee7-0000-1000-8000-00805f9b34fb',
+        'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
     ];
-
+    var MPG_BLE_KNOWN_WRITE_CHARACTERISTICS = [
+        // Seen on RPP02N-B213 scan
+        '49535343-8841-43f4-a8d4-ecbe34729bb3',
+        'bef8d6c9-9c21-4c9e-b632-bd58c1009f1f',
+        // Common ESC/POS BLE write chars
+        '49535343-1e4d-4bd9-ba61-23c647249616',
+        '0000ffe1-0000-1000-8000-00805f9b34fb',
+    ];
     var MPG_BLE_DEVICE_ID_KEY = 'mpg_ble_thermal_device_id';
+    var MPG_BLE_LAST_DEVICE = null;
+    var MPG_BLE_NAME_MUST_INCLUDE_RE = /RP/i;
+    var MPG_BLE_PRINTER_HINT_RE = /(thermal|receipt|printer|pos|58|80|escpos|rpp)/i;
+    function mpgBleStorageGet(key) {
+        try {
+            var v = localStorage.getItem(key);
+            if (v) return v;
+        } catch (e) {
+            /* ignore */
+        }
+        try {
+            return sessionStorage.getItem(key);
+        } catch (e2) {
+            return null;
+        }
+    }
+    function mpgBleStorageSet(key, value) {
+        try {
+            localStorage.setItem(key, value);
+        } catch (e) {
+            /* ignore */
+        }
+        try {
+            sessionStorage.setItem(key, value);
+        } catch (e2) {
+            /* ignore */
+        }
+    }
+    function mpgBleStorageRemove(key) {
+        try {
+            localStorage.removeItem(key);
+        } catch (e) {
+            /* ignore */
+        }
+        try {
+            sessionStorage.removeItem(key);
+        } catch (e2) {
+            /* ignore */
+        }
+    }
+
+    function mpgBleLooksLikePrinterDevice(device) {
+        var name = String((device && device.name) || '').trim();
+        if (!name) return false;
+        return MPG_BLE_NAME_MUST_INCLUDE_RE.test(name) && MPG_BLE_PRINTER_HINT_RE.test(name);
+    }
 
     function mpgBleFindWritableCharacteristic(server) {
         var idx = 0;
@@ -256,22 +311,61 @@
             return server
                 .getPrimaryService(sid)
                 .then(function (svc) {
-                    return svc.getCharacteristics();
+                    return svc.getCharacteristics().then(function (chars) {
+                        return { svc: svc, chars: chars };
+                    });
                 })
-                .then(function (chars) {
+                .then(function (payload) {
+                    var svc = payload && payload.svc ? payload.svc : null;
+                    var chars = payload && payload.chars ? payload.chars : [];
                     for (var j = 0; j < chars.length; j += 1) {
                         var ch = chars[j];
                         if (ch.properties.write || ch.properties.writeWithoutResponse) {
                             return ch;
                         }
                     }
-                    return tryNext();
+                    if (!svc || typeof svc.getCharacteristic !== 'function') {
+                        return tryNext();
+                    }
+                    var k = 0;
+                    function tryKnownWriteChar() {
+                        if (k >= MPG_BLE_KNOWN_WRITE_CHARACTERISTICS.length) {
+                            return tryNext();
+                        }
+                        var cuuid = MPG_BLE_KNOWN_WRITE_CHARACTERISTICS[k];
+                        k += 1;
+                        return svc.getCharacteristic(cuuid)
+                            .then(function (ch) {
+                                return ch || tryKnownWriteChar();
+                            })
+                            .catch(function () {
+                                return tryKnownWriteChar();
+                            });
+                    }
+                    return tryKnownWriteChar();
                 })
                 .catch(function () {
                     return tryNext();
                 });
         }
         return tryNext();
+    }
+
+    function mpgBleRequestPrinterDevice() {
+        return navigator.bluetooth.requestDevice({
+            filters: [{ namePrefix: 'RP' }],
+            optionalServices: MPG_BLE_OPTIONAL_SERVICES,
+        }).catch(function (err) {
+            if (err && err.name === 'NotFoundError') {
+                throw new Error('No device selected or the Bluetooth picker was cancelled.');
+            }
+            throw err;
+        }).then(function (device) {
+            if (!mpgBleLooksLikePrinterDevice(device)) {
+                throw new Error('Selected device is not a valid RP thermal POS receipt printer. Please select the correct printer.');
+            }
+            return device;
+        });
     }
 
     function mpgBleWriteChunks(ch, bytes) {
@@ -383,75 +477,28 @@
                 )
             );
         }
-        var savedId = null;
-        try {
-            savedId = sessionStorage.getItem(MPG_BLE_DEVICE_ID_KEY);
-        } catch (e) {
-            savedId = null;
-        }
-
-        var tryGetDevices = typeof navigator.bluetooth.getDevices === 'function'
-            ? navigator.bluetooth.getDevices()
-            : Promise.resolve([]);
-
-        return tryGetDevices.then(function (devices) {
-            var list = Array.isArray(devices) ? devices.slice() : [];
-            if (savedId && list.length) {
-                list.sort(function (a, b) {
-                    var ma = a && a.id === savedId ? 0 : 1;
-                    var mb = b && b.id === savedId ? 0 : 1;
-                    return ma - mb;
-                });
-            }
-            function tryList(idx) {
-                if (idx >= list.length) {
-                    return Promise.resolve(false);
+        // Do not keep/use remembered devices: always force user selection.
+        MPG_BLE_LAST_DEVICE = null;
+        mpgBleStorageRemove(MPG_BLE_DEVICE_ID_KEY);
+        return mpgBleRequestPrinterDevice().then(function (device) {
+            return mpgBleTryPrintOnDevice(device, bytes).then(function (ok) {
+                if (!ok) {
+                    throw new Error(
+                        'No writable Bluetooth characteristic found. Pair the printer or use Wi‑Fi/LAN raw printing.'
+                    );
                 }
-                return mpgBleTryPrintOnDevice(list[idx], bytes).then(function (ok) {
-                    if (ok && list[idx] && list[idx].id) {
-                        try {
-                            sessionStorage.setItem(MPG_BLE_DEVICE_ID_KEY, list[idx].id);
-                        } catch (e) {
-                            /* ignore */
-                        }
-                        return true;
-                    }
-                    return tryList(idx + 1);
-                });
-            }
-            return tryList(0);
-        }).then(function (done) {
-            if (done) {
-                return;
-            }
-            return navigator.bluetooth
-                .requestDevice({ acceptAllDevices: true, optionalServices: MPG_BLE_OPTIONAL_SERVICES })
-                .then(function (device) {
-                    return mpgBleTryPrintOnDevice(device, bytes).then(function (ok) {
-                        if (!ok) {
-                            throw new Error(
-                                'No writable Bluetooth characteristic found. Pair the printer or use Wi‑Fi/LAN raw printing.'
-                            );
-                        }
-                        if (device && device.id) {
-                            try {
-                                sessionStorage.setItem(MPG_BLE_DEVICE_ID_KEY, device.id);
-                            } catch (e) {
-                                /* ignore */
-                            }
-                        }
-                    });
-                });
+            });
         });
     };
 
     /** Clear remembered printer (next print shows the device picker again). */
     window.mpgClearEscposBluetoothDevice = function () {
-        try {
-            sessionStorage.removeItem(MPG_BLE_DEVICE_ID_KEY);
-        } catch (e) {
-            /* ignore */
-        }
+        MPG_BLE_LAST_DEVICE = null;
+        mpgBleStorageRemove(MPG_BLE_DEVICE_ID_KEY);
+    };
+
+    window.mpgHasRememberedBluetoothDevice = function () {
+        return false;
     };
 
     /**

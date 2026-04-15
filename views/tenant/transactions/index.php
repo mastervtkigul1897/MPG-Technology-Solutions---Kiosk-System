@@ -9,6 +9,20 @@
                 <option value="void">Cancelled</option>
             </select>
         </div>
+        <div class="small text-muted ms-1">Payment:</div>
+        <div style="min-width: 220px;">
+            <select class="form-select form-select-sm" id="txPaymentFilter" aria-label="Filter transactions by payment method">
+                <option value="">All</option>
+                <option value="cash">Cash</option>
+                <option value="card">Card</option>
+                <option value="gcash">GCash</option>
+                <option value="paymaya">PayMaya</option>
+                <option value="online banking">Online banking</option>
+                <option value="e-wallet">E-Wallet</option>
+                <option value="gift certificate">Gift Certificate</option>
+                <option value="free">Free</option>
+            </select>
+        </div>
     </div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
         <div class="small text-muted">Date:</div>
@@ -56,6 +70,10 @@
                     <button type="button" class="btn btn-success text-white <?= empty($thermal_receipt_network_enabled) ? 'd-none' : '' ?> w-100 mpg-receipt-action-btn" id="transactionReceiptPrintWifiBtn" title="Server sends raw data to printer on LAN (phone/tablet/APK when host is configured)"><i class="fa-solid fa-wifi me-1"></i>Wi‑Fi / LAN</button>
                     <button type="button" class="btn btn-primary text-white mpg-btn-bluetooth-thermal w-100 mpg-receipt-action-btn" id="transactionReceiptPrintBleBtn" title="Bluetooth print"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
                     <button type="button" class="btn btn-secondary text-white w-100 mpg-receipt-action-btn" data-bs-dismiss="modal">Close</button>
+                </div>
+                <div class="w-100 d-flex flex-wrap gap-2 align-items-center justify-content-center mpg-btn-bluetooth-thermal">
+                    <span class="small text-muted" id="transactionReceiptBleSavedHint">No saved Bluetooth printer yet.</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="transactionReceiptBleChangeBtn">Change Bluetooth printer</button>
                 </div>
             </div>
         </div>
@@ -146,7 +164,7 @@
 .receipt-print-area { display: flex; justify-content: center; }
 .receipt-paper {
     width: 100%;
-    max-width: 55mm;
+    max-width: 60mm;
     margin: 0 auto;
     padding: .45rem .55rem;
     border: 1px dashed #adb5bd;
@@ -170,11 +188,32 @@
 .receipt-row .right { flex: 0 0 auto; text-align: right; white-space: nowrap; }
 .receipt-item-name { font-weight: 600; margin-bottom: 0.06rem; word-break: break-word; }
 .receipt-item-price-line { margin-bottom: 0.35rem; }
+.receipt-unpaid-prep {
+    position: relative;
+    overflow: hidden;
+}
+.receipt-unpaid-watermark {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    font-size: 2.1rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: rgba(0, 0, 0, 0.11);
+    transform: rotate(-22deg);
+    user-select: none;
+}
+.receipt-unpaid-banner {
+    letter-spacing: 0.04em;
+}
 
 @media print {
-    /* Thermal receipt: 55mm roll, black & white, avoid extra blank page */
+    /* Thermal receipt: 60mm roll, black & white, avoid extra blank page */
     @page {
-        size: 55mm auto;
+        size: 60mm auto;
         margin: 0;
     }
     html, body {
@@ -198,7 +237,7 @@
     #transactionReceiptModal {
         position: absolute !important;
         inset: 0 auto auto 0 !important;
-        width: 55mm !important;
+        width: 60mm !important;
         max-width: 100% !important;
         margin: 0 !important;
         padding: 0 !important;
@@ -208,8 +247,8 @@
         filter: none !important;
     }
     #transactionReceiptModal .modal-dialog {
-        max-width: 55mm !important;
-        width: 55mm !important;
+        max-width: 60mm !important;
+        width: 60mm !important;
         margin: 0 !important;
         transform: none !important;
         height: auto !important;
@@ -264,6 +303,11 @@
     #transactionReceiptModal .receipt-dash {
         border-top-color: #000 !important;
     }
+    #transactionReceiptModal .receipt-paper.receipt-unpaid-prep .receipt-unpaid-watermark {
+        color: rgba(0, 0, 0, 0.18) !important;
+        print-color-adjust: exact !important;
+        -webkit-print-color-adjust: exact !important;
+    }
 }
 </style>
 <script>
@@ -316,24 +360,35 @@
         return out;
     };
 
-        const buildReceiptHtml = (r) => {
+    const buildReceiptHtml = (r) => {
         const c = r.contact || {};
         const displayName = String(r.display_name || '').trim() || String(r.store_name || 'Store').trim() || 'Store';
         const businessStyle = String(r.business_style || '').trim();
         const taxId = String(r.tax_id || '').trim();
         const footerNote = String(r.footer_note || '').trim();
+        const isUnpaidPrep = !!(r.unpaid_prep_receipt || r.kitchen_slip || r.unpaid_watermark);
         const lines = [];
-        lines.push('<div class="receipt-paper">');
+        lines.push(`<div class="receipt-paper${isUnpaidPrep ? ' receipt-unpaid-prep' : ''}">`);
+        if (isUnpaidPrep) {
+            lines.push('<div class="receipt-unpaid-watermark" aria-hidden="true">UNPAID</div>');
+            const pn = String(r.pending_customer_name || '').trim();
+            if (pn) lines.push(`<div class="receipt-center receipt-bold">For: ${escapeHtml(pn)}</div>`);
+            const pc = String(r.pending_customer_contact || '').trim();
+            if (pc) lines.push(`<div class="receipt-center receipt-muted">Contact: ${escapeHtml(pc)}</div>`);
+            if (pn || pc) lines.push('<div class="receipt-dash"></div>');
+        }
         lines.push(`<div class="receipt-center receipt-bold">${escapeHtml(displayName)}</div>`);
-        if (businessStyle) lines.push(`<div class="receipt-center receipt-muted">${escapeHtml(businessStyle)}</div>`);
-        if (taxId) lines.push(`<div class="receipt-center">TIN: ${escapeHtml(taxId)}</div>`);
+        if (businessStyle && !isUnpaidPrep) lines.push(`<div class="receipt-center receipt-muted">${escapeHtml(businessStyle)}</div>`);
+        if (taxId && !isUnpaidPrep) lines.push(`<div class="receipt-center">TIN: ${escapeHtml(taxId)}</div>`);
         lines.push('<div class="receipt-dash"></div>');
-        const contactBits = [];
-        if (c.phone) contactBits.push(`<div>Phone: ${escapeHtml(c.phone)}</div>`);
-        if (c.address) contactBits.push(`<div>${escapeHtml(c.address).replace(/\\n/g, '<br>')}</div>`);
-        if (c.email) contactBits.push(`<div>Email: ${escapeHtml(c.email)}</div>`);
-        lines.push(contactBits.length ? `<div>${contactBits.join('')}</div>` : '<div class="receipt-muted">No store contact on file.</div>');
-        lines.push('<div class="receipt-dash"></div>');
+        if (!isUnpaidPrep) {
+            const contactBits = [];
+            if (c.phone) contactBits.push(`<div>Phone: ${escapeHtml(c.phone)}</div>`);
+            if (c.address) contactBits.push(`<div>${escapeHtml(c.address).replace(/\n/g, '<br>')}</div>`);
+            if (c.email) contactBits.push(`<div>Email: ${escapeHtml(c.email)}</div>`);
+            lines.push(contactBits.length ? `<div>${contactBits.join('')}</div>` : '<div class="receipt-muted">No store contact on file.</div>');
+            lines.push('<div class="receipt-dash"></div>');
+        }
         lines.push('<div class="receipt-row receipt-bold"><span class="left">Item</span><span class="right">Amount</span></div>');
         lines.push('<div class="receipt-dash"></div>');
         const formatQty = (q) => {
@@ -350,57 +405,17 @@
             if (!Number.isFinite(unit) || Math.abs(unit) <= MONEY_EPS) {
                 unit = Number.isFinite(q) && q > MONEY_EPS && Number.isFinite(lt) ? lt / q : 0;
             }
-            lines.push(`<div class="receipt-item-name">${escapeHtml(it.name)}</div>`);
+            const itemName = String(it.name || '');
+            const flavorName = String(it.flavor_name || '').trim();
+            lines.push(`<div class="receipt-item-name">${escapeHtml(itemName)}</div>`);
+            if (flavorName) {
+                lines.push(`<div class="receipt-item-name receipt-muted">  - ${escapeHtml(flavorName)}</div>`);
+            }
             lines.push(`<div class="receipt-row receipt-item-price-line"><span class="left">${money(unit)} × ${formatQty(it.quantity)}</span><span class="right">${money(it.line_total)}</span></div>`);
         });
         lines.push('<div class="receipt-dash"></div>');
         lines.push(`<div class="receipt-row receipt-bold"><span class="left">TOTAL</span><span class="right">${money(r.grand_total)}</span></div>`);
-        // PH VAT (12%) breakdown (VAT-inclusive total): VAT = Total * 12/112; VATable Sales = Total - VAT
-        const totalForVat = Number(r.grand_total || 0);
-        const vatAmount = totalForVat > 0 ? (totalForVat * (12 / 112)) : 0;
-        const vatableSales = Math.max(0, totalForVat - vatAmount);
-        lines.push(`<div class="receipt-row"><span class="left">VATABLE SALES</span><span class="right">${money(vatableSales)}</span></div>`);
-        lines.push(`<div class="receipt-row"><span class="left">VAT (12%)</span><span class="right">${money(vatAmount)}</span></div>`);
-        const tendered = r.amount_tendered != null ? Number(r.amount_tendered) : null;
-        const ch0 = r.change_amount != null ? Number(r.change_amount) : 0;
-        const pm = String(r.payment_method || '').trim().toLowerCase();
-        const pmLabel = pm ? pm.toUpperCase().replace(/_/g, ' ') : '';
-        if (pmLabel) lines.push(`<div class="receipt-row"><span class="left">PAYMENT</span><span class="right">${escapeHtml(pmLabel)}</span></div>`);
-        const refunded = r.refunded_amount != null ? Number(r.refunded_amount) : 0;
-        const added = r.added_paid_amount != null ? Number(r.added_paid_amount) : 0;
-        // Base paid (first payment, net to order): cash prefers amount_paid (364) so tendered−change stays correct after edits zero out change.
-        const ap = r.amount_paid != null ? Number(r.amount_paid) : 0;
-        const basePaid = pm === 'cash'
-            ? (ap > MONEY_EPS ? ap : (tendered != null ? Math.max(0, tendered - ch0) : null))
-            : (r.amount_paid != null ? Number(r.amount_paid) : (tendered != null ? tendered : null));
-        // Apply refunds FIFO: refund reduces base first, then additional.
-        const baseAfterRefund = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, basePaid - refunded) : null;
-        const remainingRefundAfterBase = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, refunded - basePaid) : refunded;
-        const addedAfterRefund = Number.isFinite(added) ? Math.max(0, added - remainingRefundAfterBase) : 0;
-        const netPaid = (baseAfterRefund != null && Number.isFinite(baseAfterRefund))
-            ? Math.max(0, baseAfterRefund + addedAfterRefund)
-            : null;
-        if (pm === 'cash' && basePaid != null) {
-            lines.push(`<div class="receipt-row"><span class="left">NET TO ORDER</span><span class="right">${money(basePaid)}</span></div>`);
-            if (tendered != null && Number.isFinite(tendered) && Math.abs(tendered - basePaid) > MONEY_EPS) {
-                lines.push(`<div class="receipt-row receipt-muted"><span class="left">Cash tendered</span><span class="right">${money(tendered)}</span></div>`);
-            }
-        } else if (basePaid != null) {
-            lines.push(`<div class="receipt-row"><span class="left">AMOUNT PAID</span><span class="right">${money(baseAfterRefund ?? basePaid)}</span></div>`);
-        }
-        if (refunded != null && Number.isFinite(refunded) && refunded > 0) {
-            lines.push(`<div class="receipt-row"><span class="left">REFUND</span><span class="right">-${money(refunded)}</span></div>`);
-        }
-        if (addedAfterRefund != null && Number.isFinite(addedAfterRefund) && addedAfterRefund > 0) {
-            lines.push(`<div class="receipt-row"><span class="left">ADDITIONAL PAID</span><span class="right">${money(addedAfterRefund)}</span></div>`);
-        }
-        if (netPaid != null) lines.push(`<div class="receipt-row receipt-bold"><span class="left">NET PAID</span><span class="right">${money(netPaid)}</span></div>`);
-        // After any edit adjustment (refund/additional), treat this receipt as final settlement.
-        // Change from the original payment is no longer meaningful.
-        const hasAdjust = (Number.isFinite(refunded) && refunded > 0) || (Number.isFinite(added) && added > 0);
-        const change = hasAdjust ? 0 : (r.change_amount != null ? Number(r.change_amount) : null);
-        if (change != null && Number.isFinite(change)) lines.push(`<div class="receipt-row"><span class="left">CHANGE</span><span class="right">${money(change)}</span></div>`);
-        lines.push('<div class="receipt-dash"></div>');
+
         const tid = r.transaction_id != null ? `#${r.transaction_id}` : '';
         let when = '';
         if (r.created_at) {
@@ -408,12 +423,65 @@
             when = !Number.isNaN(d.getTime()) ? d.toLocaleString() : escapeHtml(r.created_at);
         }
         const meta = `${when || ''}${tid ? ` ${tid}` : ''}`.trim();
-        if (meta) lines.push(`<div class="receipt-center receipt-muted">${meta}</div>`);
-        const defaultThanks = 'thank you for your purchase!';
-        lines.push('<div class="receipt-center">Thank you for your purchase!</div>');
-        lines.push('<div class="receipt-bottom-spacer" aria-hidden="true"></div>');
-        if (footerNote && footerNote.toLowerCase().trim() !== defaultThanks) {
-            lines.push(`<div class="receipt-center receipt-muted">${escapeHtml(footerNote).replace(/\\n/g, '<br>')}</div>`);
+
+        if (isUnpaidPrep) {
+            lines.push('<div class="receipt-dash"></div>');
+            lines.push('<div class="receipt-center receipt-bold">UNPAID</div>');
+            lines.push('<div class="receipt-bottom-spacer" aria-hidden="true"></div>');
+        } else {
+            const totalForVat = Number(r.grand_total || 0);
+            const vatAmount = totalForVat > 0 ? (totalForVat * (12 / 112)) : 0;
+            const vatableSales = Math.max(0, totalForVat - vatAmount);
+            lines.push(`<div class="receipt-row"><span class="left">VATABLE SALES</span><span class="right">${money(vatableSales)}</span></div>`);
+            lines.push(`<div class="receipt-row"><span class="left">VAT (12%)</span><span class="right">${money(vatAmount)}</span></div>`);
+            const tendered = r.amount_tendered != null ? Number(r.amount_tendered) : null;
+            const ch0 = r.change_amount != null ? Number(r.change_amount) : 0;
+            const pm = String(r.payment_method || '').trim().toLowerCase();
+            const pmLabel = pm ? pm.toUpperCase().replace(/_/g, ' ') : '';
+            if (pmLabel) lines.push(`<div class="receipt-row"><span class="left">PAYMENT</span><span class="right">${escapeHtml(pmLabel)}</span></div>`);
+            const refunded = r.refunded_amount != null ? Number(r.refunded_amount) : 0;
+            const added = r.added_paid_amount != null ? Number(r.added_paid_amount) : 0;
+            const ap = r.amount_paid != null ? Number(r.amount_paid) : 0;
+            const basePaid = pm === 'cash'
+                ? (ap > MONEY_EPS ? ap : (tendered != null ? Math.max(0, tendered - ch0) : null))
+                : (r.amount_paid != null ? Number(r.amount_paid) : (tendered != null ? tendered : null));
+            const baseAfterRefund = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, basePaid - refunded) : null;
+            const remainingRefundAfterBase = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, refunded - basePaid) : refunded;
+            const addedAfterRefund = Number.isFinite(added) ? Math.max(0, added - remainingRefundAfterBase) : 0;
+            const netPaid = (baseAfterRefund != null && Number.isFinite(baseAfterRefund))
+                ? Math.max(0, baseAfterRefund + addedAfterRefund)
+                : null;
+            if (pm === 'cash' && basePaid != null) {
+                lines.push(`<div class="receipt-row"><span class="left">NET TO ORDER</span><span class="right">${money(basePaid)}</span></div>`);
+                if (tendered != null && Number.isFinite(tendered) && Math.abs(tendered - basePaid) > MONEY_EPS) {
+                    lines.push(`<div class="receipt-row receipt-muted"><span class="left">Cash tendered</span><span class="right">${money(tendered)}</span></div>`);
+                }
+            } else if (basePaid != null) {
+                lines.push(`<div class="receipt-row"><span class="left">AMOUNT PAID</span><span class="right">${money(baseAfterRefund ?? basePaid)}</span></div>`);
+            }
+            if (refunded != null && Number.isFinite(refunded) && refunded > 0) {
+                lines.push(`<div class="receipt-row"><span class="left">REFUND</span><span class="right">-${money(refunded)}</span></div>`);
+            }
+            if (addedAfterRefund != null && Number.isFinite(addedAfterRefund) && addedAfterRefund > 0) {
+                lines.push(`<div class="receipt-row"><span class="left">ADDITIONAL PAID</span><span class="right">${money(addedAfterRefund)}</span></div>`);
+            }
+            if (netPaid != null) lines.push(`<div class="receipt-row receipt-bold"><span class="left">NET PAID</span><span class="right">${money(netPaid)}</span></div>`);
+            const hasAdjust = (Number.isFinite(refunded) && refunded > 0) || (Number.isFinite(added) && added > 0);
+            const change = hasAdjust ? 0 : (r.change_amount != null ? Number(r.change_amount) : null);
+            if (change != null && Number.isFinite(change)) lines.push(`<div class="receipt-row"><span class="left">CHANGE</span><span class="right">${money(change)}</span></div>`);
+            lines.push('<div class="receipt-dash"></div>');
+            if (meta) lines.push(`<div class="receipt-center receipt-muted">${meta}</div>`);
+            lines.push('<div class="receipt-center">Thank you for your purchase!</div>');
+            if (footerNote) {
+                const footerLines = footerNote
+                    .split(/\r\n|\n|\r/g)
+                    .map((x) => String(x || '').trim())
+                    .filter(Boolean);
+                if (footerLines.length) {
+                    lines.push(`<div class="receipt-center receipt-muted">${footerLines.map((x) => escapeHtml(x)).join('<br>')}</div>`);
+                }
+            }
+            lines.push('<div class="receipt-bottom-spacer" aria-hidden="true"></div>');
         }
         lines.push('</div>');
         return lines.join('');
@@ -489,16 +557,48 @@
             if (typeof window.mpgWriteEscposBluetooth !== 'function') {
                 throw new Error('Bluetooth print module not loaded. Refresh the page.');
             }
-            await window.mpgWriteEscposBluetooth(bytes);
-            Swal.fire({ icon: 'success', title: 'Sent to Bluetooth printer', timer: 1800, showConfirmButton: false });
+            const copies = Number.isFinite(Number(thermalCfg.lanCopies)) ? Math.max(1, Number(thermalCfg.lanCopies)) : 1;
+            const base = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+            let payload = base;
+            if (copies > 1 && base.length > 0) {
+                payload = new Uint8Array(base.length * copies);
+                for (let i = 0; i < copies; i += 1) {
+                    payload.set(base, i * base.length);
+                }
+            }
+            await window.mpgWriteEscposBluetooth(payload);
+            const txRmEl = document.getElementById('transactionReceiptModal');
+            if (txRmEl) {
+                const inst = bootstrap.Modal.getInstance(txRmEl) ?? bootstrap.Modal.getOrCreateInstance(txRmEl);
+                inst.hide();
+            }
         } catch (err) {
             Swal.close();
             if (err?.name === 'NotFoundError' || err?.name === 'SecurityError') return;
             Swal.fire({ icon: 'error', title: 'Bluetooth printing failed', text: String(err?.message || err) });
         }
     });
+    const txBleSavedHint = document.getElementById('transactionReceiptBleSavedHint');
+    const refreshTxBleHint = () => {
+        if (!txBleSavedHint) return;
+        const hasSaved = typeof window.mpgHasRememberedBluetoothDevice === 'function'
+            ? !!window.mpgHasRememberedBluetoothDevice()
+            : false;
+        txBleSavedHint.textContent = hasSaved
+            ? 'Saved Bluetooth printer will be used automatically.'
+            : 'No saved Bluetooth printer yet.';
+    };
+    document.getElementById('transactionReceiptBleChangeBtn')?.addEventListener('click', () => {
+        if (typeof window.mpgClearEscposBluetoothDevice === 'function') {
+            window.mpgClearEscposBluetoothDevice();
+        }
+        refreshTxBleHint();
+        Swal.fire({ icon: 'info', title: 'Bluetooth printer reset', text: 'Next Bluetooth print will ask you to select a printer.' });
+    });
+    refreshTxBleHint();
 
     const statusFilterEl = document.getElementById('txStatusFilter');
+    const paymentFilterEl = document.getElementById('txPaymentFilter');
     const dateFilterEl = document.getElementById('txDateFilter');
     const dateTodayBtn = document.getElementById('txDateTodayBtn');
     const dateClearBtn = document.getElementById('txDateClearBtn');
@@ -518,6 +618,7 @@
             data: (d) => {
                 d.datatable = 1;
                 d.status = statusFilterEl?.value || '';
+                d.payment_method = paymentFilterEl?.value || '';
                 d.date = dateFilterEl?.value || '';
             }
         },
@@ -552,6 +653,9 @@
     });
 
     statusFilterEl?.addEventListener('change', () => {
+        try { $('#transactionsTable').DataTable().ajax.reload(null, true); } catch {}
+    });
+    paymentFilterEl?.addEventListener('change', () => {
         try { $('#transactionsTable').DataTable().ajax.reload(null, true); } catch {}
     });
     dateFilterEl?.addEventListener('change', () => {
@@ -597,6 +701,12 @@
                 return;
             }
             lastTxReceiptObject = body.receipt || null;
+            const txRmTitle = document.getElementById('transactionReceiptModalTitle');
+            if (txRmTitle) {
+                txRmTitle.textContent = (body.receipt && (body.receipt.unpaid_prep_receipt || body.receipt.kitchen_slip || body.receipt.unpaid_watermark))
+                    ? 'Unpaid order (Bluetooth / print)'
+                    : 'Receipt (customer)';
+            }
             receiptPrintAreaEl.innerHTML = buildReceiptHtml(body.receipt || {});
             receiptModal.show();
         } catch {
@@ -626,40 +736,79 @@
                     <label class="form-label mb-1 text-muted small" for="swalCreditorContact">Contact number <span class="fw-normal">(optional)</span></label>
                     <input id="swalCreditorContact" type="text" class="form-control form-control-sm mb-3 text-muted bg-light" value="${contactDisplay}" readonly disabled tabindex="-1" aria-readonly="true">
                     <label class="form-label mb-1">Mode of payment</label>
-                    <select id="swalPayPaymentMethod" class="form-select mb-2">
-                        <option value="cash">Cash</option>
-                        <option value="card">Card</option>
-                        <option value="gcash">GCash</option>
-                        <option value="paymaya">PayMaya</option>
-                        <option value="online_banking">Online Banking</option>
-                    </select>
+                    <input type="hidden" id="swalPayPendingPaymentMethod" value="cash">
+                    <div class="d-grid gap-2 mb-2" id="swalPayPendingPaymentCards">
+                        <button type="button" class="btn btn-primary text-start swal-pay-pending-payment-card" data-method="cash"><i class="fa-solid fa-money-bill-wave me-2"></i>Cash</button>
+                        <button type="button" class="btn btn-outline-primary text-start swal-pay-pending-payment-card" data-method="card"><i class="fa-solid fa-credit-card me-2"></i>Card</button>
+                        <button type="button" class="btn btn-outline-primary text-start swal-pay-pending-payment-card" data-method="gcash"><i class="fa-solid fa-mobile-screen-button me-2"></i>GCash</button>
+                        <button type="button" class="btn btn-outline-primary text-start swal-pay-pending-payment-card" data-method="paymaya"><i class="fa-solid fa-wallet me-2"></i>PayMaya</button>
+                        <button type="button" class="btn btn-outline-primary text-start swal-pay-pending-payment-card" data-method="online_banking"><i class="fa-solid fa-building-columns me-2"></i>Online Banking</button>
+                    </div>
                     <label class="form-label mb-1">Amount received</label>
                     <input id="swalPayAmountReceived" class="form-control" placeholder="0.00" inputmode="decimal" autocomplete="off">
+                    <div id="swalPayPendingQuickAmounts" class="d-flex flex-wrap gap-2 mt-2"></div>
                     <div class="form-text">For non-cash payments, this will be set to exact total.</div>
                 </div>
             `,
             showCancelButton: true,
             confirmButtonText: 'Confirm payment',
             didOpen: () => {
-                const methodEl = document.getElementById('swalPayPaymentMethod');
+                const methodEl = document.getElementById('swalPayPendingPaymentMethod');
+                const paymentCards = Array.from(document.querySelectorAll('#swalPayPendingPaymentCards .swal-pay-pending-payment-card'));
                 const amtEl = document.getElementById('swalPayAmountReceived');
+                const quickWrap = document.getElementById('swalPayPendingQuickAmounts');
                 const total = pendingTotal;
+                const setActiveMethodCard = (method) => {
+                    paymentCards.forEach((b) => {
+                        const isActive = String(b.getAttribute('data-method') || '') === method;
+                        b.classList.toggle('btn-primary', isActive);
+                        b.classList.toggle('text-white', isActive);
+                        b.classList.toggle('btn-outline-primary', !isActive);
+                    });
+                };
                 const sync = () => {
                     const method = String(methodEl?.value || 'cash');
+                    setActiveMethodCard(method);
                     if (method !== 'cash') {
                         amtEl.value = toMoneyInputStr(total);
                         amtEl.disabled = true;
+                        if (quickWrap) quickWrap.innerHTML = '';
                     } else {
-                        amtEl.disabled = false;
+                        amtEl.disabled = true;
                         if (!amtEl.value) amtEl.value = toMoneyInputStr(total);
+                        if (quickWrap) {
+                            const opts = [50, 100, 200, 500, 1000];
+                            quickWrap.innerHTML = opts.map((v) => `<button type="button" class="btn btn-sm btn-outline-secondary" data-amt="${v}">${v}</button>`).join('')
+                                + '<button type="button" class="btn btn-sm btn-outline-primary" data-amt="custom">Enter amount</button>';
+                            quickWrap.querySelectorAll('button[data-amt]').forEach((b) => {
+                                b.addEventListener('click', () => {
+                                    const val = String(b.getAttribute('data-amt') || '');
+                                    if (val === 'custom') {
+                                        amtEl.value = '';
+                                        amtEl.disabled = false;
+                                        setTimeout(() => amtEl?.focus(), 50);
+                                    } else {
+                                        const n = Number(val);
+                                        if (Number.isFinite(n)) {
+                                            amtEl.value = toMoneyInputStr(n);
+                                        }
+                                    }
+                                });
+                            });
+                        }
                     }
                 };
-                methodEl?.addEventListener('change', sync);
+                paymentCards.forEach((btn) => {
+                    btn.addEventListener('click', () => {
+                        const method = String(btn.getAttribute('data-method') || 'cash');
+                        if (methodEl) methodEl.value = method;
+                        sync();
+                    });
+                });
                 sync();
-                setTimeout(() => amtEl?.focus(), 50);
             },
             preConfirm: () => {
-                const method = String(document.getElementById('swalPayPaymentMethod')?.value || 'cash');
+                const method = String(document.getElementById('swalPayPendingPaymentMethod')?.value || 'cash');
                 const total = pendingTotal;
                 const raw = String(document.getElementById('swalPayAmountReceived')?.value || '').trim();
                 const received = Number(raw);
@@ -686,7 +835,7 @@
 
         try {
             Swal.fire({
-                title: 'Preparing receipt…',
+                title: 'Recording payment…',
                 allowOutsideClick: false,
                 allowEscapeKey: false,
                 didOpen: () => Swal.showLoading(),
@@ -701,10 +850,13 @@
             if (!res.ok || !body.success) {
                 return Swal.fire({ icon: 'error', title: 'Payment failed', text: body.message || 'Please try again.' });
             }
-            lastTxReceiptObject = body.receipt || null;
-            receiptPrintAreaEl.innerHTML = buildReceiptHtml(body.receipt || {});
-            receiptModal?.show();
+            lastTxReceiptObject = null;
             try { $('#transactionsTable').DataTable().ajax.reload(null, false); } catch {}
+            await Swal.fire({
+                icon: 'success',
+                title: 'Payment recorded',
+                html: '<p class="mb-0 text-start">When you are ready to give the customer their official receipt, open the completed order in the list and tap <strong>receipt</strong> to print (standard receipt as usual).</p>',
+            });
         } catch {
             Swal.close();
             Swal.fire({ icon: 'error', title: 'Network error', text: 'Could not complete payment.' });
@@ -864,7 +1016,7 @@
                 ? items.map(it => `
                     <tr>
                         <td>
-                            <div class="fw-semibold">${escapeHtml(it.product_name)}</div>
+                            <div class="fw-semibold">${escapeHtml(it.product_name)}${it.flavor_name ? ` - ${escapeHtml(it.flavor_name)}` : ''}</div>
                             <div class="small text-muted">#${it.product_id}</div>
                         </td>
                         <td class="text-end">

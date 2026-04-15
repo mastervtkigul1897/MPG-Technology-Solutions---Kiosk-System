@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Core\App;
+use App\Core\FlavorSchema;
 use PDO;
 use RuntimeException;
 
@@ -189,6 +190,7 @@ final class CheckoutService
     public function checkout(int $tenantId, int $userId, array $items): int
     {
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         self::ensureTransactionsPaymentSchema($pdo);
         $pdo->beginTransaction();
         try {
@@ -210,6 +212,7 @@ final class CheckoutService
     public function createPending(int $tenantId, int $userId, array $items, string $pendingName, ?string $pendingContact): int
     {
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         self::ensureTransactionsPaymentSchema($pdo);
         $pdo->beginTransaction();
         try {
@@ -231,6 +234,7 @@ final class CheckoutService
     public function payPending(int $tenantId, int $userId, int $pendingTransactionId, float $amountTendered): int
     {
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         self::ensureTransactionsPaymentSchema($pdo);
         $pdo->beginTransaction();
         try {
@@ -249,13 +253,14 @@ final class CheckoutService
             }
             $change = $amountTendered - $total;
 
-            $st = $pdo->prepare('SELECT product_id, quantity FROM transaction_items WHERE tenant_id = ? AND transaction_id = ?');
+            $st = $pdo->prepare('SELECT product_id, quantity, flavor_ingredient_id FROM transaction_items WHERE tenant_id = ? AND transaction_id = ?');
             $st->execute([$tenantId, $pendingTransactionId]);
             $items = [];
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
                 $items[] = [
                     'product_id' => (int) ($row['product_id'] ?? 0),
                     'quantity' => max(1, (int) ($row['quantity'] ?? 0)),
+                    'flavor_ingredient_id' => max(0, (int) ($row['flavor_ingredient_id'] ?? 0)),
                 ];
             }
             if ($items === []) {
@@ -302,6 +307,7 @@ final class CheckoutService
     private function runCreateTransactionWithPendingMeta(PDO $pdo, int $tenantId, int $userId, array $items, string $status, bool $deductStock, ?string $pendingName, ?string $pendingContact): int
     {
         self::ensureTransactionsPaymentSchema($pdo);
+        FlavorSchema::ensure($pdo);
 
         $productIds = array_column($items, 'product_id');
         if ($productIds === []) {
@@ -316,6 +322,30 @@ final class CheckoutService
         }
 
         $totalAmount = 0.0;
+        $flavorMapByProduct = [];
+        $stFl = $pdo->prepare(
+            "SELECT pfi.product_id, pfi.ingredient_id, pfi.quantity_required, i.name, i.stock_quantity
+             FROM product_flavor_ingredients pfi
+             INNER JOIN ingredients i ON i.id = pfi.ingredient_id AND i.tenant_id = pfi.tenant_id
+             WHERE pfi.tenant_id = ?"
+        );
+        $stFl->execute([$tenantId]);
+        foreach ($stFl->fetchAll(PDO::FETCH_ASSOC) as $fr) {
+            $pid = (int) ($fr['product_id'] ?? 0);
+            $fid = (int) ($fr['ingredient_id'] ?? 0);
+            if ($pid < 1 || $fid < 1) {
+                continue;
+            }
+            if (! isset($flavorMapByProduct[$pid])) {
+                $flavorMapByProduct[$pid] = [];
+            }
+            $flavorMapByProduct[$pid][$fid] = [
+                'id' => $fid,
+                'name' => (string) ($fr['name'] ?? ''),
+                'stock_quantity' => (float) ($fr['stock_quantity'] ?? 0),
+                'qty_required' => (float) ($fr['quantity_required'] ?? 1),
+            ];
+        }
         foreach ($items as $item) {
             $pid = (int) $item['product_id'];
             $product = $products[$pid] ?? null;
@@ -323,6 +353,18 @@ final class CheckoutService
                 throw new RuntimeException('One or more products are invalid.');
             }
             $qty = max(1, (int) $item['quantity']);
+            $flavorId = max(0, (int) ($item['flavor_ingredient_id'] ?? 0));
+            $hasFlavorOptions = (int) ($product['has_flavor_options'] ?? 0) === 1;
+            if ($hasFlavorOptions) {
+                $flavors = $flavorMapByProduct[$pid] ?? [];
+                if ($flavorId < 1 || ! isset($flavors[$flavorId])) {
+                    throw new RuntimeException('Please select a valid flavor.');
+                }
+                $flavorReq = max(stock_min_positive(), (float) ($flavors[$flavorId]['qty_required'] ?? 1));
+                if ((float) ($flavors[$flavorId]['stock_quantity'] ?? 0) < ($qty * $flavorReq)) {
+                    throw new RuntimeException('Selected flavor is out of stock.');
+                }
+            }
             $totalAmount += (float) $product['price'] * $qty;
         }
 
@@ -360,11 +402,22 @@ final class CheckoutService
             $product = $products[$pid];
             $qty = max(1, (int) $item['quantity']);
             $lineTotal = (float) $product['price'] * $qty;
+            $flavorId = max(0, (int) ($item['flavor_ingredient_id'] ?? 0));
+            $flavorName = null;
+            $flavorQtyRequired = null;
+            if ($flavorId > 0) {
+                $flavorName = (string) (($flavorMapByProduct[$pid][$flavorId]['name'] ?? null) ?: '');
+                $flavorQtyRequired = max(stock_min_positive(), (float) (($flavorMapByProduct[$pid][$flavorId]['qty_required'] ?? 1)));
+                if ($flavorName === '') {
+                    $flavorId = 0;
+                    $flavorQtyRequired = null;
+                }
+            }
             $stIt = $pdo->prepare(
-                'INSERT INTO transaction_items (tenant_id, transaction_id, product_id, quantity, unit_price, unit_expense, line_total, line_expense, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, 0, ?, 0, NOW(), NOW())'
+                'INSERT INTO transaction_items (tenant_id, transaction_id, product_id, flavor_ingredient_id, flavor_name, flavor_quantity_required, quantity, unit_price, unit_expense, line_total, line_expense, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, NOW(), NOW())'
             );
-            $stIt->execute([$tenantId, $transactionId, $pid, $qty, $product['price'], $lineTotal]);
+            $stIt->execute([$tenantId, $transactionId, $pid, $flavorId > 0 ? $flavorId : null, $flavorName, $flavorQtyRequired, $qty, $product['price'], $lineTotal]);
         }
 
         if ($deductStock) {
@@ -389,6 +442,26 @@ final class CheckoutService
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $products[(int) $row['id']] = $row;
         }
+        $flavorMapByProduct = [];
+        $stFl = $pdo->prepare(
+            "SELECT product_id, ingredient_id, quantity_required
+             FROM product_flavor_ingredients
+             WHERE tenant_id = ?"
+        );
+        $stFl->execute([$tenantId]);
+        foreach ($stFl->fetchAll(PDO::FETCH_ASSOC) as $fr) {
+            $pid = (int) ($fr['product_id'] ?? 0);
+            $fid = (int) ($fr['ingredient_id'] ?? 0);
+            if ($pid < 1 || $fid < 1) {
+                continue;
+            }
+            if (! isset($flavorMapByProduct[$pid])) {
+                $flavorMapByProduct[$pid] = [];
+            }
+            $flavorMapByProduct[$pid][$fid] = [
+                'qty_required' => (float) ($fr['quantity_required'] ?? 1),
+            ];
+        }
 
         $required = [];
         foreach ($items as $item) {
@@ -408,6 +481,11 @@ final class CheckoutService
                 $need = (float) $row['quantity_required'] * $qty;
                 $iid = (int) $row['id'];
                 $required[$iid] = ($required[$iid] ?? 0) + $need;
+            }
+            $flavorId = max(0, (int) ($item['flavor_ingredient_id'] ?? 0));
+            if ($flavorId > 0) {
+                $flavorReq = max(stock_min_positive(), (float) (($flavorMapByProduct[$pid][$flavorId]['qty_required'] ?? 1)));
+                $required[$flavorId] = ($required[$flavorId] ?? 0) + ($qty * $flavorReq);
             }
         }
 

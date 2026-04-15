@@ -13,6 +13,12 @@
                 </select>
             </div>
             <div class="col-6 col-md-3 col-lg-2">
+                <label class="form-label mb-1">Category</label>
+                <select class="form-select" name="category" required>
+                    <?php foreach (($allowed_categories ?? ['general']) as $category): ?><option value="<?= e((string) $category) ?>"><?= e(ucfirst((string) $category)) ?></option><?php endforeach; ?>
+                </select>
+            </div>
+            <div class="col-6 col-md-3 col-lg-2">
                 <label class="form-label mb-1">Current Stock</label>
                 <input class="form-control" type="number" step="any" inputmode="decimal" name="stock_quantity" placeholder="Stock" required>
             </div>
@@ -35,6 +41,7 @@
                     <th></th>
                     <th>ID</th>
                     <th>Name</th>
+                    <th>Category</th>
                     <th>Unit</th>
                     <th>Stock</th>
                     <th>Low Threshold</th>
@@ -48,6 +55,7 @@
 (() => {
     const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     const allowedUnits = <?= json_embed($allowed_units) ?>;
+    const allowedCategories = <?= json_embed($allowed_categories ?? ['general']) ?>;
     const DECIMAL_SCALE = 16;
     const toDecInputStr = (v) => {
         const x = Number(v);
@@ -88,14 +96,16 @@
             { targets: 1, responsivePriority: 100 },
             { targets: 2, responsivePriority: 2 },
             { targets: 3, responsivePriority: 60 },
-            { targets: 4, responsivePriority: 3 },
-            { targets: 5, responsivePriority: 60 },
-            { targets: 6, orderable: false, searchable: false, responsivePriority: 4 },
+            { targets: 4, responsivePriority: 60 },
+            { targets: 5, responsivePriority: 3 },
+            { targets: 6, responsivePriority: 60 },
+            { targets: 7, orderable: false, searchable: false, responsivePriority: 4 },
         ],
         columns: [
             { data: null },
             { data: 'id' },
             { data: 'name' },
+            { data: 'category' },
             { data: 'unit' },
             { data: 'stock_quantity' },
             { data: 'low_stock_threshold' },
@@ -143,16 +153,45 @@
             ${allowedUnits.map((u) => `<option value="${u}" ${u === selected ? 'selected' : ''}>${u}</option>`).join('')}
         </select>
     `;
+    const renderCategorySelect = (selected) => `
+        <select class="form-select form-select-sm js-edit-category">
+            ${allowedCategories.map((c) => `<option value="${c}" ${c === selected ? 'selected' : ''}>${String(c).charAt(0).toUpperCase()}${String(c).slice(1)}</option>`).join('')}
+        </select>
+    `;
+
+    const resolveDataRowTr = (el) => {
+        let tr = el?.closest?.('tr') || null;
+        if (!tr) return null;
+        // DataTables responsive mode can render controls inside a "child" row.
+        // Use the previous sibling data row for consistent edit/render behavior.
+        if (tr.classList.contains('child')) {
+            const prev = tr.previousElementSibling;
+            if (prev && prev.tagName === 'TR') tr = prev;
+        }
+        return tr;
+    };
+    const collapseResponsiveRows = () => {
+        table.rows().every(function () {
+            if (this.child && this.child.isShown()) this.child.hide();
+            const n = this.node();
+            if (n) {
+                n.classList.remove('parent', 'table-warning');
+                n.dataset.editing = '0';
+            }
+        });
+    };
 
     const beginEditRow = (tr, rowData) => {
+        collapseResponsiveRows();
         tr.classList.add('table-warning');
         tr.dataset.editing = '1';
         const cells = tr.children;
         cells[2].innerHTML = `<input class="form-control form-control-sm js-edit-name" value="${rowData.name}">`;
-        cells[3].innerHTML = renderUnitSelect(rowData.unit);
-        cells[4].innerHTML = `<input class="form-control form-control-sm js-edit-stock" type="number" step="any" value="${toDecInputStr(rowData.stock_quantity)}">`;
-        cells[5].innerHTML = `<input class="form-control form-control-sm js-edit-threshold" type="number" step="any" value="${toDecInputStr(rowData.low_stock_threshold)}">`;
-        cells[6].innerHTML = `
+        cells[3].innerHTML = renderCategorySelect(rowData.category_value || 'general');
+        cells[4].innerHTML = renderUnitSelect(rowData.unit);
+        cells[5].innerHTML = `<input class="form-control form-control-sm js-edit-stock" type="number" step="any" value="${toDecInputStr(rowData.stock_quantity)}">`;
+        cells[6].innerHTML = `<input class="form-control form-control-sm js-edit-threshold" type="number" step="any" value="${toDecInputStr(rowData.low_stock_threshold)}">`;
+        cells[7].innerHTML = `
             <div class="d-flex gap-1 flex-wrap">
                 <button type="button" class="btn btn-sm btn-success js-save" data-id="${rowData.id}" title="Save"><i class="fa fa-check"></i></button>
                 <button type="button" class="btn btn-sm btn-secondary js-cancel" data-id="${rowData.id}" title="Cancel"><i class="fa fa-xmark"></i></button>
@@ -161,14 +200,23 @@
     };
 
     const submitUpdate = async (tr, id) => {
+        const saveBtn = tr.querySelector('.js-save');
+        const cancelBtn = tr.querySelector('.js-cancel');
+        const rowApi = table.row(tr);
         const payload = {
             _method: 'PUT',
             name: tr.querySelector('.js-edit-name')?.value?.trim() || '',
+            category: tr.querySelector('.js-edit-category')?.value || 'general',
             unit: tr.querySelector('.js-edit-unit')?.value || '',
             stock_quantity: tr.querySelector('.js-edit-stock')?.value || '',
             low_stock_threshold: tr.querySelector('.js-edit-threshold')?.value || '',
         };
         try {
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i>';
+            }
+            if (cancelBtn) cancelBtn.disabled = true;
             const res = await fetch(`<?= e(url('tenant/ingredients')) ?>/${id}`, {
                 method: 'POST',
                 headers: {
@@ -179,11 +227,35 @@
                 body: encodeBody(payload),
             });
             const body = await res.json().catch(() => ({}));
-            if (!res.ok) return showValidationErrors(body);
-            table.ajax.reload(null, false);
+            if (!res.ok) {
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = '<i class="fa fa-check"></i>';
+                }
+                if (cancelBtn) cancelBtn.disabled = false;
+                return showValidationErrors(body);
+            }
+            // In mobile responsive mode, close the child row editor state first.
+            if (rowApi?.child && rowApi.child.isShown()) rowApi.child.hide();
+            tr.classList.remove('table-warning');
+            tr.dataset.editing = '0';
+            collapseResponsiveRows();
+            table.ajax.reload(() => {
+                const refreshedTr = document.querySelector(`#ingredientsTable tbody .js-edit[data-id="${id}"]`)?.closest('tr');
+                if (refreshedTr) {
+                    refreshedTr.classList.add('table-success');
+                    setTimeout(() => refreshedTr.classList.remove('table-success'), 1200);
+                }
+            }, true);
             Swal.fire({ icon: 'success', title: 'Updated', text: body.message || 'Item updated successfully.', confirmButtonColor: '#198754' });
         } catch {
             Swal.fire({ icon: 'error', title: 'Error', text: 'Update failed. Please try again.', confirmButtonColor: '#dc3545' });
+        } finally {
+            if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = '<i class="fa fa-check"></i>';
+            }
+            if (cancelBtn) cancelBtn.disabled = false;
         }
     };
 
@@ -221,7 +293,7 @@
     const $ingTable = $('#ingredientsTable');
     $ingTable.on('click', '.js-edit', function (ev) {
         ev.preventDefault();
-        const tr = this.closest('tr');
+        const tr = resolveDataRowTr(this);
         if (!tr) return;
         if (tr.dataset.editing === '1') return;
         const rowData = table.row(tr).data();
@@ -231,12 +303,20 @@
 
     $ingTable.on('click', '.js-cancel', function (ev) {
         ev.preventDefault();
-        table.ajax.reload(null, false);
+        const tr = resolveDataRowTr(this);
+        if (tr) {
+            const rowApi = table.row(tr);
+            if (rowApi?.child && rowApi.child.isShown()) rowApi.child.hide();
+            tr.classList.remove('table-warning');
+            tr.dataset.editing = '0';
+        }
+        collapseResponsiveRows();
+        table.ajax.reload(null, true);
     });
 
     $ingTable.on('click', '.js-save', function (ev) {
         ev.preventDefault();
-        const tr = this.closest('tr');
+        const tr = resolveDataRowTr(this);
         const id = this.dataset.id;
         if (!tr || !id) return;
         submitUpdate(tr, id);

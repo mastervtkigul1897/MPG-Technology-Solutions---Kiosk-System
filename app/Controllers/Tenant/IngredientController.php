@@ -7,6 +7,7 @@ namespace App\Controllers\Tenant;
 use App\Core\ActivityLogger;
 use App\Core\App;
 use App\Core\Auth;
+use App\Core\FlavorSchema;
 use App\Core\Request;
 use App\Core\Response;
 use PDO;
@@ -14,21 +15,23 @@ use PDO;
 final class IngredientController
 {
     private const UNITS = 'pc,pcs,g,kg,ml,l,oz,lb,cup,tbsp,tsp,pack,sachet,bottle,can,box,tray,bundle,set,slice,serving';
+    private const CATEGORIES = ['general', 'flavor'];
 
     public function index(Request $request): Response
     {
         $user = Auth::user();
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
 
         if ($request->ajax() || $request->boolean('datatable')) {
             $search = trim((string) data_get($request->all(), 'search.value', ''));
             $where = 'tenant_id = ?';
             $params = [$tenantId];
             if ($search !== '') {
-                $where .= ' AND (name LIKE ? OR unit LIKE ? OR id LIKE ?)';
+                $where .= ' AND (name LIKE ? OR unit LIKE ? OR category LIKE ? OR id LIKE ?)';
                 $like = '%'.$search.'%';
-                array_push($params, $like, $like, $like);
+                array_push($params, $like, $like, $like, $like);
             }
 
             $total = (int) $pdo->query('SELECT COUNT(*) FROM ingredients WHERE tenant_id = '.$tenantId)->fetchColumn();
@@ -36,7 +39,7 @@ final class IngredientController
             $st->execute($params);
             $filtered = (int) $st->fetchColumn();
 
-            $columns = ['id', 'name', 'unit', 'stock_quantity', 'low_stock_threshold'];
+            $columns = ['id', 'name', 'category', 'unit', 'stock_quantity', 'low_stock_threshold'];
             $orderIdx = (int) data_get($request->all(), 'order.0.column', 1);
             $orderDir = strtolower((string) data_get($request->all(), 'order.0.dir', 'asc')) === 'desc' ? 'DESC' : 'ASC';
             $orderBy = $columns[$orderIdx] ?? 'name';
@@ -61,6 +64,8 @@ final class IngredientController
                 $data[] = [
                     'id' => $ingredient['id'],
                     'name' => e((string) $ingredient['name']),
+                    'category' => e(ucfirst((string) ($ingredient['category'] ?? 'general'))),
+                    'category_value' => e(strtolower((string) ($ingredient['category'] ?? 'general'))),
                     'unit' => e((string) $ingredient['unit']),
                     'stock_quantity' => format_stock((float) $ingredient['stock_quantity']),
                     'low_stock_threshold' => format_stock((float) $ingredient['low_stock_threshold']),
@@ -78,6 +83,7 @@ final class IngredientController
 
         return view_page('Inventory Items', 'tenant.ingredients.index', [
             'allowed_units' => explode(',', self::UNITS),
+            'allowed_categories' => self::CATEGORIES,
         ]);
     }
 
@@ -86,6 +92,7 @@ final class IngredientController
         $user = Auth::user();
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
 
         if ($request->ajax() || $request->boolean('datatable')) {
             $search = trim((string) data_get($request->all(), 'search.value', ''));
@@ -165,6 +172,7 @@ final class IngredientController
 
         $name = trim((string) $request->input('name'));
         $unit = (string) $request->input('unit');
+        $category = strtolower(trim((string) $request->input('category', 'general')));
         $stock = round_stock((float) $request->input('stock_quantity'));
         $low = $request->input('low_stock_threshold');
         $low = $low === null || $low === '' ? 0.0 : round_stock((float) $low);
@@ -172,6 +180,9 @@ final class IngredientController
         $units = explode(',', self::UNITS);
         if (! in_array($unit, $units, true)) {
             return $this->jsonOrBack($request, ['name' => ['Invalid unit.']], 422);
+        }
+        if (! in_array($category, self::CATEGORIES, true)) {
+            return $this->jsonOrBack($request, ['name' => ['Invalid category.']], 422);
         }
 
         $st = $pdo->prepare('SELECT id FROM ingredients WHERE tenant_id = ? AND LOWER(name) = LOWER(?) LIMIT 1');
@@ -182,9 +193,9 @@ final class IngredientController
         }
 
         $pdo->prepare(
-            'INSERT INTO ingredients (tenant_id, name, unit, unit_cost, stock_quantity, low_stock_threshold, created_at, updated_at)
-             VALUES (?, ?, ?, 0, ?, ?, NOW(), NOW())'
-        )->execute([$tenantId, $name, $unit, $stock, $low]);
+            'INSERT INTO ingredients (tenant_id, name, category, unit, unit_cost, stock_quantity, low_stock_threshold, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 0, ?, ?, NOW(), NOW())'
+        )->execute([$tenantId, $name, $category, $unit, $stock, $low]);
 
         if ($request->wantsJson() || $request->ajax()) {
             return json_response(['message' => 'Item added successfully.']);
@@ -200,6 +211,7 @@ final class IngredientController
         $user = Auth::user();
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
 
         $st = $pdo->prepare('SELECT * FROM ingredients WHERE tenant_id = ? AND id = ? LIMIT 1');
         $st->execute([$tenantId, (int) $id]);
@@ -226,6 +238,7 @@ final class IngredientController
         $previousStock = (float) $ingredient['stock_quantity'];
         $name = trim((string) $request->input('name'));
         $unit = (string) $request->input('unit');
+        $category = strtolower(trim((string) $request->input('category', 'general')));
         $stock = round_stock((float) $request->input('stock_quantity'));
         $low = $request->input('low_stock_threshold');
         $low = $low === null || $low === '' ? 0.0 : round_stock((float) $low);
@@ -233,6 +246,9 @@ final class IngredientController
         $units = explode(',', self::UNITS);
         if (! in_array($unit, $units, true)) {
             return $this->jsonOrBack($request, ['name' => ['Invalid unit.']], 422);
+        }
+        if (! in_array($category, self::CATEGORIES, true)) {
+            return $this->jsonOrBack($request, ['name' => ['Invalid category.']], 422);
         }
 
         $st = $pdo->prepare('SELECT id FROM ingredients WHERE tenant_id = ? AND LOWER(name) = LOWER(?) AND id != ? LIMIT 1');
@@ -242,8 +258,8 @@ final class IngredientController
         }
 
         $pdo->prepare(
-            'UPDATE ingredients SET name = ?, unit = ?, stock_quantity = ?, low_stock_threshold = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?'
-        )->execute([$name, $unit, $stock, $low, (int) $id, $tenantId]);
+            'UPDATE ingredients SET name = ?, category = ?, unit = ?, stock_quantity = ?, low_stock_threshold = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?'
+        )->execute([$name, $category, $unit, $stock, $low, (int) $id, $tenantId]);
 
         $st = $pdo->prepare('SELECT * FROM ingredients WHERE id = ? LIMIT 1');
         $st->execute([(int) $id]);

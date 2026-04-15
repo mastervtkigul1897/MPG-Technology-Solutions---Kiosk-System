@@ -7,9 +7,11 @@ namespace App\Controllers\Tenant;
 use App\Core\ActivityLogger;
 use App\Core\App;
 use App\Core\Auth;
+use App\Core\FlavorSchema;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\TenantReceiptFields;
+use App\Services\TransactionReceiptPayload;
 use PDO;
 use RuntimeException;
 
@@ -27,6 +29,7 @@ final class ReportController
 
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         $today = date('Y-m-d');
         [$from, $to, $chartPreset] = $this->resolveReportRange($request, $today);
         $rangeStart = $from.' 00:00:00';
@@ -226,6 +229,23 @@ final class ReportController
                     $params[] = $statusFilter;
                 }
             }
+            $paymentFilter = strtolower(trim((string) $request->input('payment_method', '')));
+            if ($paymentFilter !== '') {
+                $allowedPaymentMethods = [
+                    'cash',
+                    'card',
+                    'gcash',
+                    'paymaya',
+                    'online banking',
+                    'e-wallet',
+                    'gift certificate',
+                    'free',
+                ];
+                if (in_array($paymentFilter, $allowedPaymentMethods, true)) {
+                    $where .= ' AND LOWER(TRIM(COALESCE(t.payment_method, \'\'))) = ?';
+                    $params[] = $paymentFilter;
+                }
+            }
             $dateFilter = trim((string) $request->input('date', ''));
             if ($dateFilter !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFilter) === 1) {
                 $where .= ' AND DATE(t.created_at) = ?';
@@ -289,7 +309,12 @@ final class ReportController
                     if ((int) ($it['quantity'] ?? 0) <= 0) {
                         $hasVoidedLines = true;
                     }
-                    $itemsHtml .= '<li>'.e((string) $it['product_name']).' - Qty '.e(format_stock((float) $it['quantity']))
+                    $lineName = (string) ($it['product_name'] ?? '');
+                    $flavorName = trim((string) ($it['flavor_name'] ?? ''));
+                    if ($flavorName !== '') {
+                        $lineName .= ' - '.$flavorName;
+                    }
+                    $itemsHtml .= '<li>'.e($lineName).' - Qty '.e(format_stock((float) $it['quantity']))
                         .' x '.e(format_money((float) $it['unit_price'])).' = '.e(format_money((float) $it['line_total'])).'</li>';
                 }
                 $itemsHtml .= '</ul>';
@@ -303,8 +328,9 @@ final class ReportController
                 } elseif ($status === 'pending') {
                     $pendingName = trim((string) ($trow['pending_name'] ?? ''));
                     $pendingContact = trim((string) ($trow['pending_contact'] ?? ''));
-                    $details = '<div class="d-flex gap-1 justify-content-center">'
-                        .'<button type="button" class="btn btn-sm btn-success js-pay-pending" data-id="'.$tid.'" data-name="'.e($pendingName).'" data-contact="'.e($pendingContact).'" data-total="'.e((string) ($trow['total_amount'] ?? 0)).'" title="Pay pending and print receipt"><i class="fa fa-money-bill-wave"></i></button>'
+                    $details = '<div class="d-flex gap-1 justify-content-center flex-wrap">'
+                        .'<button type="button" class="btn btn-sm btn-success js-pay-pending" data-id="'.$tid.'" data-name="'.e($pendingName).'" data-contact="'.e($pendingContact).'" data-total="'.e((string) ($trow['total_amount'] ?? 0)).'" title="Pay pending and print customer receipt"><i class="fa fa-money-bill-wave"></i></button>'
+                        .'<button type="button" class="btn btn-sm btn-outline-secondary js-reprint-receipt" data-receipt-url="'.e(route('tenant.transactions.receipt', ['id' => $tid])).'" title="Print unpaid order (UNPAID watermark)"><i class="fa fa-print"></i></button>'
                         .'<button type="button" class="btn btn-sm btn-outline-danger js-edit-transaction" data-edit-url="'.e(route('tenant.transactions.edit-data', ['id' => $tid])).'" title="Edit items"><i class="fa fa-ban"></i></button>'
                         .'</div>';
                 } else {
@@ -399,6 +425,7 @@ final class ReportController
             return json_response(['success' => false, 'message' => 'Invalid request.'], 422);
         }
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         $st = $pdo->prepare("SELECT id, status, total_amount, original_total_amount, payment_method, amount_paid, amount_tendered, change_amount, refunded_amount, added_paid_amount, created_at FROM transactions WHERE tenant_id = ? AND id = ? LIMIT 1");
         $st->execute([$tenantId, $txId]);
         $tx = $st->fetch(PDO::FETCH_ASSOC);
@@ -410,7 +437,7 @@ final class ReportController
             return json_response(['success' => false, 'message' => 'Only completed or pending transactions can be edited.'], 422);
         }
         $st = $pdo->prepare(
-            'SELECT ti.id AS item_id, ti.product_id, ti.quantity, ti.unit_price, ti.line_total, p.name AS product_name
+            'SELECT ti.id AS item_id, ti.product_id, ti.flavor_ingredient_id, ti.flavor_name, ti.quantity, ti.unit_price, ti.line_total, p.name AS product_name
              FROM transaction_items ti
              INNER JOIN products p ON p.id = ti.product_id AND p.tenant_id = ti.tenant_id
              WHERE ti.tenant_id = ? AND ti.transaction_id = ?
@@ -423,6 +450,8 @@ final class ReportController
                 'item_id' => (int) ($row['item_id'] ?? 0),
                 'product_id' => (int) ($row['product_id'] ?? 0),
                 'product_name' => (string) ($row['product_name'] ?? ''),
+                'flavor_ingredient_id' => (int) ($row['flavor_ingredient_id'] ?? 0),
+                'flavor_name' => (string) ($row['flavor_name'] ?? ''),
                 'quantity' => (int) ($row['quantity'] ?? 0),
                 'unit_price' => (float) ($row['unit_price'] ?? 0),
                 'line_total' => (float) ($row['line_total'] ?? 0),
@@ -430,7 +459,7 @@ final class ReportController
         }
 
         // Products list for replacement/add (active only to avoid selling inactive).
-        $st = $pdo->prepare('SELECT id, name, price FROM products WHERE tenant_id = ? AND is_active = 1 ORDER BY name ASC');
+        $st = $pdo->prepare('SELECT id, name, price FROM products WHERE tenant_id = ? AND is_active = 1 AND COALESCE(has_flavor_options,0) = 0 ORDER BY name ASC');
         $st->execute([$tenantId]);
         $products = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $p) {
@@ -509,6 +538,7 @@ final class ReportController
         }
 
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         $pdo->beginTransaction();
         try {
             $st = $pdo->prepare('SELECT id, status, total_amount, original_total_amount, payment_method, amount_paid, amount_tendered, change_amount, refunded_amount, added_paid_amount FROM transactions WHERE tenant_id = ? AND id = ? FOR UPDATE');
@@ -547,7 +577,7 @@ final class ReportController
                 ? ($apNet > money_epsilon() ? $apNet : max(0.0, (float) ($tx['amount_tendered'] ?? 0) - (float) ($tx['change_amount'] ?? 0)))
                 : $apNet;
 
-            $st = $pdo->prepare('SELECT id, product_id, quantity, unit_price, line_total FROM transaction_items WHERE tenant_id = ? AND transaction_id = ?');
+            $st = $pdo->prepare('SELECT id, product_id, flavor_ingredient_id, flavor_name, flavor_quantity_required, quantity, unit_price, line_total FROM transaction_items WHERE tenant_id = ? AND transaction_id = ?');
             $st->execute([$tenantId, $txId]);
             $existing = [];
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
@@ -564,6 +594,9 @@ final class ReportController
                 $existing[$itemId] = [
                     'item_id' => $itemId,
                     'product_id' => $pid,
+                    'flavor_ingredient_id' => (int) ($row['flavor_ingredient_id'] ?? 0),
+                    'flavor_name' => (string) ($row['flavor_name'] ?? ''),
+                    'flavor_quantity_required' => (float) ($row['flavor_quantity_required'] ?? 1),
                     'quantity' => $q,
                     'unit_price' => (float) ($row['unit_price'] ?? 0),
                     'line_total' => (float) ($row['line_total'] ?? 0),
@@ -598,6 +631,8 @@ final class ReportController
                     continue;
                 }
                 $pid = (int) ($row['product_id'] ?? 0);
+                $lineFlavorId = (int) ($row['flavor_ingredient_id'] ?? 0);
+                $lineFlavorReq = max(stock_min_positive(), (float) ($row['flavor_quantity_required'] ?? 1));
                 // Restore stock if reduced, deduct if increased.
                 $stIng = $pdo->prepare(
                     'SELECT pi.quantity_required, i.id, i.name FROM product_ingredients pi
@@ -626,6 +661,16 @@ final class ReportController
                              VALUES (?, ?, ?, ?, 'IN', ?, 'void_item', NOW(), NOW())"
                         )->execute([$tenantId, $ingId, $txId, (int) $user['id'], $amt]);
                     }
+                    if ($lineFlavorId > 0) {
+                        $restoreFlavor = round_stock((float) abs($delta) * $lineFlavorReq);
+                        $pdo->prepare('SELECT id FROM ingredients WHERE tenant_id = ? AND id = ? FOR UPDATE')->execute([$tenantId, $lineFlavorId]);
+                        $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity + ? WHERE tenant_id = ? AND id = ?')
+                            ->execute([$restoreFlavor, $tenantId, $lineFlavorId]);
+                        $pdo->prepare(
+                            "INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
+                             VALUES (?, ?, ?, ?, 'IN', ?, 'void_item', NOW(), NOW())"
+                        )->execute([$tenantId, $lineFlavorId, $txId, (int) $user['id'], $restoreFlavor]);
+                    }
                 } else {
                     $deductUnits = $delta;
                     // Check sufficiency and lock
@@ -647,6 +692,22 @@ final class ReportController
                             "INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
                              VALUES (?, ?, ?, ?, 'OUT', ?, 'edit_item', NOW(), NOW())"
                         )->execute([$tenantId, $ingId, $txId, (int) $user['id'], $need]);
+                    }
+                    if ($lineFlavorId > 0) {
+                        $needFlavor = round_stock((float) $delta * $lineFlavorReq);
+                        $stOne = $pdo->prepare('SELECT id, name, stock_quantity FROM ingredients WHERE tenant_id = ? AND id = ? FOR UPDATE');
+                        $stOne->execute([$tenantId, $lineFlavorId]);
+                        $ingRow = $stOne->fetch(PDO::FETCH_ASSOC);
+                        if (! $ingRow || (float) ($ingRow['stock_quantity'] ?? 0) < $needFlavor) {
+                            $name = $ingRow['name'] ?? 'Unknown ingredient';
+                            throw new RuntimeException("Insufficient stock for {$name}.");
+                        }
+                        $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity - ? WHERE tenant_id = ? AND id = ?')
+                            ->execute([$needFlavor, $tenantId, $lineFlavorId]);
+                        $pdo->prepare(
+                            "INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
+                             VALUES (?, ?, ?, ?, 'OUT', ?, 'edit_item', NOW(), NOW())"
+                        )->execute([$tenantId, $lineFlavorId, $txId, (int) $user['id'], $needFlavor]);
                     }
                 }
 
@@ -843,6 +904,7 @@ final class ReportController
         }
 
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         $st = $pdo->prepare('SELECT id FROM transactions WHERE tenant_id = ? AND id = ? LIMIT 1');
         $st->execute([$tenantId, $txId]);
         if (! $st->fetch(PDO::FETCH_ASSOC)) {
@@ -863,6 +925,7 @@ final class ReportController
         }
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         $txId = (int) $id;
         $pdo->beginTransaction();
         try {
@@ -882,14 +945,19 @@ final class ReportController
             $newStatus = $isVoid ? 'completed' : 'void';
 
             // Load items once (for stock reversal/deduction).
-            $st = $pdo->prepare('SELECT product_id, quantity FROM transaction_items WHERE tenant_id = ? AND transaction_id = ?');
+            $st = $pdo->prepare('SELECT product_id, flavor_ingredient_id, flavor_quantity_required, quantity FROM transaction_items WHERE tenant_id = ? AND transaction_id = ?');
             $st->execute([$tenantId, $txId]);
             $items = [];
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $it) {
                 $pid = (int) ($it['product_id'] ?? 0);
                 $qty = max(1, (int) ($it['quantity'] ?? 0));
                 if ($pid > 0) {
-                    $items[] = ['product_id' => $pid, 'quantity' => $qty];
+                    $items[] = [
+                        'product_id' => $pid,
+                        'quantity' => $qty,
+                        'flavor_ingredient_id' => max(0, (int) ($it['flavor_ingredient_id'] ?? 0)),
+                        'flavor_quantity_required' => max(stock_min_positive(), (float) ($it['flavor_quantity_required'] ?? 1)),
+                    ];
                 }
             }
 
@@ -911,6 +979,11 @@ final class ReportController
                     if ($ingId > 0 && $need > 0) {
                         $required[$ingId] = ($required[$ingId] ?? 0) + $need;
                     }
+                }
+                $lineFlavorId = max(0, (int) ($it['flavor_ingredient_id'] ?? 0));
+                if ($lineFlavorId > 0) {
+                    $lineFlavorReq = max(stock_min_positive(), (float) ($it['flavor_quantity_required'] ?? 1));
+                    $required[$lineFlavorId] = ($required[$lineFlavorId] ?? 0) + ($qty * $lineFlavorReq);
                 }
             }
 
@@ -1159,62 +1232,6 @@ final class ReportController
     /** @return array<string,mixed> */
     private function buildReceiptPayload(PDO $pdo, int $tenantId, int $transactionId): array
     {
-        $st = $pdo->prepare(
-            'SELECT name, receipt_display_name, receipt_business_style, receipt_tax_id, receipt_phone, receipt_address, receipt_email, receipt_footer_note
-             FROM tenants
-             WHERE id = ?
-             LIMIT 1'
-        );
-        $st->execute([$tenantId]);
-        $tenant = $st->fetch(PDO::FETCH_ASSOC) ?: [];
-
-        $st = $pdo->prepare(
-            'SELECT total_amount, original_total_amount, amount_tendered, change_amount, payment_method, amount_paid, refunded_amount, added_paid_amount, created_at
-             FROM transactions WHERE id = ? AND tenant_id = ? LIMIT 1'
-        );
-        $st->execute([$transactionId, $tenantId]);
-        $tx = $st->fetch(PDO::FETCH_ASSOC) ?: [];
-
-        $st = $pdo->prepare(
-            'SELECT ti.quantity, ti.unit_price, ti.line_total, p.name AS product_name
-             FROM transaction_items ti
-             INNER JOIN products p ON p.id = ti.product_id AND p.tenant_id = ti.tenant_id
-             WHERE ti.transaction_id = ? AND ti.tenant_id = ?
-             ORDER BY ti.id ASC'
-        );
-        $st->execute([$transactionId, $tenantId]);
-        $lines = [];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $lines[] = [
-                'name' => (string) ($row['product_name'] ?? ''),
-                'quantity' => (int) ($row['quantity'] ?? 0),
-                'unit_price' => (float) ($row['unit_price'] ?? 0),
-                'line_total' => (float) ($row['line_total'] ?? 0),
-            ];
-        }
-
-        return [
-            'transaction_id' => $transactionId,
-            'store_name' => (string) ($tenant['name'] ?? ''),
-            'display_name' => trim((string) ($tenant['receipt_display_name'] ?? '')),
-            'business_style' => trim((string) ($tenant['receipt_business_style'] ?? '')),
-            'tax_id' => trim((string) ($tenant['receipt_tax_id'] ?? '')),
-            'contact' => [
-                'phone' => trim((string) ($tenant['receipt_phone'] ?? '')),
-                'address' => trim((string) ($tenant['receipt_address'] ?? '')),
-                'email' => trim((string) ($tenant['receipt_email'] ?? '')),
-            ],
-            'footer_note' => trim((string) ($tenant['receipt_footer_note'] ?? '')),
-            'items' => $lines,
-            'grand_total' => (float) ($tx['total_amount'] ?? 0),
-            'original_total_amount' => array_key_exists('original_total_amount', $tx) && $tx['original_total_amount'] !== null ? (float) $tx['original_total_amount'] : null,
-            'amount_tendered' => array_key_exists('amount_tendered', $tx) && $tx['amount_tendered'] !== null ? (float) $tx['amount_tendered'] : null,
-            'change_amount' => array_key_exists('change_amount', $tx) && $tx['change_amount'] !== null ? (float) $tx['change_amount'] : null,
-            'payment_method' => array_key_exists('payment_method', $tx) && $tx['payment_method'] !== null ? (string) $tx['payment_method'] : null,
-            'amount_paid' => array_key_exists('amount_paid', $tx) && $tx['amount_paid'] !== null ? (float) $tx['amount_paid'] : null,
-            'refunded_amount' => array_key_exists('refunded_amount', $tx) ? (float) ($tx['refunded_amount'] ?? 0) : 0.0,
-            'added_paid_amount' => array_key_exists('added_paid_amount', $tx) ? (float) ($tx['added_paid_amount'] ?? 0) : 0.0,
-            'created_at' => $tx['created_at'] ?? null,
-        ];
+        return TransactionReceiptPayload::build($pdo, $tenantId, $transactionId);
     }
 }

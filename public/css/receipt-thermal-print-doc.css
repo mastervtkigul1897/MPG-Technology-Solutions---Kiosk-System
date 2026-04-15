@@ -1,10 +1,10 @@
 @charset "UTF-8";
 /*
  * Standalone receipt HTML for window.open() + print().
- * Thermal-oriented width (55mm roll); black & white; one print job.
+ * Thermal-oriented width (60mm roll); black & white; one print job.
  */
 @page {
-    size: 55mm auto;
+    size: 60mm auto;
     margin: 0;
 }
 
@@ -36,7 +36,7 @@ body {
 .receipt-paper {
     box-sizing: border-box;
     width: 100%;
-    max-width: 55mm;
+    max-width: 60mm;
     margin: 0 auto;
     padding: 1.5mm 2mm;
     border: 0;
@@ -102,7 +102,7 @@ body {
 
 @media print {
     @page {
-        size: 55mm auto;
+        size: 60mm auto;
         margin: 0;
     }
 

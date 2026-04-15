@@ -88,7 +88,28 @@
         </select>
     `;
 
+    const resolveDataRowTr = (el) => {
+        let tr = el?.closest?.('tr') || null;
+        if (!tr) return null;
+        if (tr.classList.contains('child')) {
+            const prev = tr.previousElementSibling;
+            if (prev && prev.tagName === 'TR') tr = prev;
+        }
+        return tr;
+    };
+    const collapseResponsiveRows = () => {
+        table.rows().every(function () {
+            if (this.child && this.child.isShown()) this.child.hide();
+            const n = this.node();
+            if (n) {
+                n.classList.remove('parent', 'table-warning');
+                n.dataset.editing = '0';
+            }
+        });
+    };
+
     const beginEditRow = (tr, rowData) => {
+        collapseResponsiveRows();
         tr.classList.add('table-warning');
         tr.dataset.editing = '1';
         const cells = tr.children;
@@ -104,7 +125,10 @@
         `;
     };
 
-    const submitUpdate = async (tr, rowData, id) => {
+    const submitUpdate = async (tr, id) => {
+        const saveBtn = tr.querySelector('.js-save');
+        const cancelBtn = tr.querySelector('.js-cancel');
+        const rowApi = table.row(tr);
         const payload = {
             _method: 'PUT',
             _source: 'notifications',
@@ -114,6 +138,11 @@
             low_stock_threshold: tr.querySelector('.js-edit-threshold')?.value || '',
         };
         try {
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i>';
+            }
+            if (cancelBtn) cancelBtn.disabled = true;
             const res = await fetch(`<?= e(url('tenant/ingredients')) ?>/${id}`, {
                 method: 'POST',
                 headers: {
@@ -124,18 +153,41 @@
                 body: encodeBody(payload),
             });
             const body = await res.json().catch(() => ({}));
-            if (!res.ok) return showValidationErrors(body);
-            table.ajax.reload(null, false);
+            if (!res.ok) {
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = '<i class="fa fa-check"></i>';
+                }
+                if (cancelBtn) cancelBtn.disabled = false;
+                return showValidationErrors(body);
+            }
+            if (rowApi?.child && rowApi.child.isShown()) rowApi.child.hide();
+            tr.classList.remove('table-warning');
+            tr.dataset.editing = '0';
+            collapseResponsiveRows();
+            table.ajax.reload(() => {
+                const refreshedTr = document.querySelector(`#notificationsTable tbody .js-edit[data-id="${id}"]`)?.closest('tr');
+                if (refreshedTr) {
+                    refreshedTr.classList.add('table-success');
+                    setTimeout(() => refreshedTr.classList.remove('table-success'), 1200);
+                }
+            }, true);
             Swal.fire({ icon: 'success', title: 'Updated', text: body.message || 'Item updated successfully.', confirmButtonColor: '#198754' });
         } catch {
             Swal.fire({ icon: 'error', title: 'Error', text: 'Update failed. Please try again.', confirmButtonColor: '#dc3545' });
+        } finally {
+            if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = '<i class="fa fa-check"></i>';
+            }
+            if (cancelBtn) cancelBtn.disabled = false;
         }
     };
 
     const $notifTable = $('#notificationsTable');
     $notifTable.on('click', '.js-edit', function (ev) {
         ev.preventDefault();
-        const tr = this.closest('tr');
+        const tr = resolveDataRowTr(this);
         if (!tr || tr.dataset.editing === '1') return;
         const rowData = table.row(tr).data();
         if (!rowData) return;
@@ -144,17 +196,23 @@
 
     $notifTable.on('click', '.js-cancel', function (ev) {
         ev.preventDefault();
-        table.ajax.reload(null, false);
+        const tr = resolveDataRowTr(this);
+        if (tr) {
+            const rowApi = table.row(tr);
+            if (rowApi?.child && rowApi.child.isShown()) rowApi.child.hide();
+            tr.classList.remove('table-warning');
+            tr.dataset.editing = '0';
+        }
+        collapseResponsiveRows();
+        table.ajax.reload(null, true);
     });
 
     $notifTable.on('click', '.js-save', function (ev) {
         ev.preventDefault();
-        const tr = this.closest('tr');
+        const tr = resolveDataRowTr(this);
         const id = this.dataset.id;
         if (!tr || !id) return;
-        const rowData = table.row(tr).data();
-        if (!rowData) return;
-        submitUpdate(tr, rowData, id);
+        submitUpdate(tr, id);
     });
 })();
 </script>

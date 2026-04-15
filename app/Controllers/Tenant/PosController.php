@@ -6,12 +6,14 @@ namespace App\Controllers\Tenant;
 
 use App\Core\App;
 use App\Core\Auth;
+use App\Core\FlavorSchema;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\TenantReceiptFields;
 use App\Services\CheckoutService;
 use App\Services\ThermalEscPosReceipt;
 use App\Services\ThermalPrinterClient;
+use App\Services\TransactionReceiptPayload;
 use PDO;
 use RuntimeException;
 
@@ -80,6 +82,7 @@ final class PosController
         $offset = ($page - 1) * $perPage;
 
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         $where = 'tenant_id = ? AND is_active = 1';
         $params = [$tenantId];
         if ($search !== '') {
@@ -93,7 +96,7 @@ final class PosController
 
         $hasImagePath = self::hasProductImagePathColumn($pdo);
         $imageSelect = $hasImagePath ? ', image_path' : '';
-        $sql = "SELECT id, name, price{$imageSelect} FROM products WHERE $where ORDER BY name LIMIT $perPage OFFSET $offset";
+        $sql = "SELECT id, name, price, has_flavor_options{$imageSelect} FROM products WHERE $where ORDER BY name LIMIT $perPage OFFSET $offset";
         $st = $pdo->prepare($sql);
         $st->execute($params);
         $products = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -177,10 +180,31 @@ final class PosController
                     'qty_required' => (float) $row['qty_required'],
                 ];
             }
+            $stFl = $pdo->prepare(
+                "SELECT i.id, i.name, i.unit, i.stock_quantity, i.low_stock_threshold, pfi.quantity_required
+                 FROM product_flavor_ingredients pfi
+                 INNER JOIN ingredients i ON i.id = pfi.ingredient_id AND i.tenant_id = pfi.tenant_id
+                 WHERE pfi.tenant_id = ? AND pfi.product_id = ? AND LOWER(COALESCE(i.category, 'general')) = 'flavor'
+                 ORDER BY i.name ASC"
+            );
+            $stFl->execute([$tenantId, $pid]);
+            $flavors = [];
+            foreach ($stFl->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $flavors[] = [
+                    'id' => (int) ($row['id'] ?? 0),
+                    'name' => (string) ($row['name'] ?? ''),
+                    'unit' => (string) ($row['unit'] ?? ''),
+                    'stock_quantity' => (float) ($row['stock_quantity'] ?? 0),
+                    'low_stock_threshold' => (float) ($row['low_stock_threshold'] ?? 0),
+                    'qty_required' => (float) ($row['quantity_required'] ?? 1),
+                ];
+            }
             $productPayload[] = [
                 'id' => $pid,
                 'name' => $p['name'],
                 'price' => (float) $p['price'],
+                'has_flavor_options' => (int) ($p['has_flavor_options'] ?? 0) === 1 && $flavors !== [],
+                'flavors' => $flavors,
                 'image_path' => $hasImagePath ? (string) ($p['image_path'] ?? '') : '',
                 'category_key' => $categoryKey,
                 'ingredients' => $ingredients,
@@ -307,6 +331,7 @@ final class PosController
             $parsed[] = [
                 'product_id' => (int) ($i['product_id'] ?? 0),
                 'quantity' => max(1, (int) ($i['quantity'] ?? 0)),
+                'flavor_ingredient_id' => max(0, (int) ($i['flavor_ingredient_id'] ?? 0)),
             ];
         }
 
@@ -422,6 +447,7 @@ final class PosController
             $parsed[] = [
                 'product_id' => (int) ($i['product_id'] ?? 0),
                 'quantity' => max(1, (int) ($i['quantity'] ?? 0)),
+                'flavor_ingredient_id' => max(0, (int) ($i['flavor_ingredient_id'] ?? 0)),
             ];
         }
         if ($parsed === []) {
@@ -435,7 +461,14 @@ final class PosController
             return json_response(['success' => false, 'message' => $e->getMessage()], 422);
         }
 
-        return json_response(['success' => true, 'pending_id' => $pendingId]);
+        TenantReceiptFields::ensure(App::db());
+        $prepReceipt = TransactionReceiptPayload::build(App::db(), $tenantId, $pendingId);
+
+        return json_response([
+            'success' => true,
+            'pending_id' => $pendingId,
+            'unpaid_prep_receipt' => $prepReceipt,
+        ]);
     }
 
     public function payPending(Request $request, string $id): Response
@@ -488,70 +521,6 @@ final class PosController
     /** @return array<string, mixed> */
     private static function buildReceiptPayload(PDO $pdo, int $tenantId, int $transactionId): array
     {
-        $st = $pdo->prepare(
-            'SELECT name, receipt_display_name, receipt_business_style, receipt_tax_id, receipt_phone, receipt_address, receipt_email, receipt_footer_note
-             FROM tenants
-             WHERE id = ?
-             LIMIT 1'
-        );
-        $st->execute([$tenantId]);
-        $tenant = $st->fetch(PDO::FETCH_ASSOC) ?: [];
-
-        $st = $pdo->prepare(
-            'SELECT total_amount, original_total_amount, amount_tendered, change_amount, payment_method, amount_paid, refunded_amount, added_paid_amount, created_at
-             FROM transactions WHERE id = ? AND tenant_id = ? LIMIT 1'
-        );
-        $st->execute([$transactionId, $tenantId]);
-        $tx = $st->fetch(PDO::FETCH_ASSOC) ?: [];
-
-        $st = $pdo->prepare(
-            'SELECT ti.quantity, ti.unit_price, ti.line_total, p.name AS product_name
-             FROM transaction_items ti
-             INNER JOIN products p ON p.id = ti.product_id AND p.tenant_id = ti.tenant_id
-             WHERE ti.transaction_id = ? AND ti.tenant_id = ?
-             ORDER BY ti.id ASC'
-        );
-        $st->execute([$transactionId, $tenantId]);
-        $lines = [];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $lines[] = [
-                'name' => (string) $row['product_name'],
-                'quantity' => (int) $row['quantity'],
-                'unit_price' => (float) $row['unit_price'],
-                'line_total' => (float) $row['line_total'],
-            ];
-        }
-
-        $phone = trim((string) ($tenant['receipt_phone'] ?? ''));
-        $address = trim((string) ($tenant['receipt_address'] ?? ''));
-        $email = trim((string) ($tenant['receipt_email'] ?? ''));
-        $displayName = trim((string) ($tenant['receipt_display_name'] ?? ''));
-        $businessStyle = trim((string) ($tenant['receipt_business_style'] ?? ''));
-        $taxId = trim((string) ($tenant['receipt_tax_id'] ?? ''));
-        $footerNote = trim((string) ($tenant['receipt_footer_note'] ?? ''));
-
-        return [
-            'transaction_id' => $transactionId,
-            'store_name' => (string) ($tenant['name'] ?? ''),
-            'display_name' => $displayName,
-            'business_style' => $businessStyle,
-            'tax_id' => $taxId,
-            'contact' => [
-                'phone' => $phone,
-                'address' => $address,
-                'email' => $email,
-            ],
-            'footer_note' => $footerNote,
-            'items' => $lines,
-            'grand_total' => (float) ($tx['total_amount'] ?? 0),
-            'original_total_amount' => array_key_exists('original_total_amount', $tx) && $tx['original_total_amount'] !== null ? (float) $tx['original_total_amount'] : null,
-            'amount_tendered' => array_key_exists('amount_tendered', $tx) && $tx['amount_tendered'] !== null ? (float) $tx['amount_tendered'] : null,
-            'change_amount' => array_key_exists('change_amount', $tx) && $tx['change_amount'] !== null ? (float) $tx['change_amount'] : null,
-            'payment_method' => array_key_exists('payment_method', $tx) && $tx['payment_method'] !== null ? (string) $tx['payment_method'] : null,
-            'amount_paid' => array_key_exists('amount_paid', $tx) && $tx['amount_paid'] !== null ? (float) $tx['amount_paid'] : null,
-            'refunded_amount' => array_key_exists('refunded_amount', $tx) ? (float) ($tx['refunded_amount'] ?? 0) : 0.0,
-            'added_paid_amount' => array_key_exists('added_paid_amount', $tx) ? (float) ($tx['added_paid_amount'] ?? 0) : 0.0,
-            'created_at' => $tx['created_at'] ?? null,
-        ];
+        return TransactionReceiptPayload::build($pdo, $tenantId, $transactionId);
     }
 }

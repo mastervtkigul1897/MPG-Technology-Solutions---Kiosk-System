@@ -45,6 +45,18 @@
                         <label class="form-label mb-1" for="product_image">Product image (optional)</label>
                         <input class="form-control" id="product_image" type="file" name="image" accept="image/jpeg,image/png,image/webp,image/gif" <?= $imgColAvailable ? '' : 'disabled' ?>>
                     </div>
+                    <div class="col-12 col-lg-2">
+                        <div class="form-check mt-4 pt-2">
+                            <input class="form-check-input" type="checkbox" id="product_has_flavor_options" name="has_flavor_options" value="1">
+                            <label class="form-check-label" for="product_has_flavor_options">Has flavors</label>
+                        </div>
+                    </div>
+                    <div class="col-12 col-lg-6">
+                        <label class="form-label mb-1">Flavor options (from Inventory)</label>
+                        <div id="productFlavorRows" class="vstack gap-2"></div>
+                        <button type="button" class="btn btn-sm btn-outline-primary mt-2" id="addProductFlavorRow"><i class="fa fa-plus me-1"></i>Add flavor row</button>
+                        <div class="form-text">Set flavor stock deduction per sold item (e.g. Cheese powder 0.25 pack).</div>
+                    </div>
                 </div>
             </div>
             <hr class="text-secondary opacity-25 my-3">
@@ -113,6 +125,17 @@
                     <div class="mb-3">
                         <label class="form-label" for="edit_product_price">Price</label>
                         <input type="number" step="any" min="0" class="form-control" id="edit_product_price" name="price" inputmode="decimal" required>
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="edit_product_has_flavor_options" name="has_flavor_options" value="1">
+                            <label class="form-check-label" for="edit_product_has_flavor_options">Has flavors</label>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Flavor options (from Inventory)</label>
+                        <div id="editProductFlavorRows" class="vstack gap-2"></div>
+                        <button type="button" class="btn btn-sm btn-outline-primary mt-2" id="addEditFlavorRow"><i class="fa fa-plus me-1"></i>Add flavor row</button>
                     </div>
                     <div class="mb-3">
                         <div class="form-check">
@@ -228,6 +251,12 @@ foreach ($ingredients as $i) {
 <script>
 (() => {
     const DECIMAL_SCALE = 16;
+    const escapeHtml = (s) => String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
     const toDecInputStr = (v) => {
         const x = Number(v);
         if (!Number.isFinite(x)) return '0';
@@ -240,6 +269,7 @@ foreach ($ingredients as $i) {
     const addBtn = document.getElementById('addRecipeRow');
     const ingredientOptions = <?= json_embed($ingredientOptionsHtml) ?>;
     const ingredientList = <?= json_embed($ingredients) ?>;
+    const flavorIngredients = (Array.isArray(ingredientList) ? ingredientList : []).filter((i) => String(i?.category || 'general').toLowerCase() === 'flavor');
     const existingImageMap = <?= json_embed($existingImageMap) ?>;
     let idx = 1;
     addBtn?.addEventListener('click', () => {
@@ -327,7 +357,18 @@ foreach ($ingredients as $i) {
                     return `<img src="${src}" alt="${name}" class="products-table-thumb">`;
                 },
             },
-            { data: 'name' },
+            {
+                data: 'name',
+                render: (data, type, row) => {
+                    if (type !== 'display') return data;
+                    const hasFlavors = !!row?.has_flavor_options;
+                    const flavorCount = Array.isArray(row?.flavors) ? row.flavors.length : 0;
+                    const flavorBadge = hasFlavors
+                        ? `<span class="badge text-bg-info ms-2">Flavors: ${flavorCount}</span>`
+                        : '';
+                    return `<span>${data || ''}</span>${flavorBadge}`;
+                },
+            },
             { data: 'price' },
             { data: 'status' },
             { data: 'ingredients' },
@@ -342,6 +383,12 @@ foreach ($ingredients as $i) {
     const editName = document.getElementById('edit_product_name');
     const editPrice = document.getElementById('edit_product_price');
     const editActive = document.getElementById('edit_product_is_active');
+    const createHasFlavor = document.getElementById('product_has_flavor_options');
+    const editHasFlavor = document.getElementById('edit_product_has_flavor_options');
+    const createFlavorRows = document.getElementById('productFlavorRows');
+    const editFlavorRows = document.getElementById('editProductFlavorRows');
+    const addCreateFlavorBtn = document.getElementById('addProductFlavorRow');
+    const addEditFlavorBtn = document.getElementById('addEditFlavorRow');
     const editExistingImage = document.getElementById('edit_existing_image_path');
     const editImage = document.getElementById('edit_product_image');
     const editRemoveImage = document.getElementById('edit_remove_image');
@@ -399,6 +446,45 @@ foreach ($ingredients as $i) {
 
     initExistingImageSelect('#product_existing_image_path');
     initExistingImageSelect('#edit_existing_image_path', '#editProductModal');
+    const renderFlavorRow = (idx, selectedId = '', qtyRequired = '1', prefix = 'flavor_recipe') => {
+        const opts = flavorIngredients.map((f) => {
+            const sid = String(selectedId || '');
+            const id = String(f.id || '');
+            const selected = sid === id ? 'selected' : '';
+            return `<option value="${id}" ${selected}>${escapeHtml(f.name || '')} (${escapeHtml(f.unit || '')})</option>`;
+        }).join('');
+        return `
+            <div class="row g-2 align-items-end product-flavor-row">
+                <div class="col-12 col-md-7">
+                    <label class="form-label mb-1">Flavor item</label>
+                    <select class="form-select" name="${prefix}[${idx}][ingredient_id]">
+                        <option value="">Select flavor</option>
+                        ${opts}
+                    </select>
+                </div>
+                <div class="col-8 col-md-4">
+                    <label class="form-label mb-1">Stock qty per sale</label>
+                    <input type="number" step="any" min="0" class="form-control" name="${prefix}[${idx}][quantity_required]" value="${toDecInputStr(qtyRequired)}" inputmode="decimal">
+                </div>
+                <div class="col-4 col-md-1">
+                    <button type="button" class="btn btn-danger w-100 remove-flavor-row" title="Remove flavor row"><i class="fa fa-trash"></i></button>
+                </div>
+            </div>
+        `;
+    };
+    let createFlavorIdx = 0;
+    let editFlavorIdx = 0;
+    const appendFlavorRow = (targetEl, selectedId, qtyRequired, prefix, isEdit = false) => {
+        if (!targetEl) return;
+        const idx = isEdit ? editFlavorIdx++ : createFlavorIdx++;
+        targetEl.insertAdjacentHTML('beforeend', renderFlavorRow(idx, selectedId, qtyRequired, prefix));
+    };
+    const ensureAtLeastOneFlavorRow = (targetEl, prefix, isEdit = false) => {
+        if (!targetEl) return;
+        if (!targetEl.querySelector('.product-flavor-row')) {
+            appendFlavorRow(targetEl, '', '1', prefix, isEdit);
+        }
+    };
 
     createExistingImage?.addEventListener('change', () => {
         if (createExistingImage?.value && createUploadInput) {
@@ -413,15 +499,34 @@ foreach ($ingredients as $i) {
         }
         renderExistingImagePreview(createExistingImage, createPreviewWrap, createPreviewImg);
     });
+    const syncFlavorEnabled = (checkboxEl, rowsEl, addBtn) => {
+        if (!checkboxEl || !rowsEl) return;
+        const enabled = checkboxEl.checked;
+        rowsEl.querySelectorAll('select,input,button').forEach((el) => { el.disabled = !enabled; });
+        if (addBtn) addBtn.disabled = !enabled;
+        if (!enabled) {
+            rowsEl.innerHTML = '';
+            ensureAtLeastOneFlavorRow(rowsEl, 'flavor_recipe', rowsEl === editFlavorRows);
+        }
+    };
+    addCreateFlavorBtn?.addEventListener('click', () => appendFlavorRow(createFlavorRows, '', '1', 'flavor_recipe', false));
+    addEditFlavorBtn?.addEventListener('click', () => appendFlavorRow(editFlavorRows, '', '1', 'flavor_recipe', true));
+    createFlavorRows?.addEventListener('click', (e) => {
+        const btn = e.target.closest('.remove-flavor-row');
+        if (!btn) return;
+        if ((createFlavorRows.querySelectorAll('.product-flavor-row').length || 0) > 1) btn.closest('.product-flavor-row')?.remove();
+    });
+    editFlavorRows?.addEventListener('click', (e) => {
+        const btn = e.target.closest('.remove-flavor-row');
+        if (!btn) return;
+        if ((editFlavorRows.querySelectorAll('.product-flavor-row').length || 0) > 1) btn.closest('.product-flavor-row')?.remove();
+    });
+    ensureAtLeastOneFlavorRow(createFlavorRows, 'flavor_recipe', false);
+    createHasFlavor?.addEventListener('change', () => syncFlavorEnabled(createHasFlavor, createFlavorRows, addCreateFlavorBtn));
+    editHasFlavor?.addEventListener('change', () => syncFlavorEnabled(editHasFlavor, editFlavorRows, addEditFlavorBtn));
+    syncFlavorEnabled(createHasFlavor, createFlavorRows, addCreateFlavorBtn);
 
     const renderIngredientOptions = (selectedId) => {
-        const escapeHtml = (s) => String(s ?? '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
-
         return ingredientList.map((i) => {
             const sid = String(i.id ?? '');
             const val = String(selectedId ?? '');
@@ -515,6 +620,20 @@ foreach ($ingredients as $i) {
         }
         if (editName) editName.value = rowData.name ?? '';
         if (editPrice) editPrice.value = rowData.price ?? '0.00';
+        if (editHasFlavor) {
+            editHasFlavor.checked = !!rowData.has_flavor_options;
+        }
+        if (editFlavorRows) {
+            editFlavorRows.innerHTML = '';
+            editFlavorIdx = 0;
+            const flavorRows = Array.isArray(rowData.flavors) ? rowData.flavors : [];
+            if (flavorRows.length) {
+                flavorRows.forEach((fr) => appendFlavorRow(editFlavorRows, String(fr.id || ''), String(fr.qty_required || '1'), 'flavor_recipe', true));
+            } else {
+                ensureAtLeastOneFlavorRow(editFlavorRows, 'flavor_recipe', true);
+            }
+        }
+        syncFlavorEnabled(editHasFlavor, editFlavorRows, addEditFlavorBtn);
         if (editActive) editActive.checked = !!rowData.is_active;
         if (editExistingImage) {
             const imgPath = rowData.image_path ?? '';

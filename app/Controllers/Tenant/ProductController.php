@@ -6,6 +6,7 @@ namespace App\Controllers\Tenant;
 
 use App\Core\App;
 use App\Core\Auth;
+use App\Core\FlavorSchema;
 use App\Core\Request;
 use App\Core\Response;
 use PDO;
@@ -35,6 +36,7 @@ final class ProductController
         $user = Auth::user();
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         $hasImagePath = self::hasImagePathColumn($pdo);
 
         if ($request->ajax() || $request->boolean('datatable')) {
@@ -87,6 +89,23 @@ final class ProductController
                     $ingHtml .= '<li>'.e($row['name']).' - '.format_stock((float) $row['quantity_required']).' '.e($row['unit']).'</li>';
                 }
                 $ingHtml .= '</ul>';
+                $stFl = $pdo->prepare(
+                    "SELECT i.id, i.name, pfi.quantity_required
+                     FROM product_flavor_ingredients pfi
+                     INNER JOIN ingredients i ON i.id = pfi.ingredient_id AND i.tenant_id = pfi.tenant_id
+                     WHERE pfi.tenant_id = ? AND pfi.product_id = ? AND LOWER(COALESCE(i.category, 'general')) = 'flavor'
+                     ORDER BY i.name ASC"
+                );
+                $stFl->execute([$tenantId, $pid]);
+                $flavors = [];
+                foreach ($stFl->fetchAll(PDO::FETCH_ASSOC) as $fr) {
+                    $flavors[] = [
+                        'id' => (int) ($fr['id'] ?? 0),
+                        'name' => (string) ($fr['name'] ?? ''),
+                        'qty_required' => (float) ($fr['quantity_required'] ?? 1),
+                    ];
+                }
+                $hasFlavors = (int) ($product['has_flavor_options'] ?? 0) === 1 && $flavors !== [];
 
                 $actions = '';
                 if (Auth::tenantMayManage($user, 'products')) {
@@ -110,6 +129,8 @@ final class ProductController
                     'status' => '<span class="badge '.($product['is_active'] ? 'text-bg-success' : 'text-bg-danger').'">'
                         .($product['is_active'] ? 'Active' : 'Inactive').'</span>',
                     'is_active' => (bool) $product['is_active'],
+                    'has_flavor_options' => $hasFlavors,
+                    'flavors' => $flavors,
                     'recipe' => $recipe,
                     'ingredients' => $ingHtml,
                     'actions' => $actions,
@@ -161,11 +182,28 @@ final class ProductController
         $price = round_money((float) $request->input('price'));
         $existingImagePath = trim((string) $request->input('existing_image_path', ''));
         $recipe = $request->input('recipe') ?? [];
+        $hasFlavorOptions = $request->boolean('has_flavor_options');
+        $flavorRecipe = $request->input('flavor_recipe') ?? [];
         if (! is_array($recipe)) {
             $recipe = [];
         }
+        if (! is_array($flavorRecipe)) {
+            $flavorRecipe = [];
+        }
+        $flavorRows = [];
+        foreach ($flavorRecipe as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $fid = (int) ($row['ingredient_id'] ?? 0);
+            $qty = round_stock((float) ($row['quantity_required'] ?? 0));
+            if ($fid > 0 && $qty >= stock_min_positive()) {
+                $flavorRows[$fid] = $qty;
+            }
+        }
 
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         $hasImagePath = self::hasImagePathColumn($pdo);
         if ($hasImagePath) {
             $imagePath = '';
@@ -195,6 +233,8 @@ final class ProductController
             )->execute([$tenantId, $name, $price]);
         }
         $productId = (int) $pdo->lastInsertId();
+        $pdo->prepare('UPDATE products SET has_flavor_options = ? WHERE tenant_id = ? AND id = ?')
+            ->execute([$hasFlavorOptions ? 1 : 0, $tenantId, $productId]);
 
         foreach ($recipe as $row) {
             if (! is_array($row)) {
@@ -210,6 +250,25 @@ final class ProductController
                  VALUES (?, ?, ?, ?, NOW(), NOW())'
             )->execute([$tenantId, $productId, $iid, $qty]);
         }
+        if ($hasFlavorOptions && $flavorRows !== []) {
+            $flavorIds = array_keys($flavorRows);
+            $place = implode(',', array_fill(0, count($flavorIds), '?'));
+            $stFl = $pdo->prepare(
+                "SELECT id FROM ingredients
+                 WHERE tenant_id = ? AND id IN ($place) AND LOWER(COALESCE(category, 'general')) = 'flavor'"
+            );
+            $stFl->execute(array_merge([$tenantId], $flavorIds));
+            $valid = array_map(static fn ($r): int => (int) ($r['id'] ?? 0), $stFl->fetchAll(PDO::FETCH_ASSOC));
+            foreach ($valid as $fid) {
+                if ($fid < 1) {
+                    continue;
+                }
+                $pdo->prepare(
+                    'INSERT INTO product_flavor_ingredients (tenant_id, product_id, ingredient_id, quantity_required, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, NOW(), NOW())'
+                )->execute([$tenantId, $productId, $fid, round_stock((float) ($flavorRows[$fid] ?? 1))]);
+            }
+        }
 
         return redirect(url('/tenant/products'));
     }
@@ -222,6 +281,7 @@ final class ProductController
         }
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         $hasImagePath = self::hasImagePathColumn($pdo);
 
         $st = $pdo->prepare('SELECT * FROM products WHERE tenant_id = ? AND id = ? LIMIT 1');
@@ -236,8 +296,24 @@ final class ProductController
         $isActive = $request->boolean('is_active');
         $existingImagePath = trim((string) $request->input('existing_image_path', ''));
         $recipe = $request->input('recipe') ?? [];
+        $hasFlavorOptions = $request->boolean('has_flavor_options');
+        $flavorRecipe = $request->input('flavor_recipe') ?? [];
         if (! is_array($recipe)) {
             $recipe = [];
+        }
+        if (! is_array($flavorRecipe)) {
+            $flavorRecipe = [];
+        }
+        $flavorRows = [];
+        foreach ($flavorRecipe as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $fid = (int) ($row['ingredient_id'] ?? 0);
+            $qty = round_stock((float) ($row['quantity_required'] ?? 0));
+            if ($fid > 0 && $qty >= stock_min_positive()) {
+                $flavorRows[$fid] = $qty;
+            }
         }
 
         if ($hasImagePath) {
@@ -271,12 +347,12 @@ final class ProductController
             }
 
             $pdo->prepare(
-                'UPDATE products SET name = ?, price = ?, image_path = ?, is_active = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?'
-            )->execute([$name, $price, $imagePath !== '' ? $imagePath : null, $isActive ? 1 : 0, (int) $id, $tenantId]);
+                'UPDATE products SET name = ?, price = ?, image_path = ?, is_active = ?, has_flavor_options = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?'
+            )->execute([$name, $price, $imagePath !== '' ? $imagePath : null, $isActive ? 1 : 0, $hasFlavorOptions ? 1 : 0, (int) $id, $tenantId]);
         } else {
             $pdo->prepare(
-                'UPDATE products SET name = ?, price = ?, is_active = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?'
-            )->execute([$name, $price, $isActive ? 1 : 0, (int) $id, $tenantId]);
+                'UPDATE products SET name = ?, price = ?, is_active = ?, has_flavor_options = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?'
+            )->execute([$name, $price, $isActive ? 1 : 0, $hasFlavorOptions ? 1 : 0, (int) $id, $tenantId]);
         }
 
         $pdo->prepare('DELETE FROM product_ingredients WHERE tenant_id = ? AND product_id = ?')->execute([$tenantId, (int) $id]);
@@ -294,6 +370,26 @@ final class ProductController
                  VALUES (?, ?, ?, ?, NOW(), NOW())'
             )->execute([$tenantId, (int) $id, $iid, $qty]);
         }
+        $pdo->prepare('DELETE FROM product_flavor_ingredients WHERE tenant_id = ? AND product_id = ?')->execute([$tenantId, (int) $id]);
+        if ($hasFlavorOptions && $flavorRows !== []) {
+            $flavorIds = array_keys($flavorRows);
+            $place = implode(',', array_fill(0, count($flavorIds), '?'));
+            $stFl = $pdo->prepare(
+                "SELECT id FROM ingredients
+                 WHERE tenant_id = ? AND id IN ($place) AND LOWER(COALESCE(category, 'general')) = 'flavor'"
+            );
+            $stFl->execute(array_merge([$tenantId], $flavorIds));
+            $valid = array_map(static fn ($r): int => (int) ($r['id'] ?? 0), $stFl->fetchAll(PDO::FETCH_ASSOC));
+            foreach ($valid as $fid) {
+                if ($fid < 1) {
+                    continue;
+                }
+                $pdo->prepare(
+                    'INSERT INTO product_flavor_ingredients (tenant_id, product_id, ingredient_id, quantity_required, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, NOW(), NOW())'
+                )->execute([$tenantId, (int) $id, $fid, round_stock((float) ($flavorRows[$fid] ?? 1))]);
+            }
+        }
 
         return redirect(url('/tenant/products'));
     }
@@ -306,6 +402,7 @@ final class ProductController
         }
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        FlavorSchema::ensure($pdo);
         $pid = (int) $id;
 
         $cnt = (int) $pdo->query(
@@ -324,6 +421,7 @@ final class ProductController
             }
 
             $pdo->prepare('DELETE FROM product_ingredients WHERE tenant_id = ? AND product_id = ?')->execute([$tenantId, $pid]);
+            $pdo->prepare('DELETE FROM product_flavor_ingredients WHERE tenant_id = ? AND product_id = ?')->execute([$tenantId, $pid]);
             $pdo->prepare('DELETE FROM products WHERE tenant_id = ? AND id = ?')->execute([$tenantId, $pid]);
             if ($imgPath !== '') {
                 $this->deleteUploadedImage($imgPath, $tenantId);

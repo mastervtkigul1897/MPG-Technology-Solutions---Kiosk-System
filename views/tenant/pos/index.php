@@ -200,6 +200,10 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
                     <button type="button" class="btn btn-primary text-white mpg-btn-bluetooth-thermal w-100 mpg-receipt-action-btn" id="receiptPrintBleBtn" title="Bluetooth print"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
                     <button type="button" class="btn btn-secondary text-white w-100 mpg-receipt-action-btn" id="receiptOkBtn" data-bs-dismiss="modal">OK</button>
                 </div>
+                <div class="w-100 d-flex flex-wrap gap-2 align-items-center justify-content-center mpg-btn-bluetooth-thermal">
+                    <span class="small text-muted" id="receiptBleSavedHint">No saved Bluetooth printer yet.</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="receiptBleChangeBtn">Change Bluetooth printer</button>
+                </div>
             </div>
         </div>
     </div>
@@ -232,10 +236,10 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
 </div>
 
 <style>
-/* Thermal receipt print: 55mm roll, black & white, one continuous “page” (no blank sheet) */
+/* Thermal receipt print: 60mm roll, black & white, one continuous “page” (no blank sheet) */
 @media print {
     @page {
-        size: 55mm auto;
+        size: 60mm auto;
         margin: 0;
     }
     html, body {
@@ -259,7 +263,7 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
     #receiptModal {
         position: absolute !important;
         inset: 0 auto auto 0 !important;
-        width: 55mm !important;
+        width: 60mm !important;
         max-width: 100% !important;
         margin: 0 !important;
         padding: 0 !important;
@@ -268,8 +272,8 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
         filter: none !important;
     }
     #receiptModal .modal-dialog {
-        max-width: 55mm !important;
-        width: 55mm !important;
+        max-width: 60mm !important;
+        width: 60mm !important;
         margin: 0 !important;
         height: auto !important;
     }
@@ -322,6 +326,11 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
     }
     #receiptModal .receipt-dash {
         border-top-color: #000 !important;
+    }
+    #receiptModal .receipt-paper.receipt-unpaid-prep .receipt-unpaid-watermark {
+        color: rgba(0, 0, 0, 0.18) !important;
+        print-color-adjust: exact !important;
+        -webkit-print-color-adjust: exact !important;
     }
     .pos-order-summary-float {
         position: static !important;
@@ -454,7 +463,7 @@ body.branch-select-open .pos-order-summary-float {
 }
 .receipt-paper {
     width: 100%;
-    max-width: 55mm;
+    max-width: 60mm;
     margin: 0 auto;
     padding: .45rem .55rem;
     border: 1px dashed #adb5bd;
@@ -498,6 +507,27 @@ body.branch-select-open .pos-order-summary-float {
 }
 .receipt-item-price-line {
     margin-bottom: 0.35rem;
+}
+.receipt-unpaid-prep {
+    position: relative;
+    overflow: hidden;
+}
+.receipt-unpaid-watermark {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    font-size: 2.1rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: rgba(0, 0, 0, 0.11);
+    transform: rotate(-22deg);
+    user-select: none;
+}
+.receipt-unpaid-banner {
+    letter-spacing: 0.04em;
 }
 </style>
 
@@ -548,6 +578,11 @@ body.branch-select-open .pos-order-summary-float {
     };
     const toMoneyInputStr = (n) => roundMoneyVal(n).toFixed(MONEY_DECIMALS);
     const money = (n) => Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: MONEY_DECIMALS, maximumFractionDigits: MONEY_DECIMALS });
+    const escapeHtml = (s) => String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
     const cart = {};
     const wrap = document.getElementById('cartWrap');
     const itemsEl = document.getElementById('checkoutItems');
@@ -556,6 +591,11 @@ body.branch-select-open .pos-order-summary-float {
 
     const getOutOfStockIngredient = (product, qty) => {
         return (product.ingredients || []).find(i => (i.stock_quantity - (i.qty_required * qty)) < 0);
+    };
+    const getOutOfStockFlavor = (flavor, qty) => {
+        const stock = Number(flavor?.stock_quantity || 0);
+        const req = Number(flavor?.qty_required || 1);
+        return (stock - (qty * req)) < 0;
     };
     const willReachLow = (product, qty) => {
         return (product.ingredients || []).some(i => (i.stock_quantity - (i.qty_required * qty)) <= i.low_stock_threshold);
@@ -579,21 +619,22 @@ body.branch-select-open .pos-order-summary-float {
                 entries.map(item => {
                     const subtotal = item.price * item.quantity;
                     total += subtotal;
+                    const lineName = item.flavor_name ? `${item.name} - ${item.flavor_name}` : item.name;
                     return `<tr>
-                        <td>${item.name}</td>
+                        <td>${lineName}</td>
                         <td class="text-center fw-semibold">${item.quantity}</td>
                         <td class="text-end">PHP ${money(subtotal)}</td>
                         <td class="text-end">
                             <div class="pos-cart-actions">
-                                <button class="btn btn-sm btn-outline-secondary minus" data-id="${item.product_id}" title="Minus quantity">-</button>
-                                <button class="btn btn-sm btn-outline-secondary plus" data-id="${item.product_id}" title="Add quantity">+</button>
-                                <button class="btn btn-sm btn-outline-danger rem" data-id="${item.product_id}" title="Remove item"><i class="fa fa-trash"></i></button>
+                                <button class="btn btn-sm btn-outline-secondary minus" data-key="${item.cart_key}" title="Minus quantity">-</button>
+                                <button class="btn btn-sm btn-outline-secondary plus" data-key="${item.cart_key}" title="Add quantity">+</button>
+                                <button class="btn btn-sm btn-outline-danger rem" data-key="${item.cart_key}" title="Remove item"><i class="fa fa-trash"></i></button>
                             </div>
                         </td>
                     </tr>`;
                 }).join('')
             }</tbody></table></div>`;
-            itemsEl.innerHTML = entries.map((item, idx) => `<input type="hidden" name="items[${idx}][product_id]" value="${item.product_id}"><input type="hidden" name="items[${idx}][quantity]" value="${item.quantity}">`).join('');
+            itemsEl.innerHTML = entries.map((item, idx) => `<input type="hidden" name="items[${idx}][product_id]" value="${item.product_id}"><input type="hidden" name="items[${idx}][quantity]" value="${item.quantity}"><input type="hidden" name="items[${idx}][flavor_ingredient_id]" value="${Number(item.flavor_ingredient_id || 0)}">`).join('');
             totalEl.textContent = money(total);
         }
 
@@ -602,7 +643,9 @@ body.branch-select-open .pos-order-summary-float {
             const pid = Number(card.dataset.productId);
             const p = byId[pid];
             if (!p) return;
-            const currentQty = cart[p.id]?.quantity || 0;
+            const currentQty = Object.values(cart)
+                .filter((ci) => Number(ci.product_id || 0) === p.id)
+                .reduce((sum, ci) => sum + Number(ci.quantity || 0), 0);
             const danger = currentQty > 0 && willReachLow(p, currentQty);
             card.classList.toggle('border-danger', danger);
             card.classList.toggle('border-primary', !danger);
@@ -625,18 +668,62 @@ body.branch-select-open .pos-order-summary-float {
     };
 
     const productsRoot = document.getElementById('posCategoryAccordion') ?? document.body;
-    productsRoot.addEventListener('click', (e) => {
+    productsRoot.addEventListener('click', async (e) => {
         const add = e.target.closest('.add-cart');
         const details = e.target.closest('.view-details');
         if (add) {
             const id = Number(add.dataset.productId);
             const p = byId[id];
             if (!p) return;
-            const nextQty = (cart[id]?.quantity || 0) + 1;
+            let flavorId = 0;
+            let flavorName = '';
+            if (p.has_flavor_options && Array.isArray(p.flavors) && p.flavors.length) {
+                const cards = p.flavors
+                    .map((f) => `<button type="button" class="btn btn-outline-primary text-start w-100 swal-flavor-card" data-id="${Number(f.id || 0)}">${escapeHtml(f.name || '')}</button>`)
+                    .join('');
+                let pickedFlavorId = 0;
+                await Swal.fire({
+                    title: `Select flavor for ${p.name}`,
+                    html: `<div class="text-start"><div class="d-grid gap-2" id="swalFlavorCards">${cards}</div></div>`,
+                    showConfirmButton: false,
+                    showCancelButton: false,
+                    allowOutsideClick: true,
+                    didOpen: () => {
+                        const cardEls = Array.from(document.querySelectorAll('#swalFlavorCards .swal-flavor-card'));
+                        cardEls.forEach((btn) => {
+                            btn.addEventListener('click', () => {
+                                pickedFlavorId = Number(btn.getAttribute('data-id') || 0);
+                                Swal.close();
+                            });
+                        });
+                    },
+                });
+                flavorId = Number(pickedFlavorId || 0);
+                if (flavorId < 1) return;
+                const flavorObj = (p.flavors || []).find((f) => Number(f.id || 0) === flavorId) || null;
+                if (!flavorObj) return;
+                flavorName = String(flavorObj.name || '');
+            }
+            const cartKey = `${id}:${flavorId}`;
+            const nextQty = (cart[cartKey]?.quantity || 0) + 1;
             const out = getOutOfStockIngredient(p, nextQty);
             if (out) return alertOut(p, out);
-            cart[id] = cart[id] || { product_id: p.id, name: p.name, price: p.price, quantity: 0 };
-            cart[id].quantity += 1;
+            if (flavorId > 0) {
+                const flavorObj = (p.flavors || []).find((f) => Number(f.id || 0) === flavorId) || null;
+                if (getOutOfStockFlavor(flavorObj, nextQty)) {
+                    return Swal.fire({ icon: 'warning', title: 'Out of stock', text: `${p.name}: ${flavorName} flavor is out of stock.` });
+                }
+            }
+            cart[cartKey] = cart[cartKey] || {
+                cart_key: cartKey,
+                product_id: p.id,
+                flavor_ingredient_id: flavorId,
+                flavor_name: flavorName,
+                name: p.name,
+                price: p.price,
+                quantity: 0,
+            };
+            cart[cartKey].quantity += 1;
             renderCart();
         }
         if (details) {
@@ -658,32 +745,35 @@ body.branch-select-open .pos-order-summary-float {
         const minus = e.target.closest('.minus');
         const rem = e.target.closest('.rem');
         if (plus) {
-            const id = Number(plus.dataset.id);
+            const key = String(plus.dataset.key || '');
+            const item = cart[key];
+            if (!item) return;
+            const id = Number(item.product_id);
             const p = byId[id];
             if (!p) return;
-            const next = cart[id].quantity + 1;
+            const next = item.quantity + 1;
             const out = getOutOfStockIngredient(p, next);
             if (out) return alertOut(p, out);
-            cart[id].quantity = next;
+            if (Number(item.flavor_ingredient_id || 0) > 0) {
+                const flavorObj = (p.flavors || []).find((f) => Number(f.id || 0) === Number(item.flavor_ingredient_id || 0)) || null;
+                if (getOutOfStockFlavor(flavorObj, next)) {
+                    return Swal.fire({ icon: 'warning', title: 'Out of stock', text: `${p.name}: ${item.flavor_name} flavor is out of stock.` });
+                }
+            }
+            cart[key].quantity = next;
             renderCart();
         }
         if (minus) {
-            const id = Number(minus.dataset.id);
-            if (!cart[id]) return;
-            cart[id].quantity = Math.max(1, cart[id].quantity - 1);
+            const key = String(minus.dataset.key || '');
+            if (!cart[key]) return;
+            cart[key].quantity = Math.max(1, cart[key].quantity - 1);
             renderCart();
         }
         if (rem) {
-            delete cart[Number(rem.dataset.id)];
+            delete cart[String(rem.dataset.key || '')];
             renderCart();
         }
     });
-
-    const escapeHtml = (s) => String(s ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
 
     const buildReceiptHtml = (r) => {
         const c = r.contact || {};
@@ -691,26 +781,37 @@ body.branch-select-open .pos-order-summary-float {
         const businessStyle = String(r.business_style || '').trim();
         const taxId = String(r.tax_id || '').trim();
         const footerNote = String(r.footer_note || '').trim();
+        const isUnpaidPrep = !!(r.unpaid_prep_receipt || r.kitchen_slip || r.unpaid_watermark);
         const lines = [];
-        lines.push('<div class="receipt-paper">');
+        lines.push(`<div class="receipt-paper${isUnpaidPrep ? ' receipt-unpaid-prep' : ''}">`);
+        if (isUnpaidPrep) {
+            lines.push('<div class="receipt-unpaid-watermark" aria-hidden="true">UNPAID</div>');
+            const pn = String(r.pending_customer_name || '').trim();
+            if (pn) lines.push(`<div class="receipt-center receipt-bold">For: ${escapeHtml(pn)}</div>`);
+            const pc = String(r.pending_customer_contact || '').trim();
+            if (pc) lines.push(`<div class="receipt-center receipt-muted">Contact: ${escapeHtml(pc)}</div>`);
+            if (pn || pc) lines.push('<div class="receipt-dash"></div>');
+        }
         lines.push(`<div class="receipt-center receipt-bold">${escapeHtml(displayName)}</div>`);
-        if (businessStyle) {
+        if (businessStyle && !isUnpaidPrep) {
             lines.push(`<div class="receipt-center receipt-muted">${escapeHtml(businessStyle)}</div>`);
         }
-        if (taxId) {
+        if (taxId && !isUnpaidPrep) {
             lines.push(`<div class="receipt-center">TIN: ${escapeHtml(taxId)}</div>`);
         }
         lines.push('<div class="receipt-dash"></div>');
-        const contactBits = [];
-        if (c.phone) contactBits.push(`<div>Phone: ${escapeHtml(c.phone)}</div>`);
-        if (c.address) contactBits.push(`<div>${escapeHtml(c.address).replace(/\\n/g, '<br>')}</div>`);
-        if (c.email) contactBits.push(`<div>Email: ${escapeHtml(c.email)}</div>`);
-        if (contactBits.length) {
-            lines.push(`<div>${contactBits.join('')}</div>`);
-        } else {
-            lines.push('<div class="receipt-muted">No store contact on file.</div>');
+        if (!isUnpaidPrep) {
+            const contactBits = [];
+            if (c.phone) contactBits.push(`<div>Phone: ${escapeHtml(c.phone)}</div>`);
+            if (c.address) contactBits.push(`<div>${escapeHtml(c.address).replace(/\n/g, '<br>')}</div>`);
+            if (c.email) contactBits.push(`<div>Email: ${escapeHtml(c.email)}</div>`);
+            if (contactBits.length) {
+                lines.push(`<div>${contactBits.join('')}</div>`);
+            } else {
+                lines.push('<div class="receipt-muted">No store contact on file.</div>');
+            }
+            lines.push('<div class="receipt-dash"></div>');
         }
-        lines.push('<div class="receipt-dash"></div>');
         lines.push('<div class="receipt-row receipt-bold"><span class="left">Item</span><span class="right">Amount</span></div>');
         lines.push('<div class="receipt-dash"></div>');
         const formatQty = (q) => {
@@ -727,60 +828,17 @@ body.branch-select-open .pos-order-summary-float {
             if (!Number.isFinite(unit) || Math.abs(unit) <= MONEY_EPS) {
                 unit = Number.isFinite(q) && q > MONEY_EPS && Number.isFinite(lt) ? lt / q : 0;
             }
-            lines.push(`<div class="receipt-item-name">${escapeHtml(it.name)}</div>`);
+            const itemName = String(it.name || '');
+            const flavorName = String(it.flavor_name || '').trim();
+            lines.push(`<div class="receipt-item-name">${escapeHtml(itemName)}</div>`);
+            if (flavorName) {
+                lines.push(`<div class="receipt-item-name receipt-muted">  - ${escapeHtml(flavorName)}</div>`);
+            }
             lines.push(`<div class="receipt-row receipt-item-price-line"><span class="left">${money(unit)} × ${formatQty(it.quantity)}</span><span class="right">${money(it.line_total)}</span></div>`);
         });
         lines.push('<div class="receipt-dash"></div>');
         lines.push(`<div class="receipt-row receipt-bold"><span class="left">TOTAL</span><span class="right">${money(r.grand_total)}</span></div>`);
-        // PH VAT (12%) breakdown (VAT-inclusive total): VAT = Total * 12/112; VATable Sales = Total - VAT
-        const totalForVat = Number(r.grand_total || 0);
-        const vatAmount = totalForVat > 0 ? (totalForVat * (12 / 112)) : 0;
-        const vatableSales = Math.max(0, totalForVat - vatAmount);
-        lines.push(`<div class="receipt-row"><span class="left">VATABLE SALES</span><span class="right">${money(vatableSales)}</span></div>`);
-        lines.push(`<div class="receipt-row"><span class="left">VAT (12%)</span><span class="right">${money(vatAmount)}</span></div>`);
-        const tendered = r.amount_tendered != null ? Number(r.amount_tendered) : null;
-        const change = r.change_amount != null ? Number(r.change_amount) : null;
-        const ch0 = change != null ? change : 0;
-        const pm = String(r.payment_method || '').trim().toLowerCase();
-        const pmLabel = pm ? pm.toUpperCase().replace(/_/g, ' ') : '';
-        if (pmLabel) lines.push(`<div class="receipt-row"><span class="left">PAYMENT</span><span class="right">${escapeHtml(pmLabel)}</span></div>`);
-        const refunded = r.refunded_amount != null ? Number(r.refunded_amount) : 0;
-        const added = r.added_paid_amount != null ? Number(r.added_paid_amount) : 0;
-        const basePaid = pm === 'cash'
-            ? (tendered != null ? tendered : null)
-            : (r.amount_paid != null ? Number(r.amount_paid) : (tendered != null ? tendered : null));
-        // Apply refunds FIFO: refund reduces base first, then additional.
-        const baseAfterRefund = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, basePaid - refunded) : null;
-        const remainingRefundAfterBase = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, refunded - basePaid) : refunded;
-        const addedAfterRefund = Number.isFinite(added) ? Math.max(0, added - remainingRefundAfterBase) : 0;
-        const netPaid = (baseAfterRefund != null && Number.isFinite(baseAfterRefund))
-            ? Math.max(0, baseAfterRefund + addedAfterRefund)
-            : null;
-        if (pm === 'cash' && basePaid != null) {
-            lines.push(`<div class="receipt-row"><span class="left">NET TO ORDER</span><span class="right">${money(basePaid)}</span></div>`);
-            if (tendered != null && Number.isFinite(tendered) && Math.abs(tendered - basePaid) > MONEY_EPS) {
-                lines.push(`<div class="receipt-row receipt-muted"><span class="left">Cash tendered</span><span class="right">${money(tendered)}</span></div>`);
-            }
-        } else if (basePaid != null) {
-            lines.push(`<div class="receipt-row"><span class="left">AMOUNT PAID</span><span class="right">${money(baseAfterRefund ?? basePaid)}</span></div>`);
-        }
-        if (refunded != null && Number.isFinite(refunded) && refunded > 0) {
-            lines.push(`<div class="receipt-row"><span class="left">REFUND</span><span class="right">-${money(refunded)}</span></div>`);
-        }
-        if (addedAfterRefund != null && Number.isFinite(addedAfterRefund) && addedAfterRefund > 0) {
-            lines.push(`<div class="receipt-row"><span class="left">ADDITIONAL PAID</span><span class="right">${money(addedAfterRefund)}</span></div>`);
-        }
-        if (netPaid != null) {
-            lines.push(`<div class="receipt-row receipt-bold"><span class="left">NET PAID</span><span class="right">${money(netPaid)}</span></div>`);
-        }
-        // After any edit adjustment (refund/additional), treat this receipt as final settlement.
-        // Change from the original payment is no longer meaningful.
-        const hasAdjust = (Number.isFinite(refunded) && refunded > 0) || (Number.isFinite(added) && added > 0);
-        const finalChange = hasAdjust ? 0 : change;
-        if (finalChange != null && Number.isFinite(finalChange)) {
-            lines.push(`<div class="receipt-row"><span class="left">CHANGE</span><span class="right">${money(finalChange)}</span></div>`);
-        }
-        lines.push('<div class="receipt-dash"></div>');
+
         const tid = r.transaction_id != null ? `#${r.transaction_id}` : '';
         let when = '';
         if (r.created_at) {
@@ -788,13 +846,72 @@ body.branch-select-open .pos-order-summary-float {
             when = !Number.isNaN(d.getTime()) ? d.toLocaleString() : escapeHtml(r.created_at);
         }
         const meta = `${when || ''}${tid ? ` ${tid}` : ''}`.trim();
-        if (meta) {
-            lines.push(`<div class="receipt-center receipt-muted">${meta}</div>`);
-        }
-        lines.push('<div class="receipt-center">Thank you for your purchase!</div>');
-        lines.push('<div class="receipt-bottom-spacer" aria-hidden="true"></div>');
-        if (footerNote) {
-            lines.push(`<div class="receipt-center receipt-muted">${escapeHtml(footerNote).replace(/\\n/g, '<br>')}</div>`);
+
+        if (isUnpaidPrep) {
+            lines.push('<div class="receipt-dash"></div>');
+            lines.push('<div class="receipt-center receipt-bold">UNPAID</div>');
+            lines.push('<div class="receipt-bottom-spacer" aria-hidden="true"></div>');
+        } else {
+            const totalForVat = Number(r.grand_total || 0);
+            const vatAmount = totalForVat > 0 ? (totalForVat * (12 / 112)) : 0;
+            const vatableSales = Math.max(0, totalForVat - vatAmount);
+            lines.push(`<div class="receipt-row"><span class="left">VATABLE SALES</span><span class="right">${money(vatableSales)}</span></div>`);
+            lines.push(`<div class="receipt-row"><span class="left">VAT (12%)</span><span class="right">${money(vatAmount)}</span></div>`);
+            const tendered = r.amount_tendered != null ? Number(r.amount_tendered) : null;
+            const change = r.change_amount != null ? Number(r.change_amount) : null;
+            const ch0 = change != null ? change : 0;
+            const pm = String(r.payment_method || '').trim().toLowerCase();
+            const pmLabel = pm ? pm.toUpperCase().replace(/_/g, ' ') : '';
+            if (pmLabel) lines.push(`<div class="receipt-row"><span class="left">PAYMENT</span><span class="right">${escapeHtml(pmLabel)}</span></div>`);
+            const refunded = r.refunded_amount != null ? Number(r.refunded_amount) : 0;
+            const added = r.added_paid_amount != null ? Number(r.added_paid_amount) : 0;
+            const ap = r.amount_paid != null ? Number(r.amount_paid) : 0;
+            const basePaid = pm === 'cash'
+                ? (ap > MONEY_EPS ? ap : (tendered != null ? Math.max(0, tendered - ch0) : null))
+                : (r.amount_paid != null ? Number(r.amount_paid) : (tendered != null ? tendered : null));
+            const baseAfterRefund = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, basePaid - refunded) : null;
+            const remainingRefundAfterBase = basePaid != null && Number.isFinite(basePaid) ? Math.max(0, refunded - basePaid) : refunded;
+            const addedAfterRefund = Number.isFinite(added) ? Math.max(0, added - remainingRefundAfterBase) : 0;
+            const netPaid = (baseAfterRefund != null && Number.isFinite(baseAfterRefund))
+                ? Math.max(0, baseAfterRefund + addedAfterRefund)
+                : null;
+            if (pm === 'cash' && basePaid != null) {
+                lines.push(`<div class="receipt-row"><span class="left">NET TO ORDER</span><span class="right">${money(basePaid)}</span></div>`);
+                if (tendered != null && Number.isFinite(tendered) && Math.abs(tendered - basePaid) > MONEY_EPS) {
+                    lines.push(`<div class="receipt-row receipt-muted"><span class="left">Cash tendered</span><span class="right">${money(tendered)}</span></div>`);
+                }
+            } else if (basePaid != null) {
+                lines.push(`<div class="receipt-row"><span class="left">AMOUNT PAID</span><span class="right">${money(baseAfterRefund ?? basePaid)}</span></div>`);
+            }
+            if (refunded != null && Number.isFinite(refunded) && refunded > 0) {
+                lines.push(`<div class="receipt-row"><span class="left">REFUND</span><span class="right">-${money(refunded)}</span></div>`);
+            }
+            if (addedAfterRefund != null && Number.isFinite(addedAfterRefund) && addedAfterRefund > 0) {
+                lines.push(`<div class="receipt-row"><span class="left">ADDITIONAL PAID</span><span class="right">${money(addedAfterRefund)}</span></div>`);
+            }
+            if (netPaid != null) {
+                lines.push(`<div class="receipt-row receipt-bold"><span class="left">NET PAID</span><span class="right">${money(netPaid)}</span></div>`);
+            }
+            const hasAdjust = (Number.isFinite(refunded) && refunded > 0) || (Number.isFinite(added) && added > 0);
+            const finalChange = hasAdjust ? 0 : change;
+            if (finalChange != null && Number.isFinite(finalChange)) {
+                lines.push(`<div class="receipt-row"><span class="left">CHANGE</span><span class="right">${money(finalChange)}</span></div>`);
+            }
+            lines.push('<div class="receipt-dash"></div>');
+            if (meta) {
+                lines.push(`<div class="receipt-center receipt-muted">${meta}</div>`);
+            }
+            lines.push('<div class="receipt-center">Thank you for your purchase!</div>');
+            if (footerNote) {
+                const footerLines = footerNote
+                    .split(/\r\n|\n|\r/g)
+                    .map((x) => String(x || '').trim())
+                    .filter(Boolean);
+                if (footerLines.length) {
+                    lines.push(`<div class="receipt-center receipt-muted">${footerLines.map((x) => escapeHtml(x)).join('<br>')}</div>`);
+                }
+            }
+            lines.push('<div class="receipt-bottom-spacer" aria-hidden="true"></div>');
         }
         lines.push('</div>');
         return lines.join('');
@@ -866,14 +983,45 @@ body.branch-select-open .pos-order-summary-float {
             if (typeof window.mpgWriteEscposBluetooth !== 'function') {
                 throw new Error('Bluetooth print module not loaded. Refresh the page.');
             }
-            await window.mpgWriteEscposBluetooth(bytes);
-            Swal.fire({ icon: 'success', title: 'Sent to Bluetooth printer', timer: 1800, showConfirmButton: false });
+            const copies = Number.isFinite(Number(thermalCfg.lanCopies)) ? Math.max(1, Number(thermalCfg.lanCopies)) : 1;
+            const base = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+            let payload = base;
+            if (copies > 1 && base.length > 0) {
+                payload = new Uint8Array(base.length * copies);
+                for (let i = 0; i < copies; i += 1) {
+                    payload.set(base, i * base.length);
+                }
+            }
+            await window.mpgWriteEscposBluetooth(payload);
+            const rmEl = document.getElementById('receiptModal');
+            if (rmEl) {
+                const inst = bootstrap.Modal.getInstance(rmEl) ?? bootstrap.Modal.getOrCreateInstance(rmEl);
+                inst.hide();
+            }
         } catch (err) {
             Swal.close();
             if (err?.name === 'NotFoundError' || err?.name === 'SecurityError') return;
             Swal.fire({ icon: 'error', title: 'Bluetooth printing failed', text: String(err?.message || err) });
         }
     });
+    const receiptBleSavedHint = document.getElementById('receiptBleSavedHint');
+    const refreshReceiptBleHint = () => {
+        if (!receiptBleSavedHint) return;
+        const hasSaved = typeof window.mpgHasRememberedBluetoothDevice === 'function'
+            ? !!window.mpgHasRememberedBluetoothDevice()
+            : false;
+        receiptBleSavedHint.textContent = hasSaved
+            ? 'Saved Bluetooth printer will be used automatically.'
+            : 'No saved Bluetooth printer yet.';
+    };
+    document.getElementById('receiptBleChangeBtn')?.addEventListener('click', () => {
+        if (typeof window.mpgClearEscposBluetoothDevice === 'function') {
+            window.mpgClearEscposBluetoothDevice();
+        }
+        refreshReceiptBleHint();
+        Swal.fire({ icon: 'info', title: 'Bluetooth printer reset', text: 'Next Bluetooth print will ask you to select a printer.' });
+    });
+    refreshReceiptBleHint();
 
     document.getElementById('checkoutBtn').addEventListener('click', async () => {
         if (!Object.keys(cart).length) return Swal.fire({ icon: 'warning', title: 'Cart is empty' });
@@ -882,11 +1030,17 @@ body.branch-select-open .pos-order-summary-float {
         // This catches insufficient stocks in the current cart quantities.
         for (const id of Object.keys(cart)) {
             const item = cart[id];
-            const p = byId[Number(id)];
+            const p = byId[Number(item.product_id || 0)];
             if (!p || !item) continue;
             const out = getOutOfStockIngredient(p, Number(item.quantity || 0));
             if (out) {
                 return alertCheckoutOut(p, out);
+            }
+            if (Number(item.flavor_ingredient_id || 0) > 0) {
+                const flavorObj = (p.flavors || []).find((f) => Number(f.id || 0) === Number(item.flavor_ingredient_id || 0)) || null;
+                if (getOutOfStockFlavor(flavorObj, Number(item.quantity || 0))) {
+                    return Swal.fire({ icon: 'warning', title: 'Out of stock', text: `${p.name}: ${item.flavor_name} flavor is out of stock.` });
+                }
             }
         }
 
@@ -896,14 +1050,15 @@ body.branch-select-open .pos-order-summary-float {
             html: `
                 <div class="text-start">
                     <label class="form-label mb-1">Mode of payment</label>
-                    <select id="swalPaymentMethod" class="form-select mb-2">
-                        <option value="cash">Cash</option>
-                        <option value="card">Card</option>
-                        <option value="gcash">GCash</option>
-                        <option value="paymaya">PayMaya</option>
-                        <option value="online_banking">Online Banking</option>
-                        <option value="free">Free (Employee)</option>
-                    </select>
+                    <input type="hidden" id="swalPaymentMethod" value="cash">
+                    <div class="d-grid gap-2 mb-2" id="swalPaymentCards">
+                        <button type="button" class="btn btn-primary text-start swal-payment-card" data-method="cash"><i class="fa-solid fa-money-bill-wave me-2"></i>Cash</button>
+                        <button type="button" class="btn btn-outline-primary text-start swal-payment-card" data-method="card"><i class="fa-solid fa-credit-card me-2"></i>Card</button>
+                        <button type="button" class="btn btn-outline-primary text-start swal-payment-card" data-method="gcash"><i class="fa-solid fa-mobile-screen-button me-2"></i>GCash</button>
+                        <button type="button" class="btn btn-outline-primary text-start swal-payment-card" data-method="paymaya"><i class="fa-solid fa-wallet me-2"></i>PayMaya</button>
+                        <button type="button" class="btn btn-outline-primary text-start swal-payment-card" data-method="online_banking"><i class="fa-solid fa-building-columns me-2"></i>Online Banking</button>
+                        <button type="button" class="btn btn-outline-primary text-start swal-payment-card" data-method="free"><i class="fa-solid fa-gift me-2"></i>Free (Employee)</button>
+                    </div>
                     <label class="form-label mb-1">Amount received</label>
                     <input id="swalAmountReceived" class="form-control" placeholder="0.00" inputmode="decimal" autocomplete="off">
                     <div id="swalQuickAmounts" class="d-flex flex-wrap gap-2 mt-2"></div>
@@ -914,11 +1069,21 @@ body.branch-select-open .pos-order-summary-float {
             confirmButtonText: 'Proceed',
             didOpen: () => {
                 const methodEl = document.getElementById('swalPaymentMethod');
+                const paymentCards = Array.from(document.querySelectorAll('#swalPaymentCards .swal-payment-card'));
                 const amtEl = document.getElementById('swalAmountReceived');
                 const quickWrap = document.getElementById('swalQuickAmounts');
                 const total = Number(totalEl?.textContent?.replace(/,/g, '') || 0);
+                const setActiveMethodCard = (method) => {
+                    paymentCards.forEach((btn) => {
+                        const isActive = String(btn.getAttribute('data-method') || '') === method;
+                        btn.classList.toggle('btn-primary', isActive);
+                        btn.classList.toggle('text-white', isActive);
+                        btn.classList.toggle('btn-outline-primary', !isActive);
+                    });
+                };
                 const sync = () => {
                     const method = String(methodEl?.value || 'cash');
+                    setActiveMethodCard(method);
                     if (method !== 'cash' && method !== 'free') {
                         amtEl.value = toMoneyInputStr(total);
                         amtEl.disabled = true;
@@ -954,7 +1119,13 @@ body.branch-select-open .pos-order-summary-float {
                         }
                     }
                 };
-                methodEl?.addEventListener('change', sync);
+                paymentCards.forEach((btn) => {
+                    btn.addEventListener('click', () => {
+                        const method = String(btn.getAttribute('data-method') || 'cash');
+                        if (methodEl) methodEl.value = method;
+                        sync();
+                    });
+                });
                 sync();
                 // Focus only when Enter amount is tapped.
             },
@@ -1001,6 +1172,8 @@ body.branch-select-open .pos-order-summary-float {
                 return Swal.fire({ icon: 'error', title: 'Checkout failed', text: body.message || 'Please try again.' });
             }
             lastReceiptObject = body.receipt || null;
+            const rmTitle = document.getElementById('receiptModalTitle');
+            if (rmTitle) rmTitle.textContent = 'Receipt (customer)';
             document.getElementById('receiptPrintArea').innerHTML = buildReceiptHtml(body.receipt);
             bootstrap.Modal.getOrCreateInstance(document.getElementById('receiptModal')).show();
             Object.keys(cart).forEach((k) => { delete cart[k]; });
@@ -1043,7 +1216,7 @@ body.branch-select-open .pos-order-summary-float {
             return Swal.fire({ icon: 'warning', title: 'Name is required', text: 'Please enter the creditor name.' });
         }
 
-        const entries = Object.values(cart).map((c) => ({ product_id: c.product_id, quantity: c.quantity }));
+        const entries = Object.values(cart).map((c) => ({ product_id: c.product_id, quantity: c.quantity, flavor_ingredient_id: Number(c.flavor_ingredient_id || 0) }));
         const fd = new FormData();
         if (csrf) fd.set('_token', csrf);
         fd.set('pending_name', name);
@@ -1051,6 +1224,7 @@ body.branch-select-open .pos-order-summary-float {
         entries.forEach((it, idx) => {
             fd.set(`items[${idx}][product_id]`, String(it.product_id));
             fd.set(`items[${idx}][quantity]`, String(it.quantity));
+            fd.set(`items[${idx}][flavor_ingredient_id]`, String(Number(it.flavor_ingredient_id || 0)));
         });
         try {
             const res = await fetch(pendingStoreUrl, {
@@ -1065,7 +1239,16 @@ body.branch-select-open .pos-order-summary-float {
             Object.keys(cart).forEach((k) => { delete cart[k]; });
             renderCart();
             pendingMetaModal?.hide();
-            Swal.fire({ icon: 'success', title: 'Saved as pending', text: `Pending #${body.pending_id}` });
+            if (body.unpaid_prep_receipt) {
+                lastReceiptObject = body.unpaid_prep_receipt;
+                const rmTitle = document.getElementById('receiptModalTitle');
+                if (rmTitle) rmTitle.textContent = 'Unpaid order (Bluetooth / print)';
+                const ra = document.getElementById('receiptPrintArea');
+                if (ra) ra.innerHTML = buildReceiptHtml(body.unpaid_prep_receipt);
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('receiptModal')).show();
+            } else {
+                Swal.fire({ icon: 'success', title: 'Saved as pending', text: `Pending #${body.pending_id}` });
+            }
         } catch {
             Swal.fire({ icon: 'error', title: 'Network error', text: 'Could not save pending.' });
         }
