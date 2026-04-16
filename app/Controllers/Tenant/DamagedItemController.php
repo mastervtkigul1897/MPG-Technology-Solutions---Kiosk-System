@@ -62,12 +62,13 @@ final class DamagedItemController
             $st->execute($params);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
+            $trialBrowse = Auth::isTenantFreeTrial($user);
             $data = [];
             foreach ($rows as $row) {
                 $did = (int) $row['id'];
                 $editBtn = '';
                 $deleteBtn = '';
-                if (Auth::tenantMayManage($user, 'damaged_items')) {
+                if (Auth::tenantMayManage($user, 'damaged_items') && ! $trialBrowse) {
                     $editBtn = '<button type="button" class="btn btn-sm btn-outline-primary js-edit-damaged" data-id="'.$did.'" title="Edit"><i class="fa fa-pen"></i></button>';
                     $deleteBtn = '<button type="button" class="btn btn-sm btn-outline-danger js-delete-damaged" data-id="'.$did.'" title="Delete"><i class="fa fa-trash"></i></button>';
                 }
@@ -102,6 +103,7 @@ final class DamagedItemController
 
         return view_page('Damaged Items', 'tenant.damaged-items.index', [
             'ingredients' => $ingredients,
+            'premium_trial_browse_lock' => Auth::isTenantFreeTrial($user),
         ]);
     }
 
@@ -110,6 +112,14 @@ final class DamagedItemController
         $user = Auth::user();
         if (! Auth::tenantMayManage($user, 'damaged_items')) {
             return new Response('Forbidden', 403);
+        }
+        if (Auth::isTenantFreeTrial($user)) {
+            return $this->jsonOrBack(
+                $request,
+                ['general' => ['Premium: damaged-item actions are not available on a Free Trial.']],
+                403,
+                '/tenant/damaged-items'
+            );
         }
 
         $tenantId = (int) $user['tenant_id'];
@@ -189,6 +199,14 @@ final class DamagedItemController
         $user = Auth::user();
         if (! Auth::tenantMayManage($user, 'damaged_items')) {
             return new Response('Forbidden', 403);
+        }
+        if (Auth::isTenantFreeTrial($user)) {
+            return $this->jsonOrBack(
+                $request,
+                ['general' => ['Premium: damaged-item actions are not available on a Free Trial.']],
+                403,
+                '/tenant/damaged-items'
+            );
         }
 
         $tenantId = (int) $user['tenant_id'];
@@ -329,6 +347,14 @@ final class DamagedItemController
         $user = Auth::user();
         if (! Auth::tenantMayManage($user, 'damaged_items')) {
             return new Response('Forbidden', 403);
+        }
+        if (Auth::isTenantFreeTrial($user)) {
+            return $this->jsonOrBack(
+                $request,
+                ['general' => ['Premium: damaged-item actions are not available on a Free Trial.']],
+                403,
+                '/tenant/damaged-items'
+            );
         }
 
         $tenantId = (int) $user['tenant_id'];

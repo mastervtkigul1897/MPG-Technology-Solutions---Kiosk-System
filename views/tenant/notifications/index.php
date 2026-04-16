@@ -8,6 +8,7 @@
         </div>
     </div>
 <?php endif; ?>
+<?php require dirname(__DIR__, 2).'/partials/premium_trial_page_banner.php'; ?>
 <div class="card modern-section">
     <div class="card-body table-responsive">
         <table class="table table-striped align-middle w-100" id="notificationsTable">

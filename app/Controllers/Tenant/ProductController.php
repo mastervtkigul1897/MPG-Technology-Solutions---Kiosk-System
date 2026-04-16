@@ -178,6 +178,18 @@ final class ProductController
         if (! Auth::tenantMayManage($user, 'products')) {
             return new Response('Forbidden', 403);
         }
+        if (Auth::isTenantFreeTrial($user)) {
+            $tenantId = (int) ($user['tenant_id'] ?? 0);
+            if ($tenantId > 0) {
+                $pdo = App::db();
+                $stLimit = $pdo->prepare('SELECT COUNT(*) FROM products WHERE tenant_id = ?');
+                $stLimit->execute([$tenantId]);
+                $productCount = (int) $stLimit->fetchColumn();
+                if ($productCount >= 5) {
+                    return $this->validationError($request, 'Premium feature: Free Trial accounts can create up to 5 products only.');
+                }
+            }
+        }
         $tenantId = (int) $user['tenant_id'];
         $name = trim((string) $request->input('name'));
         $price = round_money((float) $request->input('price'));

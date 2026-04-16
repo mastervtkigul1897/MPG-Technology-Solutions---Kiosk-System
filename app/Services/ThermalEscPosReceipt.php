@@ -10,16 +10,14 @@ namespace App\Services;
  */
 final class ThermalEscPosReceipt
 {
-    /**
-     * Characters per line (Font B). ~60mm printable width; adjust if printer wraps too early/late.
-     */
-    private const LINE_WIDTH = 36;
-
-    private const RIGHT_COL_WIDTH = 12;
+    private const DEFAULT_LINE_WIDTH = 32;
+    private const DEFAULT_RIGHT_COL_WIDTH = 10;
+    private const DEFAULT_EXTRA_FEEDS = 8;
 
     /** @param  array<string, mixed>  $r  Same shape as POS receipt JSON */
     public static function build(array $r): string
     {
+        $cfg = self::settings($r);
         $b = '';
         $b .= "\x1B\x40"; // Initialize
         $b .= "\x1B\x4D\x01"; // Font B (smaller / denser)
@@ -35,9 +33,9 @@ final class ThermalEscPosReceipt
             $b .= $line."\n";
         };
 
-        $sep = static function () use (&$b): void {
+        $sep = static function () use (&$b, &$cfg): void {
             $b .= "\x1B\x61\x00";
-            $b .= str_repeat('-', self::LINE_WIDTH)."\n";
+            $b .= str_repeat('-', self::lineWidth($cfg))."\n";
         };
 
         $unpaidPrep = ! empty($r['unpaid_prep_receipt']) || ! empty($r['kitchen_slip']) || ! empty($r['unpaid_watermark']);
@@ -66,8 +64,40 @@ final class ThermalEscPosReceipt
             $append($bs, true);
         }
         $taxId = trim((string) ($r['tax_id'] ?? ''));
-        if ($taxId !== '' && ! $unpaidPrep) {
-            $append('TIN: '.$taxId, true);
+        $isBirRegistered = ! empty($r['is_bir_registered']);
+        $serial = trim((string) ($r['serial_number'] ?? ''));
+        $dtiNumber = trim((string) ($r['dti_number'] ?? ''));
+        $birAccreditationNo = trim((string) ($r['bir_accreditation_no'] ?? ''));
+        $minNo = trim((string) ($r['min'] ?? ''));
+        $permitNo = trim((string) ($r['permit_no'] ?? ''));
+        if (! $unpaidPrep) {
+            if ($isBirRegistered) {
+                if ($birAccreditationNo !== '') {
+                    $append('BIR Accreditation No: '.$birAccreditationNo, true);
+                }
+                if ($taxId !== '') {
+                    $append('TIN: '.$taxId, true);
+                }
+                if ($serial !== '') {
+                    $append('Serial No: '.$serial, true);
+                }
+                if ($minNo !== '') {
+                    $append('MIN: '.$minNo, true);
+                }
+                if ($permitNo !== '') {
+                    $append('Permit No: '.$permitNo, true);
+                }
+            } elseif ($taxId !== '') {
+                $append('TIN: '.$taxId, true);
+            }
+            if ($dtiNumber !== '') {
+                $append('DTI No: '.$dtiNumber, true);
+            }
+        }
+        $taxType = strtolower(trim((string) ($r['tax_type'] ?? 'non_vat')));
+        $taxTypeLabel = $taxType === 'vat' ? 'VAT Registered' : 'Non-VAT Registered';
+        if (! $unpaidPrep) {
+            $append('Tax Type: '.$taxTypeLabel, true);
         }
 
         $sep();
@@ -83,12 +113,12 @@ final class ThermalEscPosReceipt
                 foreach (preg_split("/\r\n|\n|\r/", $addr) ?: [] as $ln) {
                     $ln = trim((string) $ln);
                     if ($ln !== '') {
-                        $append($ln);
+                        $append('Address: '.$ln);
                     }
                 }
             }
             if ($email !== '') {
-                $append('Email: '.$email);
+                $append(self::truncate('Email: '.$email, self::lineWidth($cfg)));
             }
             if ($phone === '' && $addr === '' && $email === '') {
                 $append('No store contact on file.', true);
@@ -96,7 +126,7 @@ final class ThermalEscPosReceipt
             $sep();
         }
 
-        $append(self::lrPad('Item', 'Amount'));
+        $append(self::lrPad('Item', 'Amount', $cfg));
         $sep();
 
         $items = is_array($r['items'] ?? null) ? $r['items'] : [];
@@ -113,22 +143,22 @@ final class ThermalEscPosReceipt
                 $unit = $lineTot / $qty;
             }
             if ($name !== '') {
-                foreach (self::wrapText($name, self::LINE_WIDTH) as $nameLine) {
+                    foreach (self::wrapText($name, self::lineWidth($cfg)) as $nameLine) {
                     $append($nameLine);
                 }
             }
             if ($flavorName !== '') {
-                foreach (self::wrapText(' - '.$flavorName, self::LINE_WIDTH) as $flavorLine) {
+                    foreach (self::wrapText(' - '.$flavorName, self::lineWidth($cfg)) as $flavorLine) {
                     $append($flavorLine);
                 }
             }
             $priceQtyLeft = self::money($unit).' x '.self::qtyStr($qty);
-            $append(self::lrPad($priceQtyLeft, self::money($lineTot)));
+            $append(self::lrPad($priceQtyLeft, self::money($lineTot), $cfg));
         }
 
         $sep();
         $total = (float) ($r['grand_total'] ?? 0);
-        $append(self::lrPad('TOTAL', self::money($total)));
+        $append(self::lrPad('TOTAL', self::money($total), $cfg));
 
         $tid = isset($r['transaction_id']) ? (int) $r['transaction_id'] : 0;
         $when = '';
@@ -143,15 +173,18 @@ final class ThermalEscPosReceipt
             $append('UNPAID', true);
             $b .= "\n\n";
         } else {
-            $vatAmount = $total > 0 ? $total * (12 / 112) : 0.0;
-            $vatable = max(0.0, $total - $vatAmount);
-            $append(self::lrPad('VATABLE SALES', self::money($vatable)));
-            $append(self::lrPad('VAT (12%)', self::money($vatAmount)));
+            $vatApplicable = ! array_key_exists('vat_applicable', $r) || (bool) $r['vat_applicable'];
+            if ($vatApplicable) {
+                $vatAmount = $total > 0 ? $total * (12 / 112) : 0.0;
+                $vatable = max(0.0, $total - $vatAmount);
+                $append(self::lrPad('VATABLE SALES', self::money($vatable), $cfg));
+                $append(self::lrPad('VAT (12%)', self::money($vatAmount), $cfg));
+            }
 
             $pm = strtolower(trim((string) ($r['payment_method'] ?? '')));
             $pmLabel = $pm !== '' ? strtoupper(str_replace('_', ' ', $pm)) : '';
             if ($pmLabel !== '') {
-                $append(self::lrPad('PAYMENT', $pmLabel));
+                $append(self::lrPad('PAYMENT', $pmLabel, $cfg));
             }
 
             $tendered = isset($r['amount_tendered']) && is_numeric($r['amount_tendered']) ? (float) $r['amount_tendered'] : null;
@@ -182,32 +215,51 @@ final class ThermalEscPosReceipt
             $netPaid = $baseAfterRefund !== null ? max(0.0, $baseAfterRefund + $addedAfterRefund) : null;
 
             if ($pm === 'cash' && $basePaid !== null) {
-                $append(self::lrPad('NET TO ORDER', self::money($basePaid)));
+                $append(self::lrPad('NET TO ORDER', self::money($basePaid), $cfg));
                 if ($tendered !== null && abs($tendered - $basePaid) > money_epsilon()) {
-                    $append(self::lrPad('Cash tendered', self::money($tendered)));
+                    $append(self::lrPad('Cash tendered', self::money($tendered), $cfg));
                 }
             } elseif ($basePaid !== null) {
-                $append(self::lrPad('AMOUNT PAID', self::money($baseAfterRefund ?? $basePaid)));
+                $append(self::lrPad('AMOUNT PAID', self::money($baseAfterRefund ?? $basePaid), $cfg));
             }
 
             if ($refunded > money_epsilon()) {
-                $append(self::lrPad('REFUND', '-'.self::money($refunded)));
+                $append(self::lrPad('REFUND', '-'.self::money($refunded), $cfg));
             }
             if ($addedAfterRefund > money_epsilon()) {
-                $append(self::lrPad('ADDITIONAL PAID', self::money($addedAfterRefund)));
+                $append(self::lrPad('ADDITIONAL PAID', self::money($addedAfterRefund), $cfg));
             }
             if ($netPaid !== null) {
-                $append(self::lrPad('NET PAID', self::money($netPaid)));
+                $append(self::lrPad('NET PAID', self::money($netPaid), $cfg));
             }
 
             $hasAdjust = ($refunded > money_epsilon()) || ($added > money_epsilon());
             $finalChange = $hasAdjust ? 0.0 : $change;
             if ($finalChange !== null && is_finite($finalChange)) {
-                $append(self::lrPad('CHANGE', self::money((float) $finalChange)));
+                $append(self::lrPad('CHANGE', self::money((float) $finalChange), $cfg));
             }
 
             $sep();
-            if ($meta !== '') {
+            if ($isBirRegistered) {
+                $append('THIS SERVES AS AN OFFICIAL RECEIPT', true);
+                if ($tid > 0) {
+                    $append(self::lrPad('OR No', (string) $tid, $cfg));
+                }
+                if ($when !== '') {
+                    $append(self::lrPad('Date/Time', $when, $cfg));
+                }
+                $cashierName = trim((string) ($r['cashier_name'] ?? ''));
+                if ($cashierName !== '') {
+                    $append(self::lrPad('Cashier Name', $cashierName, $cfg));
+                }
+                if ($tid > 0) {
+                    $append(self::lrPad('Transaction No', (string) $tid, $cfg));
+                }
+            } else {
+                $append('THIS IS NOT AN OFFICIAL RECEIPT', true);
+                $append('FOR INTERNAL / REFERENCE PURPOSES ONLY', true);
+            }
+            if (! $isBirRegistered && $meta !== '') {
                 $append($meta, true);
             }
             $append('Thank you for your purchase!', true);
@@ -224,10 +276,16 @@ final class ThermalEscPosReceipt
             }
         }
 
-        $b .= "\n\n\n\n";
+        // Extra feeds so footer/cut does not clip on printers that cut early.
+        $b .= str_repeat("\n", max(2, (int) ($cfg['extra_feeds'] ?? self::DEFAULT_EXTRA_FEEDS)));
         $b .= "\x1B\x32"; // Default line spacing (next job)
         $b .= "\x1B\x4D\x00"; // Font A (next job)
-        $b .= "\x1D\x56\x00"; // Full cut (common)
+        $cutMode = (string) ($cfg['cut_mode'] ?? 'none');
+        if ($cutMode === 'partial') {
+            $b .= "\x1D\x56\x42\x00";
+        } elseif ($cutMode === 'full') {
+            $b .= "\x1D\x56\x00";
+        }
 
         return $b;
     }
@@ -272,10 +330,14 @@ final class ThermalEscPosReceipt
         return substr($s, 0, max(1, $max - 1)).'.';
     }
 
-    private static function lrPad(string $left, string $right): string
+    /** @param array{line_width:int,right_col_width:int,extra_feeds:int,cut_mode:string} $cfg */
+    private static function lrPad(string $left, string $right, array $cfg): string
     {
-        $w = self::LINE_WIDTH;
-        $rw = self::RIGHT_COL_WIDTH;
+        $w = self::lineWidth($cfg);
+        $rw = self::rightColWidth($cfg);
+        if ($rw >= $w - 2) {
+            $rw = max(8, $w - 4);
+        }
         $right = self::ascii($right);
         if (strlen($right) > $rw) {
             $right = substr($right, 0, $rw);
@@ -323,5 +385,37 @@ final class ThermalEscPosReceipt
             }
         }
         return $out === [] ? [''] : $out;
+    }
+
+    /** @return array{line_width:int,right_col_width:int,extra_feeds:int,cut_mode:string} */
+    private static function settings(array $r): array
+    {
+        $escpos = is_array($r['escpos'] ?? null) ? $r['escpos'] : [];
+        $lineWidth = max(24, min(48, (int) ($escpos['line_width'] ?? self::DEFAULT_LINE_WIDTH)));
+        $rightColWidth = max(8, min(16, (int) ($escpos['right_col_width'] ?? self::DEFAULT_RIGHT_COL_WIDTH)));
+        $extraFeeds = max(2, min(16, (int) ($escpos['extra_feeds'] ?? self::DEFAULT_EXTRA_FEEDS)));
+        $cutMode = strtolower(trim((string) ($escpos['cut_mode'] ?? 'none')));
+        if (! in_array($cutMode, ['none', 'partial', 'full'], true)) {
+            $cutMode = 'none';
+        }
+
+        return [
+            'line_width' => $lineWidth,
+            'right_col_width' => $rightColWidth,
+            'extra_feeds' => $extraFeeds,
+            'cut_mode' => $cutMode,
+        ];
+    }
+
+    /** @param array{line_width:int,right_col_width:int,extra_feeds:int,cut_mode:string} $cfg */
+    private static function lineWidth(array $cfg): int
+    {
+        return (int) $cfg['line_width'];
+    }
+
+    /** @param array{line_width:int,right_col_width:int,extra_feeds:int,cut_mode:string} $cfg */
+    private static function rightColWidth(array $cfg): int
+    {
+        return (int) $cfg['right_col_width'];
     }
 }

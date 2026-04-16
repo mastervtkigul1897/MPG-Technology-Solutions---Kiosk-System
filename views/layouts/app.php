@@ -14,6 +14,7 @@ if ($brandSuffix !== '') {
 }
 $documentTitle = implode(' — ', $docTitleParts);
 $brandLogoPath = url('images/branding/mpg-kis-logo.png');
+$brandDisplayName = 'MPG KIS - Kiosk & Inventory System';
 
 $branchSwitcherRows = [];
 $currentBranchIsMain = false;
@@ -32,6 +33,18 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         $currentBranchIsMain = false;
     }
 }
+
+$navPremiumTrialHints = (($u['role'] ?? '') !== 'super_admin')
+    && ! empty($u['tenant_id'])
+    && \App\Core\Auth::isTenantFreeTrial($u);
+$tenantPlansUrl = url('/tenant/plans');
+$premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHints): string {
+    if (! $navPremiumTrialHints || ! $isPremiumItem) {
+        return '';
+    }
+
+    return ' <span class="badge rounded-pill bg-warning text-dark border border-dark border-opacity-10 ms-1" style="font-size:0.65rem;font-weight:700;vertical-align:middle;">Premium</span>';
+};
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -57,7 +70,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
     <aside class="desktop-sidebar bg-dark text-white p-3">
         <div class="d-flex align-items-center gap-2 mb-3">
             <img src="<?= e($brandLogoPath) ?>" alt="<?= e($appName) ?> logo" width="36" height="36" class="rounded-circle border border-secondary-subtle">
-            <h5 class="mb-0"><?= e($appName) ?></h5>
+            <h5 class="mb-0"><?= e($brandDisplayName) ?></h5>
         </div>
         <div class="small text-secondary mb-3"><?= e(strtoupper((string) ($u['role'] ?? ''))) ?></div>
         <nav class="nav flex-column gap-1">
@@ -80,26 +93,26 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
                     <a class="nav-link text-white <?= route_is('tenant.products.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/products')) ?>"><i class="fa-solid fa-tags"></i><span>Products</span></a>
                 <?php endif; ?>
                 <?php if (user_can_module('expenses')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.expenses.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/expenses')) ?>"><i class="fa-solid fa-money-bill-wave"></i><span>Expenses</span></a>
+                    <a class="nav-link text-white <?= route_is('tenant.expenses.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/expenses')) ?>"><i class="fa-solid fa-money-bill-wave"></i><span>Expenses<?= $premiumNavBadge(true) ?></span></a>
                 <?php endif; ?>
                 <?php if (user_can_module('damaged_items')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.damaged-items.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/damaged-items')) ?>"><i class="fa-solid fa-triangle-exclamation"></i><span>Damaged Items</span></a>
+                    <a class="nav-link text-white <?= route_is('tenant.damaged-items.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/damaged-items')) ?>"><i class="fa-solid fa-triangle-exclamation"></i><span>Damaged Items<?= $premiumNavBadge(true) ?></span></a>
                 <?php endif; ?>
                 <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
                     <a class="nav-link text-white <?= route_is('tenant.reports.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/reports')) ?>"><i class="fa-solid fa-chart-line"></i><span>Reports</span></a>
                 <?php endif; ?>
                 <?php if (user_can_module('notifications')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.notifications.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/notifications')) ?>"><i class="fa-solid fa-bell"></i><span>Notifications</span></a>
+                    <a class="nav-link text-white <?= route_is('tenant.notifications.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/notifications')) ?>"><i class="fa-solid fa-bell"></i><span>Notifications<?= $premiumNavBadge(true) ?></span></a>
                 <?php endif; ?>
                 <hr class="border-secondary my-2 opacity-50">
                 <?php if (user_can_module('activity_logs')): ?>
                     <a class="nav-link text-white <?= route_is('tenant.activity-logs.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/activity-logs')) ?>"><i class="fa-solid fa-clock-rotate-left"></i><span>Activity Log</span></a>
                 <?php endif; ?>
                 <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.staff.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/staff')) ?>"><i class="fa-solid fa-users"></i><span>Staff</span></a>
-                    <a class="nav-link text-white <?= route_is('tenant.receipt-settings.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.receipt-settings.edit')) ?>"><i class="fa-solid fa-file-lines"></i><span>Receipt Data</span></a>
+                    <a class="nav-link text-white <?= route_is('tenant.staff.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/staff')) ?>"><i class="fa-solid fa-users"></i><span>Staff<?= $premiumNavBadge(true) ?></span></a>
+                    <a class="nav-link text-white <?= route_is('tenant.receipt-settings.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.receipt-settings.edit')) ?>"><i class="fa-solid fa-file-lines"></i><span>Receipt Config<?= $premiumNavBadge(true) ?></span></a>
                     <?php if ($currentBranchIsMain): ?>
-                        <a class="nav-link text-white <?= route_is('tenant.branches.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch"></i><span>Branches</span></a>
+                        <a class="nav-link text-white <?= route_is('tenant.branches.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch"></i><span>Branches<?= $premiumNavBadge(true) ?></span></a>
                     <?php endif; ?>
                 <?php endif; ?>
             <?php endif; ?>
@@ -114,49 +127,49 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         <div class="offcanvas-body p-0 d-flex flex-column">
             <div class="d-flex align-items-center gap-2 mb-3">
                 <img src="<?= e($brandLogoPath) ?>" alt="<?= e($appName) ?> logo" width="34" height="34" class="rounded-circle border border-secondary-subtle">
-                <h5 class="mb-0"><?= e($appName) ?></h5>
+                <h5 class="mb-0"><?= e($brandDisplayName) ?></h5>
             </div>
             <div class="small text-secondary mb-3"><?= e(strtoupper((string) ($u['role'] ?? ''))) ?></div>
             <nav class="nav flex-column gap-1">
-                <a class="nav-link text-white" href="<?= e(url('/dashboard')) ?>">Dashboard</a>
+                <a class="nav-link text-white" href="<?= e(url('/dashboard')) ?>"><i class="fa-solid fa-house me-2"></i>Dashboard</a>
                 <?php if (($u['role'] ?? null) === 'super_admin'): ?>
-                    <a class="nav-link text-white" href="<?= e(url('/super-admin/tenants')) ?>">Tenants</a>
-                    <a class="nav-link text-white" href="<?= e(url('/super-admin/backups/runner')) ?>">Backup Runner</a>
-                    <a class="nav-link text-white" href="<?= e(url('/super-admin/settings')) ?>">Settings</a>
+                    <a class="nav-link text-white" href="<?= e(url('/super-admin/tenants')) ?>"><i class="fa-solid fa-building me-2"></i>Tenants</a>
+                    <a class="nav-link text-white" href="<?= e(url('/super-admin/backups/runner')) ?>"><i class="fa-solid fa-database me-2"></i>Backup Runner</a>
+                    <a class="nav-link text-white" href="<?= e(url('/super-admin/settings')) ?>"><i class="fa-solid fa-gear me-2"></i>Settings</a>
                 <?php else: ?>
                     <?php if (user_can_module('pos')): ?>
-                        <a class="nav-link text-white" href="<?= e(url('/tenant/pos')) ?>">Create Transaction</a>
+                        <a class="nav-link text-white" href="<?= e(url('/tenant/pos')) ?>"><i class="fa-solid fa-cart-plus me-2"></i>Create Transaction</a>
                     <?php endif; ?>
                     <?php if (user_can_module('transactions')): ?>
-                        <a class="nav-link text-white" href="<?= e(url('/tenant/transactions')) ?>">Transactions</a>
+                        <a class="nav-link text-white" href="<?= e(url('/tenant/transactions')) ?>"><i class="fa-solid fa-receipt me-2"></i>Transactions</a>
                     <?php endif; ?>
                     <?php if (user_can_module('ingredients')): ?>
-                        <a class="nav-link text-white" href="<?= e(url('/tenant/ingredients')) ?>">Inventory Items</a>
+                        <a class="nav-link text-white" href="<?= e(url('/tenant/ingredients')) ?>"><i class="fa-solid fa-boxes-stacked me-2"></i>Inventory Items</a>
                     <?php endif; ?>
                     <?php if (user_can_module('products')): ?>
-                        <a class="nav-link text-white" href="<?= e(url('/tenant/products')) ?>">Products</a>
+                        <a class="nav-link text-white" href="<?= e(url('/tenant/products')) ?>"><i class="fa-solid fa-tags me-2"></i>Products</a>
                     <?php endif; ?>
                     <?php if (user_can_module('expenses')): ?>
-                        <a class="nav-link text-white" href="<?= e(url('/tenant/expenses')) ?>">Expenses</a>
+                        <a class="nav-link text-white" href="<?= e(url('/tenant/expenses')) ?>"><i class="fa-solid fa-money-bill-wave me-2"></i>Expenses<?= $premiumNavBadge(true) ?></a>
                     <?php endif; ?>
                     <?php if (user_can_module('damaged_items')): ?>
-                        <a class="nav-link text-white" href="<?= e(url('/tenant/damaged-items')) ?>">Damaged Items</a>
+                        <a class="nav-link text-white" href="<?= e(url('/tenant/damaged-items')) ?>"><i class="fa-solid fa-triangle-exclamation me-2"></i>Damaged Items<?= $premiumNavBadge(true) ?></a>
                     <?php endif; ?>
                     <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
-                        <a class="nav-link text-white" href="<?= e(url('/tenant/reports')) ?>">Reports</a>
+                        <a class="nav-link text-white" href="<?= e(url('/tenant/reports')) ?>"><i class="fa-solid fa-chart-line me-2"></i>Reports</a>
                     <?php endif; ?>
                     <?php if (user_can_module('notifications')): ?>
-                        <a class="nav-link text-white" href="<?= e(url('/tenant/notifications')) ?>">Notifications</a>
+                        <a class="nav-link text-white" href="<?= e(url('/tenant/notifications')) ?>"><i class="fa-solid fa-bell me-2"></i>Notifications<?= $premiumNavBadge(true) ?></a>
                     <?php endif; ?>
                     <hr class="border-secondary my-2 opacity-50">
                     <?php if (user_can_module('activity_logs')): ?>
-                        <a class="nav-link text-white" href="<?= e(url('/tenant/activity-logs')) ?>">Activity Log</a>
+                        <a class="nav-link text-white" href="<?= e(url('/tenant/activity-logs')) ?>"><i class="fa-solid fa-clock-rotate-left me-2"></i>Activity Log</a>
                     <?php endif; ?>
                     <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
-                        <a class="nav-link text-white" href="<?= e(url('/tenant/staff')) ?>">Staff</a>
-                        <a class="nav-link text-white" href="<?= e(route('tenant.receipt-settings.edit')) ?>">Receipt Data</a>
+                        <a class="nav-link text-white" href="<?= e(url('/tenant/staff')) ?>"><i class="fa-solid fa-users me-2"></i>Staff<?= $premiumNavBadge(true) ?></a>
+                        <a class="nav-link text-white" href="<?= e(route('tenant.receipt-settings.edit')) ?>"><i class="fa-solid fa-file-lines me-2"></i>Receipt Config<?= $premiumNavBadge(true) ?></a>
                         <?php if ($currentBranchIsMain): ?>
-                            <a class="nav-link text-white" href="<?= e(url('/tenant/branches')) ?>">Branches</a>
+                            <a class="nav-link text-white" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch me-2"></i>Branches<?= $premiumNavBadge(true) ?></a>
                         <?php endif; ?>
                     <?php endif; ?>
                 <?php endif; ?>
@@ -327,7 +340,7 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
             </div>
                 <div class="d-flex align-items-center gap-2">
                     <img src="<?= e($brandLogoPath) ?>" alt="<?= e($appName) ?> logo" width="30" height="30" class="rounded-circle border border-secondary-subtle">
-                    <span class="fw-semibold small d-none d-sm-inline"><?= e($appName) ?></span>
+                    <span class="fw-semibold small d-none d-sm-inline"><?= e($brandDisplayName) ?></span>
                 </div>
             </div>
             <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
@@ -442,6 +455,46 @@ if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
         </script>
     </main>
 </div>
+<script>
+(() => {
+    const pricingUrl = <?= json_encode($tenantPlansUrl) ?>;
+    function mpgPremiumPlansSwal(title, html, icon) {
+        if (typeof Swal === 'undefined') {
+            if (confirm('View plans & pricing?')) window.location.href = pricingUrl;
+            return Promise.resolve();
+        }
+        return Swal.fire({
+            icon: icon || 'warning',
+            title: title || 'Premium',
+            html: html,
+            confirmButtonText: 'View plans & pricing',
+            cancelButtonText: 'Close',
+            showCancelButton: true,
+            confirmButtonColor: '#f59e0b',
+        }).then((r) => {
+            if (r.isConfirmed) window.location.href = pricingUrl;
+        });
+    }
+    function mpgWireTrialReceiptModal(modalId, storageKey) {
+        const modal = document.getElementById(modalId);
+        if (!modal || modal.getAttribute('data-mpg-trial-print') !== '1') return;
+        modal.addEventListener('shown.bs.modal', () => {
+            if (typeof Swal === 'undefined') return;
+            if (sessionStorage.getItem(storageKey) === '1') return;
+            sessionStorage.setItem(storageKey, '1');
+            mpgPremiumPlansSwal(
+                'Premium',
+                '<p class="mb-0 text-start">Receipt <strong>printing</strong> is a <strong>Premium</strong> feature. Free Trial lets you create and view transactions; you can still read the receipt on screen.</p>',
+                'info'
+            );
+        });
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+        mpgWireTrialReceiptModal('receiptModal', 'mpg_swal_pos_receipt_print');
+        mpgWireTrialReceiptModal('transactionReceiptModal', 'mpg_swal_tx_receipt_print');
+    });
+})();
+</script>
 <?php if (! empty($scripts)) { echo $scripts; } ?>
 </body>
 </html>

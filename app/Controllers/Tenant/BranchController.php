@@ -51,6 +51,7 @@ final class BranchController
             'branches' => $branches,
             'branch_limit' => $svc->getBranchLimit($tenantId),
             'clone_defaults' => [],
+            'premium_trial_browse_lock' => Auth::isTenantFreeTrial($u),
         ]);
     }
 
@@ -63,6 +64,11 @@ final class BranchController
         $gate = $this->ensureMainBranchTenantAdmin($u);
         if ($gate instanceof Response) {
             return $gate;
+        }
+        if (Auth::isTenantFreeTrial($u)) {
+            session_flash('errors', ['Premium: creating or changing branches is not available on a Free Trial.']);
+
+            return redirect(route('tenant.branches.index'));
         }
         $tenantId = (int) ($u['tenant_id'] ?? 0);
         $svc = new BranchService();
@@ -96,6 +102,11 @@ final class BranchController
         if ($gate instanceof Response) {
             return $gate;
         }
+        if (Auth::isTenantFreeTrial($u)) {
+            session_flash('errors', ['Premium: changing branch status is not available on a Free Trial.']);
+
+            return redirect(route('tenant.branches.index'));
+        }
         $tenantId = (int) ($u['tenant_id'] ?? 0);
         $targetId = (int) $branchId;
         $active = $request->boolean('active');
@@ -120,6 +131,11 @@ final class BranchController
         $u = Auth::user();
         if (! $u || ($u['role'] ?? '') !== 'tenant_admin') {
             return new Response('Forbidden.', 403);
+        }
+        if (Auth::isTenantFreeTrial($u)) {
+            session_flash('errors', ['Premium: changing the main branch is not available on a Free Trial.']);
+
+            return redirect(route('tenant.branches.index'));
         }
         $tenantId = (int) ($u['tenant_id'] ?? 0);
         $targetId = (int) $branchId;

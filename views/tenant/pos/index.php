@@ -231,7 +231,7 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
     </div>
 </div>
 
-<div class="modal fade" id="receiptModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-labelledby="receiptModalTitle">
+<div class="modal fade" id="receiptModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-labelledby="receiptModalTitle"<?= empty($receipt_print_allowed) ? ' data-mpg-trial-print="1"' : '' ?>>
     <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-md-down">
         <div class="modal-content mpg-receipt-modal-content">
             <div class="modal-header border-bottom">
@@ -242,15 +242,21 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
             </div>
             <div class="modal-footer flex-column flex-sm-row flex-wrap gap-2 justify-content-stretch justify-content-sm-center w-100 mpg-receipt-modal-footer">
                 <div class="d-grid d-sm-flex gap-2 w-100 flex-sm-grow-0 flex-sm-wrap justify-content-sm-center">
-                    <button type="button" class="btn btn-primary text-white w-100 mpg-receipt-action-btn" id="receiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
-                    <button type="button" class="btn btn-success text-white <?= empty($thermal_receipt_network_enabled) ? 'd-none' : '' ?> w-100 mpg-receipt-action-btn" id="receiptPrintWifiBtn" title="Server sends raw data to printer on LAN (phone/tablet/APK when host is configured)"><i class="fa-solid fa-wifi me-1"></i>Wi‑Fi / LAN</button>
-                    <button type="button" class="btn btn-primary text-white mpg-btn-bluetooth-thermal w-100 mpg-receipt-action-btn" id="receiptPrintBleBtn" title="Bluetooth print"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
+                    <button type="button" class="btn btn-primary text-white w-100 mpg-receipt-action-btn <?= empty($receipt_print_allowed) ? 'd-none' : '' ?>" id="receiptPrintBtn"><i class="fa-solid fa-print me-1"></i>Print</button>
+                    <button type="button" class="btn btn-success text-white <?= (empty($thermal_receipt_network_enabled) || empty($receipt_print_allowed)) ? 'd-none' : '' ?> w-100 mpg-receipt-action-btn" id="receiptPrintWifiBtn" title="Server sends raw data to printer on LAN (phone/tablet/APK when host is configured)"><i class="fa-solid fa-wifi me-1"></i>Wi‑Fi / LAN</button>
+                    <button type="button" class="btn btn-primary text-white mpg-btn-bluetooth-thermal w-100 mpg-receipt-action-btn <?= empty($receipt_print_allowed) ? 'd-none' : '' ?>" id="receiptPrintBleBtn" title="Bluetooth print"><i class="fa-brands fa-bluetooth-b me-1"></i>Bluetooth print</button>
                     <button type="button" class="btn btn-secondary text-white w-100 mpg-receipt-action-btn" id="receiptOkBtn" data-bs-dismiss="modal">OK</button>
                 </div>
-                <div class="w-100 d-flex flex-wrap gap-2 align-items-center justify-content-center mpg-btn-bluetooth-thermal">
+                <div class="w-100 d-flex flex-wrap gap-2 align-items-center justify-content-center mpg-btn-bluetooth-thermal <?= empty($receipt_print_allowed) ? 'd-none' : '' ?>">
                     <span class="small text-muted" id="receiptBleSavedHint">No saved Bluetooth printer yet.</span>
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="receiptBleChangeBtn">Change Bluetooth printer</button>
                 </div>
+                <?php if (empty($receipt_print_allowed)): ?>
+                    <div class="w-100 small text-warning text-center fw-semibold">Premium: receipt printing is not included on Free Trial — you can still view the receipt below.</div>
+                    <div class="w-100 d-grid">
+                        <a href="<?= e(url('/tenant/plans')) ?>" class="btn btn-warning btn-sm fw-semibold"><i class="fa-solid fa-tags me-1"></i>View plans & pricing</a>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -413,6 +419,13 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
     min-height: 3.25rem;
     max-height: none;
     overflow: visible;
+}
+
+#cartWrap.pos-cart-scrollable,
+#mobileCartWrap.pos-cart-scrollable {
+    max-height: 24rem;
+    overflow: auto;
+    padding-right: .2rem;
 }
 
 .pos-checkout-form {
@@ -627,6 +640,11 @@ body.branch-select-open .pos-order-summary-anchor {
 .receipt-item-price-line {
     margin-bottom: 0.35rem;
 }
+.receipt-email-one-line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 .receipt-unpaid-prep {
     position: relative;
     overflow: hidden;
@@ -647,6 +665,27 @@ body.branch-select-open .pos-order-summary-anchor {
 }
 .receipt-unpaid-banner {
     letter-spacing: 0.04em;
+}
+.receipt-compliance-note {
+    margin: .28rem 0;
+    padding: .2rem .28rem;
+    border: 1px dashed #666;
+    border-radius: .2rem;
+    text-align: center;
+    line-height: 1.2;
+}
+.receipt-compliance-note .title {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+.receipt-compliance-note .sub {
+    font-weight: 600;
+}
+.receipt-legal-box {
+    margin: .2rem 0;
+    padding: .16rem .28rem;
+    border: 1px dashed #666;
+    border-radius: .2rem;
 }
 </style>
 
@@ -736,6 +775,7 @@ body.branch-select-open .pos-order-summary-anchor {
     const renderCart = () => {
         const entries = Object.values(cart);
         const renderNoItems = '<div class="text-muted">No items yet.</div>';
+        const shouldScroll = entries.length >= 10;
         if (!entries.length) {
             if (wrap) wrap.innerHTML = renderNoItems;
             if (mobileWrap) mobileWrap.innerHTML = renderNoItems;
@@ -778,6 +818,8 @@ body.branch-select-open .pos-order-summary-anchor {
             const totalQty = entries.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
             if (mobileCountEl) mobileCountEl.textContent = String(totalQty);
         }
+        if (wrap) wrap.classList.toggle('pos-cart-scrollable', shouldScroll);
+        if (mobileWrap) mobileWrap.classList.toggle('pos-cart-scrollable', shouldScroll);
 
         // Update card visuals (danger + button color) based on current cart quantities.
         document.querySelectorAll('.pos-product-card[data-product-id]').forEach(card => {
@@ -923,6 +965,13 @@ body.branch-select-open .pos-order-summary-anchor {
         const displayName = String(r.display_name || '').trim() || String(r.store_name || 'Store').trim() || 'Store';
         const businessStyle = String(r.business_style || '').trim();
         const taxId = String(r.tax_id || '').trim();
+        const serialNumber = String(r.serial_number || '').trim();
+        const dtiNumber = String(r.dti_number || '').trim();
+        const birAccreditationNo = String(r.bir_accreditation_no || '').trim();
+        const minNo = String(r.min || '').trim();
+        const permitNo = String(r.permit_no || '').trim();
+        const isBirRegistered = r.is_bir_registered === true;
+        const taxType = String(r.tax_type || 'non_vat').trim().toLowerCase() === 'vat' ? 'VAT Registered' : 'Non-VAT Registered';
         const footerNote = String(r.footer_note || '').trim();
         const isUnpaidPrep = !!(r.unpaid_prep_receipt || r.kitchen_slip || r.unpaid_watermark);
         const lines = [];
@@ -939,15 +988,29 @@ body.branch-select-open .pos-order-summary-anchor {
         if (businessStyle && !isUnpaidPrep) {
             lines.push(`<div class="receipt-center receipt-muted">${escapeHtml(businessStyle)}</div>`);
         }
-        if (taxId && !isUnpaidPrep) {
-            lines.push(`<div class="receipt-center">TIN: ${escapeHtml(taxId)}</div>`);
+        if (!isUnpaidPrep) {
+            const legalLines = [];
+            if (isBirRegistered) {
+                if (birAccreditationNo) legalLines.push(`<div class="receipt-center">BIR Accreditation No: ${escapeHtml(birAccreditationNo)}</div>`);
+                if (taxId) legalLines.push(`<div class="receipt-center">TIN: ${escapeHtml(taxId)}</div>`);
+                if (serialNumber) legalLines.push(`<div class="receipt-center">Serial No: ${escapeHtml(serialNumber)}</div>`);
+                if (minNo) legalLines.push(`<div class="receipt-center">MIN: ${escapeHtml(minNo)}</div>`);
+                if (permitNo) legalLines.push(`<div class="receipt-center">Permit No: ${escapeHtml(permitNo)}</div>`);
+            } else if (taxId) {
+                legalLines.push(`<div class="receipt-center">TIN: ${escapeHtml(taxId)}</div>`);
+            }
+            if (dtiNumber) legalLines.push(`<div class="receipt-center">DTI No: ${escapeHtml(dtiNumber)}</div>`);
+            if (legalLines.length) {
+                lines.push(`<div class="receipt-legal-box">${legalLines.join('')}</div>`);
+            }
+            lines.push(`<div class="receipt-center">Tax Type: ${escapeHtml(taxType)}</div>`);
         }
         lines.push('<div class="receipt-dash"></div>');
         if (!isUnpaidPrep) {
             const contactBits = [];
             if (c.phone) contactBits.push(`<div>Phone: ${escapeHtml(c.phone)}</div>`);
-            if (c.address) contactBits.push(`<div>${escapeHtml(c.address).replace(/\n/g, '<br>')}</div>`);
-            if (c.email) contactBits.push(`<div>Email: ${escapeHtml(c.email)}</div>`);
+            if (c.address) contactBits.push(`<div>Address: ${escapeHtml(c.address).replace(/\n/g, '<br>')}</div>`);
+            if (c.email) contactBits.push(`<div class="receipt-email-one-line">Email: ${escapeHtml(String(c.email).trim())}</div>`);
             if (contactBits.length) {
                 lines.push(`<div>${contactBits.join('')}</div>`);
             } else {
@@ -996,16 +1059,32 @@ body.branch-select-open .pos-order-summary-anchor {
             lines.push('<div class="receipt-bottom-spacer" aria-hidden="true"></div>');
         } else {
             const totalForVat = Number(r.grand_total || 0);
-            const vatAmount = totalForVat > 0 ? (totalForVat * (12 / 112)) : 0;
-            const vatableSales = Math.max(0, totalForVat - vatAmount);
-            lines.push(`<div class="receipt-row"><span class="left">VATABLE SALES</span><span class="right">${money(vatableSales)}</span></div>`);
-            lines.push(`<div class="receipt-row"><span class="left">VAT (12%)</span><span class="right">${money(vatAmount)}</span></div>`);
+            const vatApplicable = r.vat_applicable !== false;
+            if (vatApplicable) {
+                const vatAmount = totalForVat > 0 ? (totalForVat * (12 / 112)) : 0;
+                const vatableSales = Math.max(0, totalForVat - vatAmount);
+                lines.push(`<div class="receipt-row"><span class="left">VATABLE SALES</span><span class="right">${money(vatableSales)}</span></div>`);
+                lines.push(`<div class="receipt-row"><span class="left">VAT (12%)</span><span class="right">${money(vatAmount)}</span></div>`);
+            }
             const tendered = r.amount_tendered != null ? Number(r.amount_tendered) : null;
             const change = r.change_amount != null ? Number(r.change_amount) : null;
             const ch0 = change != null ? change : 0;
             const pm = String(r.payment_method || '').trim().toLowerCase();
             const pmLabel = pm ? pm.toUpperCase().replace(/_/g, ' ') : '';
             if (pmLabel) lines.push(`<div class="receipt-row"><span class="left">PAYMENT</span><span class="right">${escapeHtml(pmLabel)}</span></div>`);
+            if (pm === 'split' && Array.isArray(r.split_payments) && r.split_payments.length) {
+                lines.push('<div class="receipt-row receipt-muted"><span class="left">SPLIT DETAILS</span><span class="right"></span></div>');
+                r.split_payments.forEach((sp) => {
+                    const sm = String(sp?.method || '').trim().toUpperCase().replace(/_/g, ' ');
+                    const sa = Number(sp?.amount || 0);
+                    if (!sm || !Number.isFinite(sa) || sa <= 0) return;
+                    lines.push(`<div class="receipt-row"><span class="left">- ${escapeHtml(sm)}</span><span class="right">${money(sa)}</span></div>`);
+                });
+                const splitReceived = r.amount_tendered != null ? Number(r.amount_tendered) : null;
+                if (splitReceived != null && Number.isFinite(splitReceived) && splitReceived > 0) {
+                    lines.push(`<div class="receipt-row receipt-bold"><span class="left">TOTAL RECEIVED (SPLIT)</span><span class="right">${money(splitReceived)}</span></div>`);
+                }
+            }
             const refunded = r.refunded_amount != null ? Number(r.refunded_amount) : 0;
             const added = r.added_paid_amount != null ? Number(r.added_paid_amount) : 0;
             const ap = r.amount_paid != null ? Number(r.amount_paid) : 0;
@@ -1038,12 +1117,26 @@ body.branch-select-open .pos-order-summary-anchor {
             const hasAdjust = (Number.isFinite(refunded) && refunded > 0) || (Number.isFinite(added) && added > 0);
             const finalChange = hasAdjust ? 0 : change;
             if (finalChange != null && Number.isFinite(finalChange)) {
-                lines.push(`<div class="receipt-row"><span class="left">CHANGE</span><span class="right">${money(finalChange)}</span></div>`);
+                if (pm === 'split') {
+                    if (finalChange > MONEY_EPS) {
+                        lines.push(`<div class="receipt-row"><span class="left">CASH CHANGE</span><span class="right">${money(finalChange)}</span></div>`);
+                    }
+                } else {
+                    lines.push(`<div class="receipt-row"><span class="left">CHANGE</span><span class="right">${money(finalChange)}</span></div>`);
+                }
             }
             lines.push('<div class="receipt-dash"></div>');
-            if (meta) {
-                lines.push(`<div class="receipt-center receipt-muted">${meta}</div>`);
+            if (isBirRegistered) {
+                lines.push('<div class="receipt-center receipt-bold">THIS SERVES AS AN OFFICIAL RECEIPT</div>');
+                if (tid) lines.push(`<div class="receipt-row"><span class="left">OR No</span><span class="right">${escapeHtml(tid.replace(/^#/, ''))}</span></div>`);
+                if (when) lines.push(`<div class="receipt-row"><span class="left">Date/Time</span><span class="right">${escapeHtml(when)}</span></div>`);
+                const cashierName = String(r.cashier_name || '').trim();
+                if (cashierName) lines.push(`<div class="receipt-row"><span class="left">Cashier Name</span><span class="right">${escapeHtml(cashierName)}</span></div>`);
+                if (tid) lines.push(`<div class="receipt-row"><span class="left">Transaction No</span><span class="right">${escapeHtml(tid.replace(/^#/, ''))}</span></div>`);
+            } else {
+                lines.push('<div class="receipt-compliance-note"><div class="title">THIS IS NOT AN OFFICIAL RECEIPT</div><div class="sub">FOR INTERNAL / REFERENCE PURPOSES ONLY</div></div>');
             }
+            if (!isBirRegistered && meta) lines.push(`<div class="receipt-center receipt-muted">${meta}</div>`);
             lines.push('<div class="receipt-center">Thank you for your purchase!</div>');
             if (footerNote) {
                 const footerLines = footerNote
@@ -1200,7 +1293,16 @@ body.branch-select-open .pos-order-summary-anchor {
                         <button type="button" class="btn btn-outline-primary text-start swal-payment-card" data-method="gcash"><i class="fa-solid fa-mobile-screen-button me-2"></i>GCash</button>
                         <button type="button" class="btn btn-outline-primary text-start swal-payment-card" data-method="paymaya"><i class="fa-solid fa-wallet me-2"></i>PayMaya</button>
                         <button type="button" class="btn btn-outline-primary text-start swal-payment-card" data-method="online_banking"><i class="fa-solid fa-building-columns me-2"></i>Online Banking</button>
+                        <button type="button" class="btn btn-outline-primary text-start swal-payment-card" data-method="split"><i class="fa-solid fa-layer-group me-2"></i>Split payment</button>
                         <button type="button" class="btn btn-outline-primary text-start swal-payment-card" data-method="free"><i class="fa-solid fa-gift me-2"></i>Free (Employee)</button>
+                    </div>
+                    <div id="swalSplitWrap" class="border rounded p-2 mb-2 d-none">
+                        <div class="small fw-semibold mb-2">Split amounts</div>
+                        <div id="swalSplitRows" class="vstack gap-2"></div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary mt-2" id="swalAddSplitRow">
+                            <i class="fa-solid fa-plus me-1"></i>Add split row
+                        </button>
+                        <div class="form-text">If no cash row is used, split total must match exact grand total.</div>
                     </div>
                     <label class="form-label mb-1">Amount received</label>
                     <input id="swalAmountReceived" class="form-control" placeholder="0.00" inputmode="decimal" autocomplete="off">
@@ -1215,7 +1317,79 @@ body.branch-select-open .pos-order-summary-anchor {
                 const paymentCards = Array.from(document.querySelectorAll('#swalPaymentCards .swal-payment-card'));
                 const amtEl = document.getElementById('swalAmountReceived');
                 const quickWrap = document.getElementById('swalQuickAmounts');
+                const splitWrap = document.getElementById('swalSplitWrap');
+                const splitRowsEl = document.getElementById('swalSplitRows');
+                const addSplitBtn = document.getElementById('swalAddSplitRow');
+                const splitMethodOptionsNoCash = `
+                    <option value="card">Card</option>
+                    <option value="gcash">GCash</option>
+                    <option value="paymaya">PayMaya</option>
+                    <option value="online_banking">Online Banking</option>`;
                 const total = Object.values(cart).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
+                const syncSplitTotalToAmountReceived = () => {
+                    if (!splitRowsEl || !amtEl) return;
+                    const splitSum = Array.from(splitRowsEl.querySelectorAll('.swal-split-amount'))
+                        .reduce((s, inputEl) => s + (Number(String(inputEl.value || '').trim()) || 0), 0);
+                    amtEl.value = toMoneyInputStr(splitSum);
+                    amtEl.readOnly = true;
+                    amtEl.disabled = false;
+                    amtEl.removeAttribute('disabled');
+                    amtEl.setAttribute('readonly', 'readonly');
+                };
+                const addSplitRow = (method = 'cash', amount = '', lockedCashRow = false) => {
+                    if (!splitRowsEl) return;
+                    const row = document.createElement('div');
+                    row.className = 'd-flex gap-2 align-items-center';
+                    row.innerHTML = `
+                        <select class="form-select form-select-sm swal-split-method" style="max-width: 170px;"></select>
+                        <input type="text" class="form-control form-control-sm swal-split-amount" placeholder="0.00" inputmode="decimal" autocomplete="off" enterkeyhint="done" spellcheck="false">
+                        <button type="button" class="btn btn-sm btn-outline-danger swal-split-remove" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+                    `;
+                    const methodEl = row.querySelector('.swal-split-method');
+                    const amountEl = row.querySelector('.swal-split-amount');
+                    const removeBtn = row.querySelector('.swal-split-remove');
+                    if (methodEl) {
+                        if (lockedCashRow) {
+                            methodEl.innerHTML = '<option value="cash">Cash</option>';
+                            methodEl.value = 'cash';
+                            methodEl.disabled = true;
+                        } else {
+                            methodEl.innerHTML = splitMethodOptionsNoCash;
+                            methodEl.value = method;
+                        }
+                    }
+                    if (amountEl) {
+                        amountEl.value = amount;
+                        amountEl.disabled = false;
+                        amountEl.readOnly = false;
+                        amountEl.removeAttribute('disabled');
+                        amountEl.removeAttribute('readonly');
+                        amountEl.style.pointerEvents = 'auto';
+                        amountEl.style.userSelect = 'auto';
+                        amountEl.addEventListener('input', () => {
+                            const raw = String(amountEl.value || '');
+                            let cleaned = raw.replace(/[^\d.]/g, '');
+                            const firstDot = cleaned.indexOf('.');
+                            if (firstDot !== -1) {
+                                cleaned = cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, '');
+                            }
+                            amountEl.value = cleaned;
+                            syncSplitTotalToAmountReceived();
+                        });
+                    }
+                    if (lockedCashRow && removeBtn) {
+                        removeBtn.disabled = true;
+                        removeBtn.classList.add('d-none');
+                    } else {
+                        removeBtn?.addEventListener('click', () => {
+                            row.remove();
+                            syncSplitTotalToAmountReceived();
+                        });
+                    }
+                    splitRowsEl.appendChild(row);
+                    syncSplitTotalToAmountReceived();
+                };
+                addSplitBtn?.addEventListener('click', () => addSplitRow('gcash', ''));
                 const setActiveMethodCard = (method) => {
                     paymentCards.forEach((btn) => {
                         const isActive = String(btn.getAttribute('data-method') || '') === method;
@@ -1227,13 +1401,31 @@ body.branch-select-open .pos-order-summary-anchor {
                 const sync = () => {
                     const method = String(methodEl?.value || 'cash');
                     setActiveMethodCard(method);
+                    if (splitWrap) splitWrap.classList.toggle('d-none', method !== 'split');
                     if (method !== 'cash' && method !== 'free') {
-                        amtEl.value = toMoneyInputStr(total);
-                        amtEl.disabled = true;
-                        if (quickWrap) quickWrap.innerHTML = '';
+                        if (method === 'split') {
+                            amtEl.value = toMoneyInputStr(total);
+                            amtEl.disabled = false;
+                            amtEl.readOnly = true;
+                            amtEl.removeAttribute('disabled');
+                            amtEl.setAttribute('readonly', 'readonly');
+                            if (quickWrap) quickWrap.innerHTML = '';
+                            if (splitRowsEl) {
+                                splitRowsEl.innerHTML = '';
+                                addSplitRow('cash', toMoneyInputStr(0), true);
+                            }
+                        } else {
+                            amtEl.value = toMoneyInputStr(total);
+                            amtEl.disabled = true;
+                            amtEl.readOnly = false;
+                            amtEl.removeAttribute('readonly');
+                            if (quickWrap) quickWrap.innerHTML = '';
+                        }
                     } else if (method === 'free') {
                         amtEl.value = toMoneyInputStr(0);
                         amtEl.disabled = true;
+                        amtEl.readOnly = false;
+                        amtEl.removeAttribute('readonly');
                         if (quickWrap) quickWrap.innerHTML = '';
                     } else {
                         // CASH: keep the field disabled unless user explicitly taps "Enter amount".
@@ -1269,6 +1461,15 @@ body.branch-select-open .pos-order-summary-anchor {
                         sync();
                     });
                 });
+                amtEl?.addEventListener('focus', () => {
+                    const method = String(methodEl?.value || 'cash');
+                    if (method === 'split') {
+                        amtEl.disabled = false;
+                        amtEl.readOnly = true;
+                        amtEl.removeAttribute('disabled');
+                        amtEl.setAttribute('readonly', 'readonly');
+                    }
+                });
                 sync();
                 // Focus only when Enter amount is tapped.
             },
@@ -1277,6 +1478,30 @@ body.branch-select-open .pos-order-summary-anchor {
                 const total = Object.values(cart).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
                 const raw = String(document.getElementById('swalAmountReceived')?.value || '').trim();
                 const received = Number(raw);
+                let splitPayments = [];
+                if (method === 'split') {
+                    const rows = Array.from(document.querySelectorAll('#swalSplitRows .d-flex'));
+                    splitPayments = rows.map((row) => {
+                        const m = String(row.querySelector('.swal-split-method')?.value || '').trim().toLowerCase();
+                        const a = Number(String(row.querySelector('.swal-split-amount')?.value || '').trim());
+                        return { method: m, amount: a };
+                    }).filter((r) => r.method && Number.isFinite(r.amount) && r.amount > 0);
+                    if (!splitPayments.length) {
+                        Swal.showValidationMessage('Add at least one split payment amount.');
+                        return false;
+                    }
+                    const splitSum = splitPayments.reduce((s, r) => s + Number(r.amount || 0), 0);
+                    const hasCash = splitPayments.some((r) => r.method === 'cash');
+                    if (splitSum < total) {
+                        Swal.showValidationMessage('Split payment total is less than grand total.');
+                        return false;
+                    }
+                    if (!hasCash && Math.abs(splitSum - total) > 0.009) {
+                        Swal.showValidationMessage('Without cash, split payment must equal exact grand total.');
+                        return false;
+                    }
+                    return { method, received: splitSum, splitPayments };
+                }
                 const finalReceived = method === 'cash' ? received : (method === 'free' ? 0 : total);
                 if (!Number.isFinite(finalReceived) || finalReceived < 0) {
                     Swal.showValidationMessage('Enter a valid amount received.');
@@ -1286,17 +1511,21 @@ body.branch-select-open .pos-order-summary-anchor {
                     Swal.showValidationMessage('Amount received is less than total.');
                     return false;
                 }
-                return { method, received: finalReceived };
+                return { method, received: finalReceived, splitPayments: [] };
             },
         });
         if (!payment.isConfirmed) return;
         const paymentMethod = payment.value.method;
         const tendered = Number(payment.value.received || 0);
+        const splitPayments = Array.isArray(payment.value.splitPayments) ? payment.value.splitPayments : [];
 
         if (!form) return Swal.fire({ icon: 'error', title: 'Checkout form missing' });
         const fd = new FormData(form);
         fd.set('payment_method', String(paymentMethod));
         fd.set('amount_tendered', String(tendered));
+        if (paymentMethod === 'split') {
+            fd.set('split_payments', JSON.stringify(splitPayments));
+        }
         try {
             Swal.fire({
                 title: 'Preparing receipt…',

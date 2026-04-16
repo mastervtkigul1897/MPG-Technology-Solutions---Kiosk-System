@@ -8,7 +8,7 @@
             </div>
         <?php elseif ($role === 'tenant_admin'): ?>
             <div class="alert alert-info mb-0">
-                Login email and account deletion cannot be changed here. Use <strong>Receipt Data</strong> in the menu for transaction receipt details. You can change your password in the section below.
+                Login email and account deletion cannot be changed here. Use <strong>Receipt Config</strong> in the menu for transaction receipt details. You can change your password in the section below.
             </div>
         <?php else: ?>
             <div class="alert alert-info mb-0">

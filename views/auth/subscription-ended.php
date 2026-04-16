@@ -34,6 +34,10 @@ $isInactive = $reason === 'inactive';
     <?php else : ?>
         <p class="small text-white-50 mb-4">Your administrator will provide contact details for renewal.</p>
     <?php endif; ?>
+    <p class="small text-white-50 mb-2">For subscription renewal, contact us on Facebook:</p>
+    <a class="btn btn-outline-light btn-sm mb-4" target="_blank" rel="noopener noreferrer" href="https://www.facebook.com/mpgtechnologysolutionscom/">
+        <i class="fa-brands fa-facebook me-2"></i>MPG Technology Solutions
+    </a>
     <form method="post" action="<?= e(route('logout')) ?>" class="d-inline">
         <?= csrf_field() ?>
         <button type="submit" class="btn btn-light px-4">

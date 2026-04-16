@@ -52,10 +52,11 @@ final class ExpenseController
             $st->execute($params);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
+            $trialBrowse = Auth::isTenantFreeTrial($user);
             $data = [];
             foreach ($rows as $expense) {
                 $deleteAction = '';
-                if (Auth::tenantMayManage($user, 'expenses')) {
+                if (Auth::tenantMayManage($user, 'expenses') && ! $trialBrowse) {
                     $eid = (int) $expense['id'];
                     $deleteAction = '<button type="button" class="btn btn-sm btn-outline-danger js-delete-expense" data-id="'.$eid.'" title="Delete"><i class="fa fa-trash"></i></button>';
                 }
@@ -76,7 +77,9 @@ final class ExpenseController
             ]);
         }
 
-        return view_page('Expenses', 'tenant.expenses.index');
+        return view_page('Expenses', 'tenant.expenses.index', [
+            'premium_trial_browse_lock' => Auth::isTenantFreeTrial($user),
+        ]);
     }
 
     public function store(Request $request): Response
@@ -84,6 +87,11 @@ final class ExpenseController
         $user = Auth::user();
         if (! Auth::tenantMayManage($user, 'expenses')) {
             return new Response('Forbidden', 403);
+        }
+        if (Auth::isTenantFreeTrial($user)) {
+            session_flash('errors', ['Premium: adding expenses is not available on a Free Trial. View plans & pricing to upgrade.']);
+
+            return redirect(url('/tenant/expenses'));
         }
         $tenantId = (int) $user['tenant_id'];
         $desc = trim((string) $request->input('description'));
@@ -107,6 +115,11 @@ final class ExpenseController
         $user = Auth::user();
         if (! Auth::tenantMayManage($user, 'expenses')) {
             return new Response('Forbidden', 403);
+        }
+        if (Auth::isTenantFreeTrial($user)) {
+            session_flash('errors', ['Premium: deleting expenses is not available on a Free Trial.']);
+
+            return redirect(url('/tenant/expenses'));
         }
         $pdo = App::db();
         $st = $pdo->prepare('SELECT type FROM expenses WHERE tenant_id = ? AND id = ? LIMIT 1');

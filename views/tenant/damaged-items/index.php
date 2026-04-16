@@ -1,3 +1,4 @@
+<?php require dirname(__DIR__, 2).'/partials/premium_trial_page_banner.php'; ?>
 <div class="card mb-3">
     <div class="card-body">
         <form id="damagedCreateForm" method="POST" action="<?= e(route('tenant.damaged-items.store')) ?>" class="row g-2 align-items-end">

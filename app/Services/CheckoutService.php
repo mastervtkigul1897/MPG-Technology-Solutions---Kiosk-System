@@ -28,6 +28,7 @@ final class CheckoutService
             $hasPendingContact = false;
             $hasPaymentMethod = false;
             $hasAmountPaid = false;
+            $hasPaymentBreakdownJson = false;
             $hasRefundedAmount = false;
             $hasAddedPaidAmount = false;
             $hasOriginalTotalAmount = false;
@@ -64,6 +65,11 @@ final class CheckoutService
             try {
                 $rg = $pdo->query("SHOW COLUMNS FROM `transactions` LIKE 'amount_paid'");
                 $hasAmountPaid = $rg !== false && $rg->fetch(\PDO::FETCH_ASSOC) !== false;
+            } catch (\Throwable) {
+            }
+            try {
+                $rgb = $pdo->query("SHOW COLUMNS FROM `transactions` LIKE 'payment_breakdown_json'");
+                $hasPaymentBreakdownJson = $rgb !== false && $rgb->fetch(\PDO::FETCH_ASSOC) !== false;
             } catch (\Throwable) {
             }
             try {
@@ -104,6 +110,12 @@ final class CheckoutService
             if (! $hasAmountPaid) {
                 try {
                     $pdo->exec("ALTER TABLE `transactions` ADD COLUMN `amount_paid` DECIMAL(38,16) NULL DEFAULT NULL AFTER `payment_method`");
+                } catch (\Throwable) {
+                }
+            }
+            if (! $hasPaymentBreakdownJson) {
+                try {
+                    $pdo->exec("ALTER TABLE `transactions` ADD COLUMN `payment_breakdown_json` LONGTEXT NULL DEFAULT NULL AFTER `amount_paid`");
                 } catch (\Throwable) {
                 }
             }

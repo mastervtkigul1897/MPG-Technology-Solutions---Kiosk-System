@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 return [
     'welcome' => '/',
+    'pricing' => '/pricing',
     'login' => '/login',
     'register' => '/register',
     'logout' => '/logout',
     'subscription-ended' => '/subscription-ended',
     'dashboard' => '/dashboard',
+    'tenant.plans' => '/tenant/plans',
     'profile.edit' => '/profile',
     'password.update' => '/password',
     'super-admin.settings.edit' => '/super-admin/settings',

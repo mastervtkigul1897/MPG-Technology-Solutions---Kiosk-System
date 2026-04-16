@@ -16,6 +16,7 @@ $required_baseline_labels = $required_baseline_labels ?? [];
     Until then, cashiers use the default access: Create Transaction, Transactions, and Activity log.
 </div>
 <?php endif; ?>
+<?php require dirname(__DIR__, 2).'/partials/premium_trial_page_banner.php'; ?>
 <div class="row g-3">
     <div class="col-12 col-lg-5">
         <div class="card border-0 shadow-sm">

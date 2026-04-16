@@ -124,10 +124,11 @@ final class IngredientController
             $st->execute($params);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
+            $trialBrowse = Auth::isTenantFreeTrial($user);
             $data = [];
             foreach ($rows as $ingredient) {
                 $actions = '';
-                if (Auth::tenantMayManage($user, 'notifications') || Auth::tenantMayManage($user, 'ingredients')) {
+                if (! $trialBrowse && (Auth::tenantMayManage($user, 'notifications') || Auth::tenantMayManage($user, 'ingredients'))) {
                     $id = (int) $ingredient['id'];
                     $actions = '<button type="button" class="btn btn-sm btn-outline-primary js-edit" data-id="'.$id.'" title="Edit"><i class="fa fa-pen"></i></button>';
                 }
@@ -159,6 +160,7 @@ final class IngredientController
         return view_page('Notifications', 'tenant.notifications.index', [
             'allowed_units' => explode(',', self::UNITS),
             'branchExpiredNotice' => $branchExpiredNotice,
+            'premium_trial_browse_lock' => Auth::isTenantFreeTrial($user),
         ]);
     }
 
@@ -228,8 +230,20 @@ final class IngredientController
             return new Response('Not found', 404);
         }
 
-        $canFullEdit = Auth::tenantMayManage($user, 'ingredients');
         $fromNotifications = $request->input('_source') === 'notifications';
+        if ($fromNotifications && Auth::isTenantFreeTrial($user)) {
+            if ($request->wantsJson() || $request->ajax()) {
+                return json_response([
+                    'message' => 'Premium: restocking from Notifications is not available on a Free Trial.',
+                    'errors' => ['general' => ['Premium feature.']],
+                ], 403);
+            }
+            session_flash('errors', ['Premium: restocking from Notifications is not available on a Free Trial. View plans & pricing to upgrade.']);
+
+            return redirect(url('/tenant/notifications'));
+        }
+
+        $canFullEdit = Auth::tenantMayManage($user, 'ingredients');
         $canCashierNotifOnly = ($user['role'] ?? '') === 'cashier' && $fromNotifications
             && Auth::canAccessModule($user, 'notifications')
             && ! Auth::canAccessModule($user, 'ingredients');

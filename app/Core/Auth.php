@@ -11,6 +11,8 @@ final class Auth
     /** Cached only when column exists (true), so we re-check after DB migrations without restarting PHP. */
     private static ?bool $modulePermissionsColumnExists = null;
     private static ?bool $tenantBranchColumnsReady = null;
+    /** @var array<int,string> */
+    private static array $tenantPlanCache = [];
 
     public static function hasModulePermissionsColumn(): bool
     {
@@ -200,6 +202,36 @@ final class Auth
         }
 
         return ! (bool) $row['is_active'];
+    }
+
+    public static function tenantPlan(?array $user): string
+    {
+        if (! $user) {
+            return '';
+        }
+        $tid = (int) ($user['tenant_id'] ?? 0);
+        if ($tid < 1) {
+            return '';
+        }
+        if (isset(self::$tenantPlanCache[$tid])) {
+            return self::$tenantPlanCache[$tid];
+        }
+        try {
+            $pdo = App::db();
+            $st = $pdo->prepare('SELECT plan FROM tenants WHERE id = ? LIMIT 1');
+            $st->execute([$tid]);
+            $plan = strtolower(trim((string) $st->fetchColumn()));
+            self::$tenantPlanCache[$tid] = $plan;
+            return $plan;
+        } catch (\Throwable) {
+            return '';
+        }
+    }
+
+    public static function isTenantFreeTrial(?array $user): bool
+    {
+        $plan = self::tenantPlan($user);
+        return in_array($plan, ['trial', 'free', 'free_trial'], true);
     }
 
     private static function resolveActiveTenantId(int $baseTenantId): int

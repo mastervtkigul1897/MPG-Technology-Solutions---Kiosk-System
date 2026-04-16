@@ -8,6 +8,7 @@ if ($brandSuffix !== '') {
     $guestTitleParts[] = $brandSuffix;
 }
 $brandLogoPath = url('images/branding/mpg-kis-logo.png');
+$brandDisplayName = 'MPG KIS - Kiosk & Inventory System';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -33,10 +34,10 @@ $brandLogoPath = url('images/branding/mpg-kis-logo.png');
                     <div class="card-body p-4 p-md-5">
                         <div class="d-flex align-items-center gap-2 mb-3">
                             <img src="<?= e($brandLogoPath) ?>" alt="<?= e($appName) ?> logo" width="42" height="42" class="rounded-circle border">
-                            <div class="fw-semibold"><?= e($appName) ?></div>
+                            <div class="fw-semibold"><?= e($brandDisplayName) ?></div>
                         </div>
                         <h4 class="mb-1"><?= e($title ?? '') ?></h4>
-                        <p class="modern-page-note mb-3">Securely access your kiosk workspace.</p>
+                        <p class="modern-page-note mb-3">Advanced kiosk POS and inventory in one platform—scale-ready controls, clearer visibility at the register, and checkout built for busy, growing stores.</p>
                         <?php require dirname(__DIR__).'/partials/alerts.php'; ?>
                         <?= $content ?? '' ?>
                     </div>

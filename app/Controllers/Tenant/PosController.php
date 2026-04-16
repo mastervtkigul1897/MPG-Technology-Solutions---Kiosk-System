@@ -76,6 +76,7 @@ final class PosController
     {
         $user = Auth::user();
         $tenantId = (int) $user['tenant_id'];
+        $canPrintReceipt = ! Auth::isTenantFreeTrial($user);
         $search = trim((string) $request->input('search'));
         $page = max(1, (int) $request->query('page', 1));
         $perPage = 100;
@@ -216,6 +217,7 @@ final class PosController
         return view_page('Create Transaction', 'tenant.pos.index', array_merge([
             'products' => $products,
             'productPayload' => $productPayload,
+            'receipt_print_allowed' => $canPrintReceipt,
             'filters' => ['search' => $search],
             'pagination' => [
                 'current_page' => $page,
@@ -228,7 +230,10 @@ final class PosController
 
     public function receiptEscpos(Request $request): Response
     {
-        Auth::user();
+        $user = Auth::user();
+        if (Auth::isTenantFreeTrial($user)) {
+            return json_response(['success' => false, 'message' => 'Premium feature: Receipt printing is disabled for Free Trial plans.'], 403);
+        }
         $receipt = self::receiptArrayFromRequest($request);
         if ($receipt === null) {
             return json_response(['success' => false, 'message' => 'Missing or invalid receipt data.'], 422);
@@ -247,7 +252,10 @@ final class PosController
 
     public function receiptPrintNetwork(Request $request): Response
     {
-        Auth::user();
+        $user = Auth::user();
+        if (Auth::isTenantFreeTrial($user)) {
+            return json_response(['success' => false, 'message' => 'Premium feature: Receipt printing is disabled for Free Trial plans.'], 403);
+        }
         $receipt = self::receiptArrayFromRequest($request);
         if ($receipt === null) {
             return json_response(['success' => false, 'message' => 'Missing or invalid receipt data.'], 422);
@@ -314,6 +322,89 @@ final class PosController
         return null;
     }
 
+    /** @return list<array{method:string,amount:float}> */
+    private static function normalizeSplitPayments(mixed $raw): array
+    {
+        if (! is_array($raw)) {
+            return [];
+        }
+        $allowedMethods = ['cash', 'card', 'gcash', 'paymaya', 'online_banking'];
+        $out = [];
+        foreach ($raw as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $method = strtolower(trim((string) ($row['method'] ?? '')));
+            if (! in_array($method, $allowedMethods, true)) {
+                continue;
+            }
+            $amountRaw = $row['amount'] ?? null;
+            $amount = is_numeric($amountRaw) ? (float) $amountRaw : 0.0;
+            if ($amount <= 0) {
+                continue;
+            }
+            $out[] = ['method' => $method, 'amount' => $amount];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param list<array{method:string,amount:float}> $splitPayments
+     */
+    private static function applyPaymentMeta(PDO $pdo, int $tenantId, int $transactionId, string $paymentMethod, ?float $amountTendered, array $splitPayments): void
+    {
+        $st = $pdo->prepare('SELECT total_amount FROM transactions WHERE tenant_id = ? AND id = ? LIMIT 1');
+        $st->execute([$tenantId, $transactionId]);
+        $total = (float) $st->fetchColumn();
+
+        if ($paymentMethod === 'split') {
+            $sum = 0.0;
+            $hasCash = false;
+            foreach ($splitPayments as $row) {
+                $sum += (float) ($row['amount'] ?? 0);
+                if (($row['method'] ?? '') === 'cash') {
+                    $hasCash = true;
+                }
+            }
+            if ($sum < $total) {
+                throw new RuntimeException('Split payments are less than total.');
+            }
+            if (! $hasCash && abs($sum - $total) > 1e-9) {
+                throw new RuntimeException('Split payments without cash must match the exact total.');
+            }
+            $change = $hasCash ? max(0.0, $sum - $total) : 0.0;
+            $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = ?, original_total_amount = ?, payment_breakdown_json = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
+                ->execute([
+                    'split',
+                    $total,
+                    $sum,
+                    $change,
+                    $total,
+                    json_encode($splitPayments, JSON_UNESCAPED_UNICODE),
+                    $tenantId,
+                    $transactionId,
+                ]);
+
+            return;
+        }
+
+        if ($paymentMethod !== 'cash') {
+            $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = 0, original_total_amount = ?, payment_breakdown_json = NULL, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
+                ->execute([$paymentMethod, $total, $total, $total, $tenantId, $transactionId]);
+
+            return;
+        }
+
+        $cashTendered = $amountTendered ?? -1;
+        if ($cashTendered < $total) {
+            throw new RuntimeException('Amount received is less than total.');
+        }
+        $change = $cashTendered - $total;
+        $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = ?, original_total_amount = ?, payment_breakdown_json = NULL, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
+            ->execute([$paymentMethod, $total, $cashTendered, $change, $total, $tenantId, $transactionId]);
+    }
+
     public function checkout(Request $request): Response
     {
         $user = Auth::user();
@@ -340,10 +431,16 @@ final class PosController
         $paidRaw = $request->input('amount_tendered');
         $amountTendered = is_numeric($paidRaw) ? (float) $paidRaw : null;
         $paymentMethod = strtolower(trim((string) $request->input('payment_method', 'cash')));
-        $allowedMethods = ['cash', 'card', 'gcash', 'paymaya', 'online_banking', 'free'];
+        $allowedMethods = ['cash', 'card', 'gcash', 'paymaya', 'online_banking', 'split', 'free'];
         if (! in_array($paymentMethod, $allowedMethods, true)) {
             $paymentMethod = 'cash';
         }
+        $splitPaymentsRaw = $request->input('split_payments');
+        if (is_string($splitPaymentsRaw) && $splitPaymentsRaw !== '') {
+            $decoded = json_decode($splitPaymentsRaw, true);
+            $splitPaymentsRaw = is_array($decoded) ? $decoded : [];
+        }
+        $splitPayments = self::normalizeSplitPayments($splitPaymentsRaw);
 
         try {
             $transactionId = (new CheckoutService())->checkout($tenantId, (int) $user['id'], $parsed);
@@ -368,25 +465,18 @@ final class PosController
                     ->execute([$tenantId, $transactionId]);
             } catch (\Throwable) {
             }
-        } elseif ($amountTendered !== null) {
+        } elseif ($amountTendered !== null || $paymentMethod === 'split') {
             try {
-                $st = $pdo->prepare('SELECT total_amount FROM transactions WHERE tenant_id = ? AND id = ? LIMIT 1');
-                $st->execute([$tenantId, $transactionId]);
-                $total = (float) $st->fetchColumn();
-                if ($paymentMethod !== 'cash') {
-                    // Non-cash: paid equals exact total, no change.
-                    $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = 0, original_total_amount = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
-                        ->execute([$paymentMethod, $total, $total, $total, $tenantId, $transactionId]);
-                } else {
-                    if ($amountTendered < $total) {
-                        throw new RuntimeException('Amount received is less than total.');
+                self::applyPaymentMeta($pdo, $tenantId, $transactionId, $paymentMethod, $amountTendered, $splitPayments);
+            } catch (\Throwable $e) {
+                if ($paymentMethod === 'split') {
+                    if ($request->wantsJson()) {
+                        return json_response(['success' => false, 'message' => $e->getMessage()], 422);
                     }
-                    $change = $amountTendered - $total;
-                    // amount_paid stores the original total (what customer paid for, net of change).
-                    $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = ?, original_total_amount = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
-                        ->execute([$paymentMethod, $total, $amountTendered, $change, $total, $tenantId, $transactionId]);
+                    session_flash('errors', [$e->getMessage()]);
+
+                    return redirect(url('/tenant/pos'));
                 }
-            } catch (\Throwable) {
                 // Do not fail checkout if these optional fields cannot be saved.
             }
         }
@@ -482,11 +572,17 @@ final class PosController
         $paidRaw = $request->input('amount_tendered');
         $amountTendered = is_numeric($paidRaw) ? (float) $paidRaw : -1;
         $paymentMethod = strtolower(trim((string) $request->input('payment_method', 'cash')));
-        $allowedMethods = ['cash', 'card', 'gcash', 'paymaya', 'online_banking'];
+        $allowedMethods = ['cash', 'card', 'gcash', 'paymaya', 'online_banking', 'split'];
         if (! in_array($paymentMethod, $allowedMethods, true)) {
             $paymentMethod = 'cash';
         }
-        if ($amountTendered < 0) {
+        $splitPaymentsRaw = $request->input('split_payments');
+        if (is_string($splitPaymentsRaw) && $splitPaymentsRaw !== '') {
+            $decoded = json_decode($splitPaymentsRaw, true);
+            $splitPaymentsRaw = is_array($decoded) ? $decoded : [];
+        }
+        $splitPayments = self::normalizeSplitPayments($splitPaymentsRaw);
+        if ($amountTendered < 0 && $paymentMethod !== 'split') {
             return json_response(['success' => false, 'message' => 'Amount received is required.'], 422);
         }
 
@@ -495,18 +591,11 @@ final class PosController
             $txId = (new CheckoutService())->payPending($tenantId, (int) $user['id'], $pendingId, $amountTendered);
             // Store payment method/paid/change similarly to checkout.
             try {
-                $st = $pdo->prepare('SELECT total_amount FROM transactions WHERE tenant_id = ? AND id = ? LIMIT 1');
-                $st->execute([$tenantId, $txId]);
-                $total = (float) $st->fetchColumn();
-                if ($paymentMethod !== 'cash') {
-                    $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = 0, original_total_amount = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
-                        ->execute([$paymentMethod, $total, $total, $total, $tenantId, $txId]);
-                } else {
-                    $change = max(0, $amountTendered - $total);
-                    $pdo->prepare('UPDATE transactions SET payment_method = ?, amount_paid = ?, amount_tendered = ?, change_amount = ?, original_total_amount = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
-                        ->execute([$paymentMethod, $total, $amountTendered, $change, $total, $tenantId, $txId]);
+                self::applyPaymentMeta($pdo, $tenantId, $txId, $paymentMethod, $amountTendered, $splitPayments);
+            } catch (\Throwable $e) {
+                if ($paymentMethod === 'split') {
+                    return json_response(['success' => false, 'message' => $e->getMessage()], 422);
                 }
-            } catch (\Throwable) {
             }
         } catch (RuntimeException $e) {
             return json_response(['success' => false, 'message' => $e->getMessage()], 422);

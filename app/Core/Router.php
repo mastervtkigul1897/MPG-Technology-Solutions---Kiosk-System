@@ -170,6 +170,7 @@ final class Router
         };
 
         $r(['GET'], '#^/$#', HomeController::class.'::welcome', 'welcome', ['guest']);
+        $r(['GET'], '#^/pricing$#', HomeController::class.'::pricing', 'pricing', ['guest']);
         $r(['GET'], '#^/login$#', AuthController::class.'::showLogin', 'login', ['guest']);
         $r(['POST'], '#^/login$#', AuthController::class.'::login', 'login.post', ['guest']);
         $r(['GET'], '#^/register$#', AuthController::class.'::showRegister', 'register', ['guest']);
@@ -207,6 +208,7 @@ final class Router
 
         $ta = ['auth', 'tenant.active', 'tenant.subscription'];
         $tenantAdmin = ['auth', 'tenant.active', 'tenant.subscription', 'role:tenant_admin'];
+        $r(['GET'], '#^/tenant/plans$#', HomeController::class.'::tenantPlans', 'tenant.plans', $ta);
         $r(['GET'], '#^/tenant/pos$#', PosController::class.'::index', 'tenant.pos.index', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/pos/checkout$#', PosController::class.'::checkout', 'tenant.pos.checkout', array_merge($ta, ['tenant.access:pos']));
         $r(['GET'], '#^/tenant/pos/pending$#', PosController::class.'::pendingIndex', 'tenant.pos.pending.index', array_merge($ta, ['tenant.access:pos']));

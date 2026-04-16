@@ -22,7 +22,7 @@ final class ProfileController
 
     public function update(Request $request): Response
     {
-        session_flash('errors', ['Profile update is disabled. Use Receipt Data menu for receipt details or change password below.']);
+        session_flash('errors', ['Profile update is disabled. Use Receipt Config menu for receipt details or change password below.']);
 
         return redirect(url('/profile'));
     }

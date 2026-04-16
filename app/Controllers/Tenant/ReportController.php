@@ -54,6 +54,7 @@ final class ReportController
             'gcash' => 0.0,
             'paymaya' => 0.0,
             'online_banking' => 0.0,
+            'split' => 0.0,
             'free' => 0.0,
         ];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
@@ -215,6 +216,7 @@ final class ReportController
     {
         $user = Auth::user();
         $tenantId = (int) $user['tenant_id'];
+        $canPrintReceipt = ! Auth::isTenantFreeTrial($user);
         $pdo = App::db();
 
         if ($request->ajax() || $request->boolean('datatable')) {
@@ -236,9 +238,9 @@ final class ReportController
                     'card',
                     'gcash',
                     'paymaya',
-                    'online banking',
-                    'e-wallet',
-                    'gift certificate',
+                    'online_banking',
+                    'online banking', // legacy rows
+                    'split',
                     'free',
                 ];
                 if (in_array($paymentFilter, $allowedPaymentMethods, true)) {
@@ -413,12 +415,18 @@ final class ReportController
             ]);
         }
 
-        return view_page('Transactions', 'tenant.transactions.index', thermal_receipt_client_config('transactions'));
+        return view_page('Transactions', 'tenant.transactions.index', array_merge(
+            thermal_receipt_client_config('transactions'),
+            ['receipt_print_allowed' => $canPrintReceipt]
+        ));
     }
 
     public function editData(Request $request, string $id): Response
     {
         $user = Auth::user();
+        if (Auth::isTenantFreeTrial($user)) {
+            return json_response(['success' => false, 'message' => 'Premium feature: editing receipt/transaction data is not available for Free Trial plans.'], 403);
+        }
         $tenantId = (int) ($user['tenant_id'] ?? 0);
         $txId = (int) $id;
         if ($tenantId < 1 || $txId < 1) {
@@ -493,6 +501,9 @@ final class ReportController
     public function editItems(Request $request, string $id): Response
     {
         $user = Auth::user();
+        if (Auth::isTenantFreeTrial($user)) {
+            return json_response(['success' => false, 'message' => 'Premium feature: editing receipt/transaction data is not available for Free Trial plans.'], 403);
+        }
         $tenantId = (int) ($user['tenant_id'] ?? 0);
         $txId = (int) $id;
         if ($tenantId < 1 || $txId < 1) {
@@ -897,6 +908,9 @@ final class ReportController
     public function receipt(Request $request, string $id): Response
     {
         $user = Auth::user();
+        if (Auth::isTenantFreeTrial($user)) {
+            return json_response(['success' => false, 'message' => 'Premium feature: receipt printing is not available for Free Trial plans.'], 403);
+        }
         $tenantId = (int) ($user['tenant_id'] ?? 0);
         $txId = (int) $id;
         if ($tenantId < 1 || $txId < 1) {

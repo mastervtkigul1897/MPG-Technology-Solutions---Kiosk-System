@@ -11,6 +11,7 @@ $limit = (int) ($branch_limit ?? 1);
 $defaults = $clone_defaults ?? ['categories', 'ingredients', 'products', 'requirements'];
 ?>
 
+<?php require dirname(__DIR__, 2).'/partials/premium_trial_page_banner.php'; ?>
 <div class="card border-0 shadow-sm mb-3">
     <div class="card-body p-3 p-md-4">
         <h6 class="mb-1">Your branch account</h6>

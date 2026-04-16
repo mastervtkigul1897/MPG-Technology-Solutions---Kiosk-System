@@ -106,6 +106,7 @@ final class StaffController
                 StaffModules::REQUIRED_BASELINE
             ),
             'module_permissions_available' => $hasModsCol,
+            'premium_trial_browse_lock' => Auth::isTenantFreeTrial($user),
         ]);
     }
 
@@ -127,6 +128,10 @@ final class StaffController
         $user = Auth::user();
         if (! $user || $user['role'] !== 'tenant_admin') {
             return new Response('Forbidden', 403);
+        }
+        if (Auth::isTenantFreeTrial($user)) {
+            session_flash('errors', ['Premium feature: adding staff accounts is not available for Free Trial plans.']);
+            return redirect(url('/tenant/staff'));
         }
         $tenantId = (int) $user['tenant_id'];
 
@@ -211,6 +216,11 @@ final class StaffController
 
             return redirect(url('/tenant/staff'));
         }
+        if (Auth::isTenantFreeTrial($user)) {
+            session_flash('errors', ['Premium: updating staff module access is not available on a Free Trial.']);
+
+            return redirect(url('/tenant/staff'));
+        }
 
         $modulesRaw = $request->input('modules', []);
         $optionalPicked = is_array($modulesRaw) ? StaffModules::sanitizeRequested($modulesRaw) : [];
@@ -267,6 +277,11 @@ final class StaffController
         $user = Auth::user();
         if (! $user || $user['role'] !== 'tenant_admin') {
             return new Response('Forbidden', 403);
+        }
+        if (Auth::isTenantFreeTrial($user)) {
+            session_flash('errors', ['Premium: removing staff accounts is not available on a Free Trial.']);
+
+            return redirect(url('/tenant/staff'));
         }
         $tenantId = (int) $user['tenant_id'];
         $targetId = (int) $id;
