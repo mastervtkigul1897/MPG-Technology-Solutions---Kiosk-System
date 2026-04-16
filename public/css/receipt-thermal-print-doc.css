@@ -100,6 +100,37 @@ body {
     margin-bottom: 0.35rem;
 }
 
+.receipt-email-one-line {
+    display: block;
+    width: 100%;
+    white-space: nowrap;
+}
+
+.receipt-compliance-note {
+    margin: 0.28rem 0;
+    padding: 0.2rem 0.28rem;
+    border: 1px dashed #000;
+    border-radius: 0.2rem;
+    text-align: center;
+    line-height: 1.2;
+}
+
+.receipt-compliance-note .title {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.receipt-compliance-note .sub {
+    font-weight: 600;
+}
+
+.receipt-legal-box {
+    margin: 0.2rem 0;
+    padding: 0.16rem 0.28rem;
+    border: 1px dashed #000;
+    border-radius: 0.2rem;
+}
+
 @media print {
     @page {
         size: 60mm auto;

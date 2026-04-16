@@ -193,7 +193,7 @@
 .receipt-row .right { flex: 0 0 auto; text-align: right; white-space: nowrap; }
 .receipt-item-name { font-weight: 600; margin-bottom: 0.06rem; word-break: break-word; }
 .receipt-item-price-line { margin-bottom: 0.35rem; }
-.receipt-email-one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.receipt-email-one-line { display: block; width: 100%; white-space: nowrap; }
 .receipt-unpaid-prep {
     position: relative;
     overflow: hidden;
@@ -555,14 +555,16 @@
                 lines.push('<div class="receipt-compliance-note"><div class="title">THIS IS NOT AN OFFICIAL RECEIPT</div><div class="sub">FOR INTERNAL / REFERENCE PURPOSES ONLY</div></div>');
             }
             if (!isBirRegistered && meta) lines.push(`<div class="receipt-center receipt-muted">${meta}</div>`);
-            lines.push('<div class="receipt-center">Thank you for your purchase!</div>');
+            lines.push('<div class="receipt-center">&nbsp;</div>');
+            lines.push('<div class="receipt-center receipt-bold">Thank you for your purchase!</div>');
             if (footerNote) {
+                lines.push('<div class="receipt-center">&nbsp;</div>');
                 const footerLines = footerNote
                     .split(/\r\n|\n|\r/g)
                     .map((x) => String(x || '').trim())
                     .filter(Boolean);
                 if (footerLines.length) {
-                    lines.push(`<div class="receipt-center receipt-muted">${footerLines.map((x) => escapeHtml(x)).join('<br>')}</div>`);
+                    lines.push(`<div class="receipt-center receipt-bold">${footerLines.map((x) => escapeHtml(x)).join('<br>')}</div>`);
                 }
             }
             lines.push('<div class="receipt-bottom-spacer" aria-hidden="true"></div>');
@@ -570,10 +572,33 @@
         lines.push('</div>');
         return lines.join('');
     };
+    const fitReceiptEmailLines = (rootEl) => {
+        if (!rootEl) return;
+        rootEl.querySelectorAll('.receipt-email-one-line').forEach((el) => {
+            el.style.fontSize = '';
+            let size = Number.parseFloat(window.getComputedStyle(el).fontSize || '10');
+            if (!Number.isFinite(size) || size <= 0) size = 10;
+            const min = 3;
+            for (let i = 0; i < 40 && el.clientWidth > 0 && el.scrollWidth > el.clientWidth && size > min; i += 1) {
+                size -= 0.25;
+                el.style.fontSize = `${size}px`;
+            }
+        });
+    };
+    const scheduleFitReceiptEmailLines = (rootEl) => {
+        if (!rootEl) return;
+        requestAnimationFrame(() => fitReceiptEmailLines(rootEl));
+        setTimeout(() => fitReceiptEmailLines(rootEl), 60);
+    };
 
     const receiptModalEl = document.getElementById('transactionReceiptModal');
     const receiptPrintAreaEl = document.getElementById('transactionReceiptPrintArea');
     const receiptModal = receiptModalEl ? bootstrap.Modal.getOrCreateInstance(receiptModalEl) : null;
+    if (receiptModalEl) {
+        receiptModalEl.addEventListener('shown.bs.modal', () => {
+            scheduleFitReceiptEmailLines(receiptPrintAreaEl);
+        });
+    }
 
     const receiptThermalCssUrl = <?= json_embed(url('css/receipt-thermal-print-doc.css')) ?>;
     const printReceiptDedicated = (rootEl) => {
@@ -793,6 +818,7 @@
             }
             receiptPrintAreaEl.innerHTML = buildReceiptHtml(body.receipt || {});
             receiptModal.show();
+            scheduleFitReceiptEmailLines(receiptPrintAreaEl);
         } catch {
             Swal.close();
             Swal.fire({ icon: 'error', title: 'Network error', text: 'Could not load receipt. Please try again.' });
