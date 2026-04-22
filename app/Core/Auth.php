@@ -8,11 +8,37 @@ use PDO;
 
 final class Auth
 {
+    private const FREE_PLAN_CODES = ['trial', 'free', 'free_trial', 'free_access'];
+    private const FREE_TRIAL_DAYS = 7;
     /** Cached only when column exists (true), so we re-check after DB migrations without restarting PHP. */
     private static ?bool $modulePermissionsColumnExists = null;
     private static ?bool $tenantBranchColumnsReady = null;
+    private static ?bool $usersStaffTypeColumnExists = null;
+    private static function hasUsersStaffTypeColumn(): bool
+    {
+        if (self::$usersStaffTypeColumnExists === true) {
+            return true;
+        }
+        try {
+            $pdo = App::db();
+            $chk = $pdo->query("SHOW COLUMNS FROM `users` LIKE 'staff_type'");
+            $exists = $chk !== false && $chk->fetch(PDO::FETCH_ASSOC) !== false;
+            if ($exists) {
+                self::$usersStaffTypeColumnExists = true;
+            }
+
+            return $exists;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     /** @var array<int,string> */
     private static array $tenantPlanCache = [];
+    /** @var array<int,string> */
+    private static array $tenantLicenseExpiresCache = [];
+    /** @var array<int,array<string,mixed>> */
+    private static array $tenantSubscriptionMetaCache = [];
 
     public static function hasModulePermissionsColumn(): bool
     {
@@ -69,9 +95,11 @@ final class Auth
         }
         $pdo = App::db();
         $hasModsCol = self::hasModulePermissionsColumn();
+        $hasStaffTypeCol = self::hasUsersStaffTypeColumn();
+        $staffTypeSelect = $hasStaffTypeCol ? 'staff_type' : "'full_time' AS staff_type";
         $sql = $hasModsCol
-            ? 'SELECT id, name, email, password, role, tenant_id, module_permissions, email_verified_at FROM users WHERE id = ? LIMIT 1'
-            : 'SELECT id, name, email, password, role, tenant_id, email_verified_at FROM users WHERE id = ? LIMIT 1';
+            ? "SELECT id, name, email, password, role, {$staffTypeSelect}, tenant_id, module_permissions, email_verified_at FROM users WHERE id = ? LIMIT 1"
+            : "SELECT id, name, email, password, role, {$staffTypeSelect}, tenant_id, email_verified_at FROM users WHERE id = ? LIMIT 1";
         $st = $pdo->prepare($sql);
         $st->execute([(int) $id]);
         $u = $st->fetch(PDO::FETCH_ASSOC);
@@ -80,9 +108,14 @@ final class Auth
         }
         $raw = $u['module_permissions'] ?? null;
         unset($u['module_permissions']);
+        $u['staff_type'] = self::normalizeStaffType((string) ($u['staff_type'] ?? 'full_time'));
         $u['modules'] = $hasModsCol
             ? StaffModules::normalizeCashierModules(is_string($raw) ? $raw : null)
             : StaffModules::normalizeCashierModules(null);
+        if (($u['role'] ?? '') === 'cashier' && in_array($u['staff_type'], ['utility', 'driver'], true)) {
+            // Utility/Driver are time-log only accounts.
+            $u['modules'] = [];
+        }
 
         // Tenant owner can switch active branch context using one login.
         if (($u['role'] ?? '') === 'tenant_admin' && ! empty($u['tenant_id'])) {
@@ -141,36 +174,23 @@ final class Auth
         return ($user['role'] ?? '') === 'tenant_admin' || self::canAccessModule($user, $module);
     }
 
+    private static function normalizeStaffType(string $raw): string
+    {
+        $v = strtolower(trim($raw));
+        if (in_array($v, ['utility', 'driver', 'part_timer', 'full_time'], true)) {
+            return $v;
+        }
+
+        return 'full_time';
+    }
+
     /**
-     * True when the user's tenant has a subscription end date strictly before today (calendar date).
-     * No end date = not expired. Super admin and non-tenant users: false.
+     * Subscription expiry no longer locks tenants out.
+     * Expired paid subscriptions are handled by isTenantFreePlanRestricted().
      */
     public static function isTenantSubscriptionExpired(?array $user): bool
     {
-        if (! $user) {
-            return false;
-        }
-        $role = $user['role'] ?? '';
-        if ($role === 'super_admin') {
-            return false;
-        }
-        if ($role !== 'tenant_admin' && $role !== 'cashier') {
-            return false;
-        }
-        $tid = $user['tenant_id'] ?? null;
-        if ($tid === null || $tid === '' || (int) $tid === 0) {
-            return false;
-        }
-        $pdo = App::db();
-        $st = $pdo->prepare('SELECT license_expires_at FROM tenants WHERE id = ? LIMIT 1');
-        $st->execute([(int) $tid]);
-        $row = $st->fetch(PDO::FETCH_ASSOC);
-        if (! $row || $row['license_expires_at'] === null || $row['license_expires_at'] === '') {
-            return false;
-        }
-        $expiryDate = date('Y-m-d', strtotime((string) $row['license_expires_at']));
-
-        return $expiryDate < date('Y-m-d');
+        return false;
     }
 
     /**
@@ -231,7 +251,323 @@ final class Auth
     public static function isTenantFreeTrial(?array $user): bool
     {
         $plan = self::tenantPlan($user);
-        return in_array($plan, ['trial', 'free', 'free_trial'], true);
+        return in_array($plan, self::FREE_PLAN_CODES, true);
+    }
+
+    /** True while free-plan trial window (first 7 days) is still active. */
+    public static function isTenantFreeTrialActive(?array $user): bool
+    {
+        if (! self::isTenantFreeTrial($user)) {
+            return false;
+        }
+        $trialEndsAt = self::tenantFreeTrialEndsAt($user);
+        if ($trialEndsAt === null) {
+            return false;
+        }
+
+        return time() < $trialEndsAt;
+    }
+
+    /** True when a tenant should use the limited Free version. */
+    public static function isTenantFreePlanRestricted(?array $user): bool
+    {
+        if (! $user) {
+            return false;
+        }
+        $role = $user['role'] ?? '';
+        if ($role === 'super_admin') {
+            return false;
+        }
+        if ($role !== 'tenant_admin' && $role !== 'cashier') {
+            return false;
+        }
+        $tid = (int) ($user['tenant_id'] ?? 0);
+        if ($tid < 1) {
+            return false;
+        }
+        $meta = self::tenantSubscriptionMeta($tid);
+        if (! is_array($meta)) {
+            return false;
+        }
+        if (self::isFreePlanName((string) ($meta['plan'] ?? ''))) {
+            $trialEndsAt = self::tenantFreeTrialEndsAt($user);
+            if ($trialEndsAt === null) {
+                return true;
+            }
+
+            return time() >= $trialEndsAt;
+        }
+
+        return self::tenantSubscriptionEndReached($meta);
+    }
+
+    /** True only for paid/non-free tenant plans whose subscription end time has passed. */
+    public static function isTenantPaidSubscriptionExpired(?array $user): bool
+    {
+        if (! $user) {
+            return false;
+        }
+        $role = $user['role'] ?? '';
+        if ($role === 'super_admin') {
+            return false;
+        }
+        if ($role !== 'tenant_admin' && $role !== 'cashier') {
+            return false;
+        }
+        $tid = (int) ($user['tenant_id'] ?? 0);
+        if ($tid < 1) {
+            return false;
+        }
+        $meta = self::tenantSubscriptionMeta($tid);
+        if (! is_array($meta) || self::isFreePlanName((string) ($meta['plan'] ?? ''))) {
+            return false;
+        }
+
+        return self::tenantSubscriptionEndReached($meta);
+    }
+
+    /**
+     * Days remaining until tenant's license_expires_at (calendar-day based).
+     * Returns null when not available (no user/tenant, no expiry date, or read fails).
+     */
+    public static function tenantDaysRemaining(?array $user): ?int
+    {
+        if (! $user) {
+            return null;
+        }
+        $tid = (int) ($user['tenant_id'] ?? 0);
+        if ($tid < 1) {
+            return null;
+        }
+        $raw = self::$tenantLicenseExpiresCache[$tid] ?? null;
+        if ($raw === null) {
+            try {
+                $pdo = App::db();
+                $st = $pdo->prepare('SELECT license_expires_at FROM tenants WHERE id = ? LIMIT 1');
+                $st->execute([$tid]);
+                $raw = (string) $st->fetchColumn();
+                self::$tenantLicenseExpiresCache[$tid] = $raw;
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+        $raw = trim((string) $raw);
+        if ($raw === '') {
+            return null;
+        }
+        $ts = strtotime($raw);
+        if ($ts === false) {
+            return null;
+        }
+        $exp = date('Y-m-d', $ts);
+        $today = date('Y-m-d');
+        // date diff in days (expiry date inclusive -> if exp==today => 0 days remaining)
+        $days = (int) floor((strtotime($exp) - strtotime($today)) / 86400);
+
+        return max(0, $days);
+    }
+
+    public static function tenantFreeTrialDaysRemaining(?array $user): ?int
+    {
+        $endsAt = self::tenantFreeTrialEndsAt($user);
+        if ($endsAt === null) {
+            return null;
+        }
+        $exp = date('Y-m-d', $endsAt);
+        $today = date('Y-m-d');
+        $days = (int) floor((strtotime($exp) - strtotime($today)) / 86400);
+
+        return max(0, $days);
+    }
+
+    private static function tenantFreeTrialEndsAt(?array $user): ?int
+    {
+        if (! $user) {
+            return null;
+        }
+        $tid = (int) ($user['tenant_id'] ?? 0);
+        if ($tid < 1) {
+            return null;
+        }
+        $meta = self::tenantSubscriptionMeta($tid);
+        if (! is_array($meta) || ! self::isFreePlanName((string) ($meta['plan'] ?? ''))) {
+            return null;
+        }
+        $startsRaw = trim((string) ($meta['license_starts_at'] ?? ''));
+        if ($startsRaw !== '') {
+            $startTs = strtotime($startsRaw);
+            if ($startTs !== false) {
+                return strtotime('+'.self::FREE_TRIAL_DAYS.' days', $startTs) ?: null;
+            }
+        }
+
+        $createdRaw = trim((string) ($meta['created_at'] ?? ''));
+        if ($createdRaw !== '') {
+            $createdTs = strtotime($createdRaw);
+            if ($createdTs !== false) {
+                return strtotime('+'.self::FREE_TRIAL_DAYS.' days', $createdTs) ?: null;
+            }
+        }
+
+        $expiryRaw = trim((string) ($meta['license_expires_at'] ?? ''));
+        if ($expiryRaw !== '') {
+            $ts = strtotime($expiryRaw);
+            if ($ts !== false) {
+                return $ts;
+            }
+        }
+
+        return null;
+    }
+
+    private static function tenantSubscriptionMeta(int $tenantId): ?array
+    {
+        if ($tenantId < 1) {
+            return null;
+        }
+        if (isset(self::$tenantSubscriptionMetaCache[$tenantId])) {
+            return self::$tenantSubscriptionMetaCache[$tenantId];
+        }
+        try {
+            $pdo = App::db();
+            $st = $pdo->prepare(
+                'SELECT plan, license_starts_at, license_expires_at, created_at
+                 FROM tenants
+                 WHERE id = ? LIMIT 1'
+            );
+            $st->execute([$tenantId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (! is_array($row)) {
+                return null;
+            }
+            self::$tenantSubscriptionMetaCache[$tenantId] = $row;
+            self::$tenantPlanCache[$tenantId] = strtolower(trim((string) ($row['plan'] ?? '')));
+            self::$tenantLicenseExpiresCache[$tenantId] = (string) ($row['license_expires_at'] ?? '');
+
+            return $row;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /** @param array<string,mixed> $meta */
+    private static function tenantSubscriptionEndReached(array $meta): bool
+    {
+        $expiryRaw = trim((string) ($meta['license_expires_at'] ?? ''));
+        if ($expiryRaw === '') {
+            return false;
+        }
+        $expiryTs = strtotime($expiryRaw);
+        if ($expiryTs === false) {
+            return false;
+        }
+
+        return time() >= $expiryTs;
+    }
+
+    private static function isFreePlanName(string $plan): bool
+    {
+        return in_array(strtolower(trim($plan)), self::FREE_PLAN_CODES, true);
+    }
+
+    /** @return array{staff:int,inventory_items:int,machines:int,washers:int,dryers:int} */
+    public static function freePlanLimits(): array
+    {
+        return [
+            'staff' => 1,
+            'inventory_items' => PHP_INT_MAX,
+            'machines' => 6,
+            'washers' => 3,
+            'dryers' => 3,
+        ];
+    }
+
+    public static function tenantCashierCount(?array $user): int
+    {
+        if (! $user) {
+            return 0;
+        }
+        $tenantId = (int) ($user['tenant_id'] ?? 0);
+        if ($tenantId < 1) {
+            return 0;
+        }
+        try {
+            $pdo = App::db();
+            $st = $pdo->prepare('SELECT COUNT(*) FROM users WHERE tenant_id = ? AND role = ?');
+            $st->execute([$tenantId, 'cashier']);
+            return (int) $st->fetchColumn();
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    public static function tenantLaundryInventoryCount(?array $user): int
+    {
+        if (! $user) {
+            return 0;
+        }
+        $tenantId = (int) ($user['tenant_id'] ?? 0);
+        if ($tenantId < 1) {
+            return 0;
+        }
+        try {
+            $pdo = App::db();
+            $st = $pdo->prepare('SELECT COUNT(*) FROM laundry_inventory_items WHERE tenant_id = ?');
+            $st->execute([$tenantId]);
+            return (int) $st->fetchColumn();
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    public static function tenantLaundryMachineCount(?array $user): int
+    {
+        if (! $user) {
+            return 0;
+        }
+        $tenantId = (int) ($user['tenant_id'] ?? 0);
+        if ($tenantId < 1) {
+            return 0;
+        }
+        try {
+            $pdo = App::db();
+            $st = $pdo->prepare('SELECT COUNT(*) FROM laundry_machines WHERE tenant_id = ?');
+            $st->execute([$tenantId]);
+            return (int) $st->fetchColumn();
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    public static function isCashierWithinFreeLimit(?array $user): bool
+    {
+        if (! $user || ! self::isTenantFreePlanRestricted($user)) {
+            return true;
+        }
+        if (($user['role'] ?? '') !== 'cashier') {
+            return true;
+        }
+        $tenantId = (int) ($user['tenant_id'] ?? 0);
+        $userId = (int) ($user['id'] ?? 0);
+        if ($tenantId < 1 || $userId < 1) {
+            return true;
+        }
+        $limit = (int) (self::freePlanLimits()['staff'] ?? 2);
+        try {
+            $pdo = App::db();
+            $st = $pdo->prepare(
+                'SELECT id
+                 FROM users
+                 WHERE tenant_id = ? AND role = ?
+                 ORDER BY created_at ASC, id ASC
+                 LIMIT '.$limit
+            );
+            $st->execute([$tenantId, 'cashier']);
+            $allowedIds = array_map(static fn (array $r): int => (int) ($r['id'] ?? 0), $st->fetchAll(PDO::FETCH_ASSOC) ?: []);
+            return in_array($userId, $allowedIds, true);
+        } catch (\Throwable) {
+            return true;
+        }
     }
 
     private static function resolveActiveTenantId(int $baseTenantId): int
@@ -250,11 +586,9 @@ final class Auth
         }
 
         $sessionTenantId = (int) ($_SESSION['active_tenant_id'] ?? 0);
-        $expiredBranchId = 0;
-        $expiredBranchName = '';
         if ($sessionTenantId > 0) {
             $st = $pdo->prepare(
-                'SELECT id, name, license_expires_at
+                'SELECT id
                  FROM tenants
                  WHERE id = ? AND branch_group_id = ? AND is_active = 1
                  LIMIT 1'
@@ -262,16 +596,12 @@ final class Auth
             $st->execute([$sessionTenantId, $groupId]);
             $row = $st->fetch(PDO::FETCH_ASSOC);
             if ($row) {
-                if (! self::isExpiryValueExpired((string) ($row['license_expires_at'] ?? ''))) {
-                    return (int) $row['id'];
-                }
-                $expiredBranchId = (int) ($row['id'] ?? 0);
-                $expiredBranchName = trim((string) ($row['name'] ?? ''));
+                return (int) $row['id'];
             }
         }
 
         $st = $pdo->prepare(
-            'SELECT id, name, license_expires_at
+            'SELECT id
              FROM tenants
              WHERE branch_group_id = ? AND is_active = 1
              ORDER BY is_main_branch DESC, id ASC
@@ -279,62 +609,17 @@ final class Auth
         );
         $st->execute([$groupId]);
         $preferred = $st->fetch(PDO::FETCH_ASSOC) ?: null;
-        if (is_array($preferred) && ! self::isExpiryValueExpired((string) ($preferred['license_expires_at'] ?? ''))) {
+        if (is_array($preferred)) {
             $preferredId = (int) ($preferred['id'] ?? 0);
             if ($preferredId > 0) {
                 $_SESSION['active_tenant_id'] = $preferredId;
 
                 return $preferredId;
             }
-        } elseif (is_array($preferred)) {
-            $expiredBranchId = (int) ($preferred['id'] ?? 0);
-            $expiredBranchName = trim((string) ($preferred['name'] ?? ''));
-        }
-
-        $st = $pdo->prepare(
-            'SELECT id
-             FROM tenants
-             WHERE branch_group_id = ? AND is_active = 1
-               AND (license_expires_at IS NULL OR DATE(license_expires_at) >= CURDATE())
-             ORDER BY is_main_branch DESC, id ASC
-             LIMIT 1'
-        );
-        $st->execute([$groupId]);
-        $fallback = (int) ($st->fetchColumn() ?: 0);
-        if ($fallback > 0) {
-            if ($expiredBranchId > 0) {
-                $prevNoticeId = (int) ($_SESSION['branch_expired_notice']['branch_id'] ?? 0);
-                if ($prevNoticeId !== $expiredBranchId) {
-                    $_SESSION['branch_expired_notice'] = [
-                        'branch_id' => $expiredBranchId,
-                        'branch_name' => $expiredBranchName !== '' ? $expiredBranchName : ('Branch #'.$expiredBranchId),
-                        'message' => 'Branch subscription expired. Please renew this branch.',
-                        'at' => date('Y-m-d H:i:s'),
-                    ];
-                }
-            }
-            $_SESSION['active_tenant_id'] = $fallback;
-
-            return $fallback;
         }
 
         $_SESSION['active_tenant_id'] = (int) ($preferred['id'] ?? $baseTenantId);
 
         return (int) ($_SESSION['active_tenant_id'] ?? $baseTenantId);
-    }
-
-    private static function isExpiryValueExpired(string $licenseExpiresAt): bool
-    {
-        $value = trim($licenseExpiresAt);
-        if ($value === '') {
-            return false;
-        }
-        $ts = strtotime($value);
-        if ($ts === false) {
-            return false;
-        }
-        $expiryDate = date('Y-m-d', $ts);
-
-        return $expiryDate < date('Y-m-d');
     }
 }

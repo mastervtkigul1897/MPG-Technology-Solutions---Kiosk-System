@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate MPG One + MPG KIS Android WebView projects with circular launcher icons."""
+"""Generate MPG One + MPG Laundry Android WebView projects with circular launcher icons."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ except ImportError:
 SELF_STUDY = Path("/Users/marvingulle/Documents/Self Study")
 ASSETS = Path(
     "/Users/marvingulle/.cursor/projects/"
-    "Users-marvingulle-Documents-Self-Study-MPG-Technology-Solutions-Kiosk-System/assets"
+    "Users-marvingulle-Documents-Self-Study-MPG-Technology-Solutions-Laundry-Shop/assets"
 )
 
 PROJECTS = [
@@ -35,12 +35,12 @@ PROJECTS = [
         "icon_mode": "fit_circle_pad",
     },
     {
-        "dir_name": "MPG KIS",
-        "app_id": "com.mpg.kis",
-        "pkg_path": "com/mpg/kis",
-        "class_pkg": "com.mpg.kis",
-        "name": "MPG KIS",
-        "url": "https://kiosk.mpgtechnologysolutions.com/",
+        "dir_name": "MPG Laundry",
+        "app_id": "com.mpg.laundry",
+        "pkg_path": "com/mpg/laundry",
+        "class_pkg": "com.mpg.laundry",
+        "name": "MPG Laundry",
+        "url": "https://laundry.mpgtechnologysolutions.com/",
         "src_png": ASSETS / "image-6d689d21-d2dd-420b-9bae-6a1b996dfa49.png",
         "bg": "#FFFFFF",
         "icon_mode": "fit_circle_pad",
@@ -145,9 +145,14 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Base64
+import android.net.Uri
+import android.webkit.CookieManager
 import android.view.View
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -159,6 +164,7 @@ import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
     private val bluetoothPermReqCode = 9041
+    private val fileChooserReqCode = 9042
     private val sppUuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
     private val prefName = "mpg_bt_print"
     private val prefAddressKey = "printer_address"
@@ -169,6 +175,7 @@ class MainActivity : AppCompatActivity() {
     private var splashDismissed = false
     private var pageLoadFinished = false
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     private val dismissSplashRunnable = Runnable {
         if (splashDismissed || !pageLoadFinished) return@Runnable
@@ -199,16 +206,57 @@ class MainActivity : AppCompatActivity() {
             }
         webView = findViewById(R.id.webview)
         requestBluetoothPermissionIfNeeded()
+        WebView.setWebContentsDebuggingEnabled(true)
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
+        webView.settings.databaseEnabled = true
+        webView.settings.javaScriptCanOpenWindowsAutomatically = true
+        webView.settings.mediaPlaybackRequiresUserGesture = false
         webView.settings.setSupportZoom(true)
         webView.settings.builtInZoomControls = true
         webView.settings.displayZoomControls = false
+        CookieManager.getInstance().setAcceptCookie(true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
         webView.addJavascriptInterface(AndroidBluetoothBridge(), "MpgAndroidBluetooth")
+        webView.webChromeClient =
+            object : WebChromeClient() {
+                override fun onPermissionRequest(request: PermissionRequest) {
+                    // Grant web permissions inside the wrapper (camera/mic are still controlled by Android perms).
+                    request.grant(request.resources)
+                }
+
+                override fun onShowFileChooser(
+                    webView: WebView,
+                    filePathCallback: ValueCallback<Array<Uri>>,
+                    fileChooserParams: FileChooserParams
+                ): Boolean {
+                    this@MainActivity.filePathCallback?.onReceiveValue(null)
+                    this@MainActivity.filePathCallback = filePathCallback
+                    return try {
+                        val intent = fileChooserParams.createIntent()
+                        startActivityForResult(intent, fileChooserReqCode)
+                        true
+                    } catch (e: Exception) {
+                        this@MainActivity.filePathCallback = null
+                        false
+                    }
+                }
+            }
         webView.webViewClient =
             object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     return false
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onReceivedError(
+                    view: WebView,
+                    errorCode: Int,
+                    description: String?,
+                    failingUrl: String?
+                ) {
+                    pageLoadFinished = true
+                    scheduleDismissSplash()
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
@@ -252,6 +300,17 @@ class MainActivity : AppCompatActivity() {
         mainHandler.removeCallbacks(dismissSplashRunnable)
         splashPulse?.cancel()
         super.onDestroy()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != fileChooserReqCode) return
+        val cb = filePathCallback ?: return
+        filePathCallback = null
+        val result =
+            if (resultCode == RESULT_OK) WebChromeClient.FileChooserParams.parseResult(resultCode, data) else null
+        cb.onReceiveValue(result)
     }
 
     private fun hasConnectPermission(): Boolean {

@@ -8,6 +8,7 @@ use App\Core\ActivityLogger;
 use App\Core\App;
 use App\Core\Auth;
 use App\Core\FlavorSchema;
+use App\Core\LaundrySchema;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\TenantReceiptFields;
@@ -19,6 +20,7 @@ final class ReportController
 {
     /** @var list<string> */
     private const CHART_PRESETS = ['today', 'yesterday', 'last_3', 'last_7', 'last_14', 'last_30', 'this_month', 'custom'];
+    private static ?bool $hasLaundryOrdersDiscountAmount = null;
 
     public function index(Request $request): Response
     {
@@ -30,21 +32,79 @@ final class ReportController
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
         FlavorSchema::ensure($pdo);
+        LaundrySchema::ensure($pdo);
         $today = date('Y-m-d');
         [$from, $to, $chartPreset] = $this->resolveReportRange($request, $today);
         $rangeStart = $from.' 00:00:00';
         $rangeEnd = $to.' 23:59:59';
         $chartSeries = $this->buildChartSeries($pdo, $tenantId, $from, $to);
+        $foldServiceAmount = $this->getBranchFoldServiceAmount($pdo, $tenantId);
+        $foldCommissionTarget = $this->getBranchFoldCommissionTarget($pdo, $tenantId);
 
         $salesTotal = $this->scalarSum(
             $pdo,
-            "SELECT COALESCE(SUM(total_amount),0) FROM transactions WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?",
+            "SELECT COALESCE(SUM(total_amount),0)
+             FROM laundry_orders
+             WHERE tenant_id = ?
+               AND created_at BETWEEN ? AND ?
+               AND COALESCE(is_void, 0) = 0
+               AND status <> 'void'
+               AND (
+                   status = 'paid'
+                   OR (status = 'completed' AND payment_status = 'paid')
+               )",
             [$tenantId, $rangeStart, $rangeEnd]
         );
+        $discountsTotal = 0.0;
+        if ($this->hasLaundryOrdersDiscountAmount($pdo)) {
+            $discountsTotal = $this->scalarSum(
+                $pdo,
+                "SELECT COALESCE(SUM(discount_amount),0)
+                 FROM laundry_orders
+                 WHERE tenant_id = ?
+                   AND created_at BETWEEN ? AND ?
+                   AND COALESCE(is_void, 0) = 0
+                   AND status <> 'void'
+                   AND (
+                       status = 'paid'
+                       OR (status = 'completed' AND payment_status = 'paid')
+                   )",
+                [$tenantId, $rangeStart, $rangeEnd]
+            );
+        }
+        $foldOrdersCount = (int) $this->scalarSum(
+            $pdo,
+            "SELECT COUNT(*)
+             FROM laundry_orders
+             WHERE tenant_id = ?
+               AND include_fold_service = 1
+               AND created_at BETWEEN ? AND ?
+               AND COALESCE(is_void, 0) = 0
+               AND status <> 'void'
+               AND COALESCE(is_free, 0) = 0
+               AND COALESCE(is_reward, 0) = 0
+               AND (
+                   status = 'paid'
+                   OR (status = 'completed' AND payment_status = 'paid')
+               )",
+            [$tenantId, $rangeStart, $rangeEnd]
+        );
+        $foldAmountTotal = $foldCommissionTarget === 'branch'
+            ? ($foldServiceAmount * $foldOrdersCount)
+            : 0.0;
+        $grossSalesTotal = $salesTotal + $discountsTotal + $foldAmountTotal;
+        $refundsTotal = 0.0;
         $st = $pdo->prepare(
             "SELECT LOWER(TRIM(COALESCE(payment_method,''))) AS pm, COALESCE(SUM(total_amount),0) AS total
-             FROM transactions
-             WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?
+             FROM laundry_orders
+             WHERE tenant_id = ?
+               AND created_at BETWEEN ? AND ?
+               AND COALESCE(is_void, 0) = 0
+               AND status <> 'void'
+               AND (
+                   status = 'paid'
+                   OR (status = 'completed' AND payment_status = 'paid')
+               )
              GROUP BY pm"
         );
         $st->execute([$tenantId, $rangeStart, $rangeEnd]);
@@ -54,6 +114,7 @@ final class ReportController
             'gcash' => 0.0,
             'paymaya' => 0.0,
             'online_banking' => 0.0,
+            'qr_payment' => 0.0,
             'split' => 0.0,
             'free' => 0.0,
         ];
@@ -66,39 +127,75 @@ final class ReportController
                 $paymentsByMethod[$pm] += (float) ($row['total'] ?? 0);
             }
         }
-        $expensesTotal = $this->scalarSum(
+        $manualExpensesTotal = $this->scalarSum(
             $pdo,
             "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE tenant_id = ? AND type = 'manual' AND created_at BETWEEN ? AND ?",
             [$tenantId, $rangeStart, $rangeEnd]
         );
-        $netSales = $salesTotal - $expensesTotal;
+        $laundryExpensesTotal = 0.0;
+        $expensesTotal = $manualExpensesTotal;
+        $netSalesTotal = $grossSalesTotal - $refundsTotal - $discountsTotal - $expensesTotal;
+        $cashAvailable = $netSalesTotal;
+        $grossProfit = $netSalesTotal;
+        $serviceModeSummary = $this->fetchServiceModeSummary($pdo, $tenantId, $rangeStart, $rangeEnd);
 
-        // Audit: sum of line items vs transaction totals (should match; FREE orders = ₱0 sa both).
-        $lineItemsSum = $this->scalarSum(
-            $pdo,
-            'SELECT COALESCE(SUM(ti.line_total), 0) FROM transaction_items ti
-             INNER JOIN transactions t ON t.id = ti.transaction_id AND t.tenant_id = ti.tenant_id
-             WHERE t.tenant_id = ? AND t.status = \'completed\' AND t.created_at BETWEEN ? AND ?',
-            [$tenantId, $rangeStart, $rangeEnd]
+        $stTop = $pdo->prepare(
+            'SELECT c.name, COUNT(o.id) AS frequency, COALESCE(SUM(o.total_amount),0) AS total_spending
+             FROM laundry_customers c
+             LEFT JOIN laundry_orders o ON o.customer_id = c.id AND o.tenant_id = c.tenant_id
+                AND COALESCE(o.is_void, 0) = 0
+                AND o.status <> "void"
+                AND (
+                    o.status = "paid"
+                    OR (o.status = "completed" AND o.payment_status = "paid")
+                ) AND o.created_at BETWEEN ? AND ?
+             WHERE c.tenant_id = ?
+             GROUP BY c.id
+             ORDER BY frequency DESC, total_spending DESC, c.name ASC
+             LIMIT 10'
         );
-        $reconciliationDelta = round_money($salesTotal - $lineItemsSum);
-        $stFree = $pdo->prepare(
-            'SELECT COUNT(*) FROM transactions
-             WHERE tenant_id = ? AND status = \'completed\'
-             AND LOWER(TRIM(COALESCE(payment_method, \'\'))) = \'free\'
-             AND created_at BETWEEN ? AND ?'
+        $stTop->execute([$rangeStart, $rangeEnd, $tenantId]);
+        $topCustomers = $stTop->fetchAll(PDO::FETCH_ASSOC);
+
+        $stLow = $pdo->prepare(
+            'SELECT name, stock_quantity, low_stock_threshold
+             FROM laundry_inventory_items
+             WHERE tenant_id = ? AND stock_quantity <= low_stock_threshold
+             ORDER BY stock_quantity ASC
+             LIMIT 10'
         );
-        $stFree->execute([$tenantId, $rangeStart, $rangeEnd]);
-        $freeOrdersCount = (int) $stFree->fetchColumn();
-        $stFreeLines = $pdo->prepare(
-            'SELECT COALESCE(SUM(ti.line_total), 0) FROM transaction_items ti
-             INNER JOIN transactions t ON t.id = ti.transaction_id AND t.tenant_id = ti.tenant_id
-             WHERE t.tenant_id = ? AND t.status = \'completed\'
-             AND LOWER(TRIM(COALESCE(t.payment_method, \'\'))) = \'free\'
-             AND t.created_at BETWEEN ? AND ?'
-        );
-        $stFreeLines->execute([$tenantId, $rangeStart, $rangeEnd]);
-        $freeLineSum = (float) $stFreeLines->fetchColumn();
+        $stLow->execute([$tenantId]);
+        $lowStockItems = $stLow->fetchAll(PDO::FETCH_ASSOC);
+
+        $rangeFromMd = date('m-d', strtotime($from) ?: time());
+        $rangeToMd = date('m-d', strtotime($to) ?: time());
+        $todayMd = date('m-d');
+        $toMonth = date('m', strtotime($to) ?: time());
+        $stBday = $pdo->prepare('SELECT name, birthday FROM laundry_customers WHERE tenant_id = ? AND birthday IS NOT NULL');
+        $stBday->execute([$tenantId]);
+        $birthdaysToday = [];
+        $birthdaysInRange = [];
+        $birthdaysThisMonth = [];
+        foreach ($stBday->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $birthday = (string) ($row['birthday'] ?? '');
+            if ($birthday === '' || strtotime($birthday) === false) {
+                continue;
+            }
+            $md = date('m-d', strtotime($birthday));
+            $m = date('m', strtotime($birthday));
+            if ($md === $todayMd) {
+                $birthdaysToday[] = $row;
+            }
+            if ($m === $toMonth) {
+                $birthdaysThisMonth[] = $row;
+            }
+            $inRange = $rangeFromMd <= $rangeToMd
+                ? ($md >= $rangeFromMd && $md <= $rangeToMd)
+                : ($md >= $rangeFromMd || $md <= $rangeToMd);
+            if ($inRange) {
+                $birthdaysInRange[] = $row;
+            }
+        }
 
         $warningDays = (int) App::config('subscription_warning_days', 7);
         $reportsMaintenance = null;
@@ -130,27 +227,47 @@ final class ReportController
         return view_page('Reports', 'tenant.reports.index', [
             'stats' => [
                 'sales_total' => $salesTotal,
-                'line_items_sum' => $lineItemsSum,
-                'reconciliation_delta' => $reconciliationDelta,
-                'free_orders_count' => $freeOrdersCount,
-                'free_line_sum' => $freeLineSum,
+                'gross_sales_total' => $grossSalesTotal,
+                'refunds_total' => $refundsTotal,
+                'discounts_total' => $discountsTotal,
+                'fold_amount_total' => $foldAmountTotal,
+                'fold_service_amount' => $foldServiceAmount,
+                'fold_commission_target' => $foldCommissionTarget,
                 'expenses_total' => $expensesTotal,
-                'net_sales' => $netSales,
+                'manual_expenses_total' => $manualExpensesTotal,
+                'laundry_expenses_total' => $laundryExpensesTotal,
+                'net_sales' => $netSalesTotal,
+                'gross_profit' => $grossProfit,
+                'cash_available' => $cashAvailable,
                 'payments_by_method' => $paymentsByMethod,
                 'range_from' => $from,
                 'range_to' => $to,
                 'chart_preset' => $chartPreset,
+                'service_mode_summary' => $serviceModeSummary,
             ],
             'chart' => $chartSeries,
+            'top_customers' => $topCustomers,
+            'low_stock_items' => $lowStockItems,
+            'birthdays_today' => $birthdaysToday,
+            'birthdays_in_range' => $birthdaysInRange,
+            'birthdays_this_month' => $birthdaysThisMonth,
             'reports_maintenance' => $reportsMaintenance,
             'reports_subscription' => $reportsSubscription,
+            'free_reports_limited' => Auth::isTenantFreePlanRestricted(Auth::user()),
         ]);
     }
 
     public function dailyOuts(Request $request): Response
     {
+        if (Auth::isTenantFreePlanRestricted(Auth::user())) {
+            return json_response([
+                'success' => false,
+                'message' => 'Premium feature: detailed service and inventory-out reports are not available on Free access.',
+            ], 403);
+        }
         $tenantId = (int) Auth::user()['tenant_id'];
         $pdo = App::db();
+        LaundrySchema::ensure($pdo);
         $today = date('Y-m-d');
         $from = trim((string) $request->query('from', ''));
         $to = trim((string) $request->query('to', ''));
@@ -179,29 +296,124 @@ final class ReportController
         $rangeEnd = $to.' 23:59:59';
 
         $st = $pdo->prepare(
-            "SELECT p.id AS product_id, p.name AS product_name,
-                    COALESCE(SUM(ti.quantity),0) AS qty,
-                    COALESCE(SUM(ti.line_total),0) AS line_amount
-             FROM transactions t
-             INNER JOIN transaction_items ti ON ti.transaction_id = t.id AND ti.tenant_id = t.tenant_id
-             INNER JOIN products p ON p.id = ti.product_id AND p.tenant_id = ti.tenant_id
-             WHERE t.tenant_id = ? AND t.status = 'completed' AND t.created_at BETWEEN ? AND ?
-             GROUP BY p.id, p.name
-             ORDER BY qty DESC, p.name ASC
+            "SELECT order_type AS service_type,
+                    COUNT(*) AS qty,
+                    COALESCE(SUM(total_amount),0) AS line_amount
+             FROM laundry_orders
+             WHERE tenant_id = ?
+               AND created_at BETWEEN ? AND ?
+               AND COALESCE(is_void, 0) = 0
+               AND status <> 'void'
+               AND (
+                   status = 'paid'
+                   OR (status = 'completed' AND payment_status = 'paid')
+               )
+             GROUP BY order_type
+             ORDER BY qty DESC, service_type ASC
              LIMIT 200"
         );
         $st->execute([$tenantId, $rangeStart, $rangeEnd]);
         $rows = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $rows[] = [
-                'product_id' => (int) ($row['product_id'] ?? 0),
-                'product_name' => (string) ($row['product_name'] ?? ''),
+                'product_id' => 0,
+                'product_name' => ucwords(str_replace('_', ' ', (string) ($row['service_type'] ?? ''))),
                 'qty' => (float) ($row['qty'] ?? 0),
                 'line_amount' => round_money((float) ($row['line_amount'] ?? 0)),
             ];
         }
 
-        return json_response(['success' => true, 'from' => $from, 'to' => $to, 'data' => $rows]);
+        $inventoryOutMap = [];
+        $addInventoryOut = static function (array &$map, string $name, float $qty, float $amount): void {
+            $label = trim($name);
+            if ($label === '') {
+                return;
+            }
+            if (!isset($map[$label])) {
+                $map[$label] = ['item_name' => $label, 'qty_out' => 0.0, 'amount_out' => 0.0];
+            }
+            $map[$label]['qty_out'] += $qty;
+            $map[$label]['amount_out'] += $amount;
+        };
+
+        $inclusionQueries = [
+            ['col' => 'o.inclusion_detergent_item_id', 'fallback' => 'Detergent'],
+            ['col' => 'o.inclusion_fabcon_item_id', 'fallback' => 'Fabric conditioner'],
+            ['col' => 'o.inclusion_bleach_item_id', 'fallback' => 'Bleach'],
+        ];
+        foreach ($inclusionQueries as $cfg) {
+            $q = $pdo->prepare(
+                "SELECT COALESCE(NULLIF(TRIM(i.name), ''), ?) AS item_name,
+                        COUNT(*) AS qty_out,
+                        COALESCE(SUM(COALESCE(i.unit_cost, 0)),0) AS amount_out
+                 FROM laundry_orders o
+                 LEFT JOIN laundry_inventory_items i
+                    ON i.id = {$cfg['col']} AND i.tenant_id = o.tenant_id
+                 WHERE o.tenant_id = ?
+                   AND o.created_at BETWEEN ? AND ?
+                   AND {$cfg['col']} IS NOT NULL
+                   AND {$cfg['col']} > 0
+                   AND COALESCE(o.is_void, 0) = 0
+                   AND o.status <> 'void'
+                   AND (
+                       o.status = 'paid'
+                       OR (o.status = 'completed' AND o.payment_status = 'paid')
+                   )
+                 GROUP BY item_name"
+            );
+            $q->execute([(string) $cfg['fallback'], $tenantId, $rangeStart, $rangeEnd]);
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $addInventoryOut(
+                    $inventoryOutMap,
+                    (string) ($row['item_name'] ?? ''),
+                    (float) ($row['qty_out'] ?? 0),
+                    (float) ($row['amount_out'] ?? 0)
+                );
+            }
+        }
+
+        $addonSt = $pdo->prepare(
+            "SELECT COALESCE(NULLIF(TRIM(ao.item_name), ''), 'Add-on item') AS item_name,
+                    COALESCE(SUM(ao.quantity),0) AS qty_out,
+                    COALESCE(SUM(ao.total_price),0) AS amount_out
+             FROM laundry_order_add_ons ao
+             INNER JOIN laundry_orders o ON o.id = ao.order_id AND o.tenant_id = ao.tenant_id
+             WHERE ao.tenant_id = ?
+               AND o.created_at BETWEEN ? AND ?
+               AND COALESCE(o.is_void, 0) = 0
+               AND o.status <> 'void'
+               AND (
+                   o.status = 'paid'
+                   OR (o.status = 'completed' AND o.payment_status = 'paid')
+               )
+             GROUP BY item_name"
+        );
+        $addonSt->execute([$tenantId, $rangeStart, $rangeEnd]);
+        foreach ($addonSt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $addInventoryOut(
+                $inventoryOutMap,
+                (string) ($row['item_name'] ?? ''),
+                (float) ($row['qty_out'] ?? 0),
+                (float) ($row['amount_out'] ?? 0)
+            );
+        }
+
+        $inventoryOutRows = array_values($inventoryOutMap);
+        usort($inventoryOutRows, static function (array $a, array $b): int {
+            $qtyCmp = (float) ($b['qty_out'] ?? 0) <=> (float) ($a['qty_out'] ?? 0);
+            if ($qtyCmp !== 0) {
+                return $qtyCmp;
+            }
+            return strcmp((string) ($a['item_name'] ?? ''), (string) ($b['item_name'] ?? ''));
+        });
+
+        return json_response([
+            'success' => true,
+            'from' => $from,
+            'to' => $to,
+            'data' => $rows,
+            'inventory_out' => $inventoryOutRows,
+        ]);
     }
 
     private function scalarSum(PDO $pdo, string $sql, array $params): float
@@ -209,14 +421,75 @@ final class ReportController
         $st = $pdo->prepare($sql);
         $st->execute($params);
 
-        return (float) $st->fetchColumn();
+        return (float) ($st->fetchColumn() ?: 0.0);
+    }
+
+    private function hasLaundryOrdersDiscountAmount(PDO $pdo): bool
+    {
+        if (self::$hasLaundryOrdersDiscountAmount !== null) {
+            return self::$hasLaundryOrdersDiscountAmount;
+        }
+        try {
+            $st = $pdo->query("SHOW COLUMNS FROM `laundry_orders` LIKE 'discount_amount'");
+            self::$hasLaundryOrdersDiscountAmount = $st !== false && $st->fetch(PDO::FETCH_ASSOC) !== false;
+        } catch (\Throwable) {
+            self::$hasLaundryOrdersDiscountAmount = false;
+        }
+
+        return self::$hasLaundryOrdersDiscountAmount;
+    }
+
+    private function getBranchFoldServiceAmount(PDO $pdo, int $tenantId): float
+    {
+        if ($tenantId < 1) {
+            return 0.0;
+        }
+        try {
+            $st = $pdo->prepare(
+                'SELECT fold_service_amount
+                 FROM laundry_branch_configs
+                 WHERE tenant_id = ?
+                 LIMIT 1'
+            );
+            $st->execute([$tenantId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (! is_array($row)) {
+                return 0.0;
+            }
+
+            return max(0.0, (float) ($row['fold_service_amount'] ?? 0));
+        } catch (\Throwable) {
+            return 0.0;
+        }
+    }
+
+    private function getBranchFoldCommissionTarget(PDO $pdo, int $tenantId): string
+    {
+        if ($tenantId < 1) {
+            return 'staff';
+        }
+        try {
+            $st = $pdo->prepare(
+                'SELECT fold_commission_target
+                 FROM laundry_branch_configs
+                 WHERE tenant_id = ?
+                 LIMIT 1'
+            );
+            $st->execute([$tenantId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            $v = strtolower(trim((string) ($row['fold_commission_target'] ?? 'staff')));
+
+            return in_array($v, ['staff', 'branch'], true) ? $v : 'staff';
+        } catch (\Throwable) {
+            return 'staff';
+        }
     }
 
     public function transactions(Request $request): Response
     {
         $user = Auth::user();
         $tenantId = (int) $user['tenant_id'];
-        $canPrintReceipt = ! Auth::isTenantFreeTrial($user);
+        $canPrintReceipt = ! Auth::isTenantFreePlanRestricted($user);
         $pdo = App::db();
 
         if ($request->ajax() || $request->boolean('datatable')) {
@@ -424,8 +697,8 @@ final class ReportController
     public function editData(Request $request, string $id): Response
     {
         $user = Auth::user();
-        if (Auth::isTenantFreeTrial($user)) {
-            return json_response(['success' => false, 'message' => 'Premium feature: editing receipt/transaction data is not available for Free Trial plans.'], 403);
+        if (Auth::isTenantFreePlanRestricted($user)) {
+            return json_response(['success' => false, 'message' => 'Premium feature: editing receipt/transaction data is not available on the Free version.'], 403);
         }
         $tenantId = (int) ($user['tenant_id'] ?? 0);
         $txId = (int) $id;
@@ -501,8 +774,8 @@ final class ReportController
     public function editItems(Request $request, string $id): Response
     {
         $user = Auth::user();
-        if (Auth::isTenantFreeTrial($user)) {
-            return json_response(['success' => false, 'message' => 'Premium feature: editing receipt/transaction data is not available for Free Trial plans.'], 403);
+        if (Auth::isTenantFreePlanRestricted($user)) {
+            return json_response(['success' => false, 'message' => 'Premium feature: editing receipt/transaction data is not available on the Free version.'], 403);
         }
         $tenantId = (int) ($user['tenant_id'] ?? 0);
         $txId = (int) $id;
@@ -908,8 +1181,8 @@ final class ReportController
     public function receipt(Request $request, string $id): Response
     {
         $user = Auth::user();
-        if (Auth::isTenantFreeTrial($user)) {
-            return json_response(['success' => false, 'message' => 'Premium feature: receipt printing is not available for Free Trial plans.'], 403);
+        if (Auth::isTenantFreePlanRestricted($user)) {
+            return json_response(['success' => false, 'message' => 'Premium feature: receipt printing is not available on the Free version.'], 403);
         }
         $tenantId = (int) ($user['tenant_id'] ?? 0);
         $txId = (int) $id;
@@ -1213,8 +1486,15 @@ final class ReportController
     private function groupSumSales(PDO $pdo, int $tenantId, string $start, string $end): array
     {
         $st = $pdo->prepare(
-            "SELECT DATE(created_at) as d, COALESCE(SUM(total_amount),0) as s FROM transactions
-             WHERE tenant_id = ? AND status = 'completed' AND created_at BETWEEN ? AND ?
+            "SELECT DATE(created_at) as d, COALESCE(SUM(total_amount),0) as s FROM laundry_orders
+             WHERE tenant_id = ?
+               AND created_at BETWEEN ? AND ?
+               AND COALESCE(is_void, 0) = 0
+               AND status <> 'void'
+               AND (
+                   status = 'paid'
+                   OR (status = 'completed' AND payment_status = 'paid')
+               )
              GROUP BY d"
         );
         $st->execute([$tenantId, $start, $end]);
@@ -1229,18 +1509,61 @@ final class ReportController
     /** @return array<string,float> */
     private function groupSumExpenses(PDO $pdo, int $tenantId, string $start, string $end): array
     {
-        $st = $pdo->prepare(
+        $out = [];
+
+        $stManual = $pdo->prepare(
             "SELECT DATE(created_at) as d, COALESCE(SUM(amount),0) as s FROM expenses
              WHERE tenant_id = ? AND type = 'manual' AND created_at BETWEEN ? AND ?
              GROUP BY d"
         );
-        $st->execute([$tenantId, $start, $end]);
-        $out = [];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $out[(string) $row['d']] = (float) $row['s'];
+        $stManual->execute([$tenantId, $start, $end]);
+        foreach ($stManual->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $d = (string) $row['d'];
+            $out[$d] = ($out[$d] ?? 0.0) + (float) $row['s'];
         }
 
         return $out;
+    }
+
+    /**
+     * @return array<string,array{label:string,count:int}>
+     */
+    private function fetchServiceModeSummary(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
+    {
+        $summary = [
+            'regular' => ['label' => 'Regular', 'count' => 0],
+            'free' => ['label' => 'Free', 'count' => 0],
+            'reward' => ['label' => 'Reward', 'count' => 0],
+        ];
+
+        try {
+            $st = $pdo->prepare(
+                "SELECT
+                    CASE
+                        WHEN COALESCE(is_reward, 0) = 1 THEN 'reward'
+                        WHEN COALESCE(is_free, 0) = 1 THEN 'free'
+                        ELSE 'regular'
+                    END AS mode_bucket,
+                    COUNT(*) AS cnt
+                 FROM laundry_orders
+                 WHERE tenant_id = ?
+                   AND created_at BETWEEN ? AND ?
+                   AND COALESCE(is_void, 0) = 0
+                   AND status <> 'void'
+                 GROUP BY mode_bucket"
+            );
+            $st->execute([$tenantId, $rangeStart, $rangeEnd]);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $bucket = (string) ($row['mode_bucket'] ?? '');
+                if (! isset($summary[$bucket])) {
+                    continue;
+                }
+                $summary[$bucket]['count'] = (int) ($row['cnt'] ?? 0);
+            }
+        } catch (\Throwable) {
+        }
+
+        return $summary;
     }
 
     /** @return array<string,mixed> */

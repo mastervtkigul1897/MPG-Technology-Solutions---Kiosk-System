@@ -4,16 +4,16 @@ $premium_monthly_price = 249;
 $premium_monthly_discount_pct = 0; // requested: no discount for 1-month plan
 $premium_monthly_list_compare = (float) $premium_monthly_price;
 
-// Keep quarterly and semi-annual at same relative discounts from the legacy pricing model.
+// Fixed package pricing requested by owner.
 $premium_3_list_compare = (float) $premium_monthly_price * 3.0; // 747 @ 249/mo
 $premium_6_list_compare = (float) $premium_monthly_price * 6.0; // 1,494
-$premium_3_total = (int) round($premium_3_list_compare * (699.0 / (249.0 * 3.0))); // 699
-$premium_6_total = (int) round($premium_6_list_compare * (1299.0 / (249.0 * 6.0))); // 1,299
+$premium_3_total = 599;
+$premium_6_total = 1099;
 
-// Annual pricing policy: first year 2,499; renewal years 1,999.
+// Annual pricing policy: first year 1,999; renewal years 1,499.
 $premium_12_list_compare = (float) $premium_monthly_price * 12.0; // 2,988 @ 249/mo
-$premium_12_total = 2499; // first year
-$premium_12_renewal_total = 1999; // renewal after first paid year
+$premium_12_total = 1999; // first year
+$premium_12_renewal_total = 1499; // renewal after first paid year
 $premium_3_discount_pct = $premium_3_list_compare > 0.0
     ? max(0, min(99, (int) round(100.0 - (100.0 * (float) $premium_3_total / $premium_3_list_compare))))
     : 0;
@@ -46,28 +46,27 @@ $save_monthly_12_renewal = (float) $premium_monthly_price - $eq12_renewal;
 $branch_addon_monthly = (float) $premium_monthly_price * 0.5;
 $branch_addon_3 = (float) $premium_3_total * 0.5;
 $branch_addon_6 = (float) $premium_6_total * 0.5;
-$branch_addon_12 = (float) $premium_12_total * 0.5;
-$branch_addon_12_renewal = (float) $premium_12_renewal_total * 0.5;
+$branch_addon_12 = 750.0;
+$branch_addon_12_renewal = 750.0;
 ?>
 <div class="row g-3 mb-3">
     <div class="col-12 col-md-6">
         <div class="card h-100 border border-warning">
             <div class="card-body">
                 <span class="badge text-bg-warning text-dark mb-2">FREE</span>
-                <h6 class="mb-1">Free Trial (7 Days)</h6>
+                <h6 class="mb-1">Lifetime Free</h6>
                 <p class="display-6 mb-2">PHP 0</p>
                 <ul class="small mb-0 ps-3">
-                    <li>Can create account and use the system for 7 days</li>
-                    <li>Up to 5 products only</li>
-                    <li><span class="badge text-bg-warning text-dark">Premium</span> Receipt printing</li>
-                    <li><span class="badge text-bg-warning text-dark">Premium</span> Edit receipt/transaction data</li>
-                    <li><span class="badge text-bg-warning text-dark">Premium</span> Add new staff</li>
-                    <li><span class="badge text-bg-warning text-dark">Premium</span> Expenses, damaged items, notifications</li>
-                    <li><span class="badge text-bg-warning text-dark">Premium</span> Branch management</li>
-                    <li class="text-danger"><i class="fa-solid fa-xmark me-1"></i>Priority support response</li>
-                    <li class="text-danger"><i class="fa-solid fa-xmark me-1"></i>99.99% uptime commitment</li>
-                    <li class="text-danger"><i class="fa-solid fa-xmark me-1"></i>Automatic data backup</li>
-                    <li class="text-danger"><i class="fa-solid fa-xmark me-1"></i>Customizable to fit your business needs</li>
+                    <li>7 days premium access from account creation</li>
+                    <li>After 7 days, account stays on free access (no subscription fee)</li>
+                    <li>One owner login and one staff login</li>
+                    <li>Up to 3 washers and 3 dryers</li>
+                    <li><span class="badge text-bg-warning text-dark">Premium</span> Customer profile, payroll, rewards, expenses, damaged items, receipt config</li>
+                    <li><span class="badge text-bg-warning text-dark">Premium</span> Dashboard insights and detailed reports</li>
+                    <li class="text-success"><i class="fa-solid fa-xmark me-1"></i>Priority support response</li>
+                    <li class="text-success"><i class="fa-solid fa-xmark me-1"></i>99.99% uptime commitment</li>
+                    <li class="text-success"><i class="fa-solid fa-xmark me-1"></i>Automatic data backup</li>
+                    <li class="text-success"><i class="fa-solid fa-xmark me-1"></i>Customizable to fit your business needs</li>
                 </ul>
                 <a href="<?= e(url('/register')) ?>" class="btn btn-warning text-dark w-100 mt-3 fw-semibold">
                     <i class="fa-solid fa-store me-1"></i>Create Store
@@ -238,8 +237,7 @@ $branch_addon_12_renewal = (float) $premium_12_renewal_total * 0.5;
                     <li>Receipt printing enabled</li>
                     <li>Edit receipt/transaction data</li>
                     <li>Add staff accounts</li>
-                    <li>New branch add-on (1st year): +<?= e($fmt_peso_int($branch_addon_12)) ?> (50% of plan price)</li>
-                    <li>New branch add-on (renewal): +<?= e($fmt_peso_int($branch_addon_12_renewal)) ?> (50% of renewal plan price)</li>
+                    <li>New branch add-on: +<?= e($fmt_peso_int($branch_addon_12)) ?></li>
                     <li class="text-success"><i class="fa-solid fa-check me-1"></i>Priority support response</li>
                     <li class="text-success"><i class="fa-solid fa-check me-1"></i>99.99% uptime commitment</li>
                     <li class="text-success"><i class="fa-solid fa-check me-1"></i>Automatic data backup</li>

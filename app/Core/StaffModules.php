@@ -12,12 +12,10 @@ final class StaffModules
 {
     /** @var array<string,string> */
     public const LABELS = [
-        'pos' => 'Create Transaction (POS)',
-        'transactions' => 'Transactions',
-        'notifications' => 'Notifications',
+        'pos' => 'Loads Status',
+        'transactions' => 'Customer Profile',
         'activity_logs' => 'Activity log',
-        'ingredients' => 'Inventory Items',
-        'products' => 'Products',
+        'ingredients' => 'Inventory Management',
         'expenses' => 'Expenses',
         'damaged_items' => 'Damaged items',
     ];

@@ -1,7 +1,7 @@
 <?php
 /** @var string $title */
 /** @var string $content */
-$appName = \App\Core\App::config('name') ?? 'Kiosk System';
+$appName = \App\Core\App::config('name') ?? 'Laundry System';
 $brandSuffix = trim((string) (\App\Core\App::config('brand_suffix') ?? 'MPG Technology Solutions'));
 $subTitleParts = [];
 if (isset($title) && (string) $title !== '') {
@@ -11,7 +11,7 @@ $subTitleParts[] = $appName;
 if ($brandSuffix !== '') {
     $subTitleParts[] = $brandSuffix;
 }
-$brandLogoPath = url('images/branding/mpg-kis-logo.png');
+$brandLogoPath = url('images/branding/mpglms-logo.png');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -23,8 +23,8 @@ $brandLogoPath = url('images/branding/mpg-kis-logo.png');
     <link rel="icon" type="image/png" sizes="512x512" href="<?= e($brandLogoPath) ?>">
     <link rel="shortcut icon" href="<?= e($brandLogoPath) ?>">
     <link rel="apple-touch-icon" href="<?= e($brandLogoPath) ?>">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+    <link href="<?= e(url('vendor/bootstrap/bootstrap.min.css')) ?>" rel="stylesheet">
+    <link rel="stylesheet" href="<?= e(url('vendor/fontawesome/css/all.min.css')) ?>">
     <style>
         .subscription-shell {
             min-height: 100vh;
@@ -76,6 +76,6 @@ $brandLogoPath = url('images/branding/mpg-kis-logo.png');
 $footerCreditClass = 'text-white-50 border-secondary border-opacity-25 mt-auto pt-3 border-top';
 require dirname(__DIR__).'/partials/footer_credit.php';
 ?>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="<?= e(url('vendor/bootstrap/bootstrap.bundle.min.js')) ?>"></script>
 </body>
 </html>

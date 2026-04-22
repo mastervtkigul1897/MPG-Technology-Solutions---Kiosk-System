@@ -1,14 +1,14 @@
 <?php
 /** @var string $title */
 /** @var string $content */
-$appName = \App\Core\App::config('name') ?? 'Kiosk System';
+$appName = \App\Core\App::config('name') ?? 'Laundry System';
 $brandSuffix = trim((string) (\App\Core\App::config('brand_suffix') ?? 'MPG Technology Solutions'));
 $guestTitleParts = [$appName];
 if ($brandSuffix !== '') {
     $guestTitleParts[] = $brandSuffix;
 }
-$brandLogoPath = url('images/branding/mpg-kis-logo.png');
-$brandDisplayName = 'MPG KIS - Kiosk & Inventory System';
+$brandLogoPath = url('images/branding/mpglms-logo.png');
+$brandDisplayName = (string) $appName;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -20,12 +20,20 @@ $brandDisplayName = 'MPG KIS - Kiosk & Inventory System';
     <link rel="icon" type="image/png" sizes="512x512" href="<?= e($brandLogoPath) ?>">
     <link rel="shortcut icon" href="<?= e($brandLogoPath) ?>">
     <link rel="apple-touch-icon" href="<?= e($brandLogoPath) ?>">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+    <link href="<?= e(url('vendor/bootstrap/bootstrap.min.css')) ?>" rel="stylesheet">
+    <link href="<?= e(url('vendor/fonts/manrope/manrope.css')) ?>" rel="stylesheet">
+    <link rel="stylesheet" href="<?= e(url('vendor/fontawesome/css/all.min.css')) ?>">
     <link rel="stylesheet" href="<?= e(url('css/app-theme.css')) ?>">
-    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="<?= e(url('vendor/sweetalert2/sweetalert2.all.min.js')) ?>"></script>
 </head>
-<body class="app-theme bg-light d-flex flex-column min-vh-100">
+<body class="app-theme laundry-luxe bg-light d-flex flex-column min-vh-100">
+<div class="water-decor" aria-hidden="true">
+    <span class="bubble bubble-1"></span>
+    <span class="bubble bubble-2"></span>
+    <span class="bubble bubble-3"></span>
+    <span class="bubble bubble-4"></span>
+    <span class="bubble bubble-5"></span>
+</div>
 <div class="flex-grow-1 d-flex align-items-center py-5">
     <div class="container w-100">
         <div class="row justify-content-center">
@@ -37,7 +45,7 @@ $brandDisplayName = 'MPG KIS - Kiosk & Inventory System';
                             <div class="fw-semibold"><?= e($brandDisplayName) ?></div>
                         </div>
                         <h4 class="mb-1"><?= e($title ?? '') ?></h4>
-                        <p class="modern-page-note mb-3">Advanced kiosk POS and inventory in one platform—scale-ready controls, clearer visibility at the register, and checkout built for busy, growing stores.</p>
+                        <p class="modern-page-note mb-3">Modern laundry operations in one platform—cleaner workflows, faster transactions, and better day-to-day visibility for growing laundry businesses.</p>
                         <?php require dirname(__DIR__).'/partials/alerts.php'; ?>
                         <?= $content ?? '' ?>
                     </div>

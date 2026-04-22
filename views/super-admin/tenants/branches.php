@@ -8,7 +8,7 @@ $baseTenant = $base_tenant ?? [];
 $rootTenant = $root_tenant ?? [];
 $rows = $branches ?? [];
 $limit = (int) ($branch_limit ?? 1);
-$defaults = $clone_defaults ?? ['categories', 'ingredients', 'products', 'requirements'];
+$defaults = $clone_defaults ?? ['categories', 'ingredients', 'requirements'];
 $rootId = (int) ($rootTenant['id'] ?? 0);
 ?>
 
@@ -65,7 +65,7 @@ $rootId = (int) ($rootTenant['id'] ?? 0);
                 <label class="form-label d-block mb-1">Copy options</label>
                 <div class="small text-muted mb-2">Optional. Leave all unchecked for a clean new branch. Excluded by default: staff/accounts, profile/contact/location, transactions, expenses, logs.</div>
                 <div class="d-flex flex-wrap gap-3">
-                    <?php foreach (['categories' => 'Categories', 'ingredients' => 'Inventory items', 'products' => 'Products', 'requirements' => 'Requirements'] as $k => $label): ?>
+                    <?php foreach (['categories' => 'Categories', 'ingredients' => 'Inventory items', 'requirements' => 'Requirements'] as $k => $label): ?>
                         <label class="form-check">
                             <input class="form-check-input" type="checkbox" name="clone[]" value="<?= e($k) ?>" <?= in_array($k, $defaults, true) ? 'checked' : '' ?>>
                             <span class="form-check-label"><?= e($label) ?></span>
@@ -75,7 +75,7 @@ $rootId = (int) ($rootTenant['id'] ?? 0);
             </div>
 
             <div>
-                <div class="small text-muted mb-2">Owner login is shared for all branches in this group. Staff accounts remain per-branch.</div>
+                <div class="small text-muted mb-2">Owner login is shared for all branches in this group. Staff accounts remain per-branch. New branch subscription dates automatically follow the current main branch.</div>
                 <button class="btn btn-success">Create branch</button>
             </div>
         </form>
@@ -143,10 +143,25 @@ $rootId = (int) ($rootTenant['id'] ?? 0);
 (() => {
     document.querySelectorAll('.js-branch-toggle-form[data-close-confirm="1"]').forEach((form) => {
         form.addEventListener('submit', async (e) => {
+            if (form.dataset.mpgConfirmBypass === '1') {
+                form.dataset.mpgConfirmBypass = '0';
+                return;
+            }
             e.preventDefault();
             const branchName = form.getAttribute('data-branch-name') || 'this branch';
             if (typeof Swal === 'undefined') {
-                if (window.confirm(`Close ${branchName}?`)) form.submit();
+                window.mpgConfirm(`Close ${branchName}?`, {
+                    title: 'Close Branch?',
+                    confirmButtonText: 'Yes, close branch',
+                    cancelButtonText: 'Cancel',
+                    confirmButtonColor: '#dc3545',
+                }).then((ok) => {
+                    if (ok) {
+                        form.dataset.mpgConfirmBypass = '1';
+                        if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                        else form.submit();
+                    }
+                });
                 return;
             }
             const res = await Swal.fire({
@@ -159,7 +174,9 @@ $rootId = (int) ($rootTenant['id'] ?? 0);
                 confirmButtonColor: '#dc3545',
             });
             if (res.isConfirmed) {
-                form.submit();
+                form.dataset.mpgConfirmBypass = '1';
+                if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                else form.submit();
             }
         });
     });

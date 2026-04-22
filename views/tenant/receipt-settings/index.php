@@ -36,7 +36,7 @@
                     <div class="col-md-6">
                         <label class="form-label" for="receipt_business_style">Business style / line 2</label>
                         <input type="text" class="form-control" id="receipt_business_style" name="receipt_business_style" maxlength="255"
-                               value="<?= e((string) ($receipt['receipt_business_style'] ?? '')) ?>" placeholder="e.g. Food Kiosk">
+                               value="<?= e((string) ($receipt['receipt_business_style'] ?? '')) ?>" placeholder="e.g. Laundry Services">
                     </div>
                     <div class="col-md-6">
                         <label class="form-label" for="receipt_tax_id">Tax ID / TIN</label>
@@ -121,6 +121,16 @@
                                min="1" max="10" step="1" inputmode="numeric"
                                value="<?= e((string) max(1, min(10, (int) ($receipt['receipt_lan_print_copies'] ?? 1)))) ?>">
                         <div class="form-text">How many copies to print each time you tap <strong>Wi‑Fi / LAN</strong> or <strong>Bluetooth print</strong> on POS or Transactions (e.g. 2 for counter + kitchen). Range 1–10. Default 1.</div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="receipt_ble_printer_match_rules">Bluetooth printer match rules (optional)</label>
+                        <textarea class="form-control" id="receipt_ble_printer_match_rules" name="receipt_ble_printer_match_rules" rows="2" maxlength="2000"
+                                  placeholder="e.g. RP|name, RPP|name, 58|name"><?= e((string) ($receipt['receipt_ble_printer_match_rules'] ?? '')) ?></textarea>
+                        <div class="form-text">
+                            Comma-separated list of <strong>contains|field</strong> rules used to validate the selected Bluetooth device.
+                            Supported fields: <code>name</code>, <code>id</code>. If blank, defaults to <code>RP|name</code>.
+                            Examples: <code>RP|name</code>, <code>RPP|name</code>, <code>Thermal|name</code>, <code>abc123|id</code>.
+                        </div>
                     </div>
                     <div class="col-12"><hr class="my-2"></div>
                     <div class="col-12">

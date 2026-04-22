@@ -34,6 +34,34 @@
         </table>
     </div>
 </div>
+<div class="modal fade" id="expenseEditModal" tabindex="-1" aria-labelledby="expenseEditModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" id="expenseEditForm" action="">
+                <?= csrf_field() ?>
+                <?= method_field('PUT') ?>
+                <div class="modal-header">
+                    <h6 class="modal-title" id="expenseEditModalLabel">Edit expense</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label mb-1" for="expense_edit_description">Description</label>
+                        <input class="form-control" id="expense_edit_description" name="description" required maxlength="500" autocomplete="off">
+                    </div>
+                    <div>
+                        <label class="form-label mb-1" for="expense_edit_amount">Amount</label>
+                        <input class="form-control" id="expense_edit_amount" type="number" step="any" min="0" inputmode="decimal" name="amount" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 <script>
 (() => {
     const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
@@ -78,6 +106,22 @@
             { data: 'created_at' },
             { data: 'actions' },
         ],
+    });
+    const editModalEl = document.getElementById('expenseEditModal');
+    const editModal = editModalEl ? new bootstrap.Modal(editModalEl) : null;
+    const editForm = document.getElementById('expenseEditForm');
+    const editDesc = document.getElementById('expense_edit_description');
+    const editAmount = document.getElementById('expense_edit_amount');
+    const baseUrl = '<?= e(url('/tenant/expenses')) ?>';
+
+    $('#expensesTable').on('click', '.js-edit-expense', function (ev) {
+        ev.preventDefault();
+        const id = this.dataset.id;
+        if (!id || !editForm) return;
+        editForm.action = `${baseUrl}/${id}`;
+        if (editDesc) editDesc.value = this.dataset.description || '';
+        if (editAmount) editAmount.value = this.dataset.amount || '0';
+        editModal?.show();
     });
 
     const deleteExpense = async (id) => {

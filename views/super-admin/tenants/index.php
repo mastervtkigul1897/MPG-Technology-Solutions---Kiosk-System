@@ -19,9 +19,27 @@
                     <div class="form-text">Unique identifier in URLs. Lowercase, numbers, hyphens.</div>
                 </div>
                 <div class="col-md-6">
-                    <label class="form-label" for="license_expires_at">Subscription ends</label>
-                    <input type="date" class="form-control" id="license_expires_at" name="license_expires_at" autocomplete="off">
-                    <div class="form-text">When this store’s access should end (optional).</div>
+                    <label class="form-label" for="subscription_plan">Subscription plan</label>
+                    <select class="form-select" id="subscription_plan" name="subscription_plan" required>
+                        <option value="">Select plan</option>
+                        <option value="free_access">Free 7-day trial</option>
+                        <option value="paid">Paid</option>
+                    </select>
+                </div>
+                <div class="col-md-6" id="subscription_months_wrap">
+                    <label class="form-label" for="subscription_months">Paid plan duration</label>
+                    <select class="form-select" id="subscription_months" name="subscription_months">
+                        <option value="">Select duration</option>
+                        <option value="1">1 month</option>
+                        <option value="3">3 months</option>
+                        <option value="6">6 months</option>
+                        <option value="12">12 months</option>
+                    </select>
+                    <div class="form-text">Expiration is auto-calculated from today.</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="subscription_expires_preview">Auto subscription end date</label>
+                    <input type="text" class="form-control" id="subscription_expires_preview" value="Select a duration first" readonly>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label" for="paid_amount">Paid amount</label>
@@ -64,6 +82,7 @@
                     <th>Store name</th>
                     <th>Slug</th>
                     <th>Branch details</th>
+                    <th>Plan</th>
                     <th>Paid amount</th>
                     <th>Subscription starts</th>
                     <th>Subscription ends</th>
@@ -105,14 +124,62 @@
     </div>
 </div>
 
+<div class="modal fade" id="editTenantModal" tabindex="-1" aria-labelledby="editTenantModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editTenantModalLabel">Edit store</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="POST" action="" id="editTenantForm" autocomplete="off">
+                <?= csrf_field() ?>
+                <?= method_field('PATCH') ?>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_tenant_name">Store name</label>
+                        <input type="text" class="form-control" id="edit_tenant_name" name="name" maxlength="255" required>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label" for="edit_subscription_plan">Subscription plan</label>
+                        <select class="form-select" id="edit_subscription_plan" name="subscription_plan" required>
+                            <option value="free_access">Free 7-day trial</option>
+                            <option value="paid">Paid</option>
+                        </select>
+                    </div>
+                    <div class="mt-3" id="edit_subscription_months_wrap">
+                        <label class="form-label" for="edit_subscription_months">Paid plan duration</label>
+                        <select class="form-select" id="edit_subscription_months" name="subscription_months">
+                            <option value="1">1 month</option>
+                            <option value="3">3 months</option>
+                            <option value="6">6 months</option>
+                            <option value="12">12 months</option>
+                        </select>
+                        <div class="form-text">Saving plan duration resets subscription start to today and recalculates expiry.</div>
+                    </div>
+                    <div class="mt-3">
+                        <label class="form-label" for="edit_license_expires_at">Subscription end date</label>
+                        <input type="date" class="form-control" id="edit_license_expires_at" name="license_expires_at">
+                        <input type="hidden" id="edit_original_license_expires_at" name="original_license_expires_at" value="">
+                        <div class="form-text">You can still manually override the end date here.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <script>
 (() => {
     const tenantsBase = <?= json_encode(url('/super-admin/tenants')) ?>;
     const isMobile = window.matchMedia('(max-width: 767.98px)').matches;
     const isTablet = window.matchMedia('(max-width: 991.98px)').matches;
     const hiddenByViewport = isMobile
-        ? [1, 3, 4, 5, 6, 8]
-        : (isTablet ? [3, 4, 5, 6] : []);
+        ? [1, 3, 4, 5, 6, 7, 9]
+        : (isTablet ? [3, 4, 6, 7] : []);
 
     initServerDataTable('#tenantsTable', {
         printButton: true,
@@ -128,10 +195,11 @@
             { targets: 4, responsivePriority: 96 },
             { targets: 5, responsivePriority: 97 },
             { targets: 6, responsivePriority: 98 },
-            { targets: 7, responsivePriority: 4 },
-            { targets: 8, responsivePriority: 99 },
-            { targets: 9, responsivePriority: 3 },
-            { targets: 10, orderable: false, searchable: false, responsivePriority: 5 },
+            { targets: 7, responsivePriority: 99 },
+            { targets: 8, responsivePriority: 4 },
+            { targets: 9, responsivePriority: 100 },
+            { targets: 10, responsivePriority: 3 },
+            { targets: 11, orderable: false, searchable: false, responsivePriority: 5 },
             { targets: hiddenByViewport, visible: false },
         ],
         columns: [
@@ -140,6 +208,7 @@
             { data: 'name' },
             { data: 'slug' },
             { data: 'branch_details' },
+            { data: 'plan' },
             { data: 'paid_amount' },
             { data: 'starts' },
             { data: 'expires' },
@@ -147,26 +216,6 @@
             { data: 'status' },
             { data: 'actions' },
         ],
-    });
-
-    document.addEventListener('click', (e) => {
-        const editBtn = e.target.closest('.btn-edit-sub-exp');
-        if (editBtn) {
-            const wrap = editBtn.closest('.tenant-sub-exp-wrap');
-            if (!wrap) return;
-            wrap.querySelector('.tenant-sub-exp-view')?.classList.add('d-none');
-            wrap.querySelector('.tenant-sub-exp-edit')?.classList.remove('d-none');
-            return;
-        }
-        const cancelBtn = e.target.closest('.btn-cancel-sub-exp');
-        if (cancelBtn) {
-            const wrap = cancelBtn.closest('.tenant-sub-exp-wrap');
-            if (!wrap) return;
-            const form = wrap.querySelector('.tenant-sub-exp-edit');
-            if (form && form.reset) form.reset();
-            wrap.querySelector('.tenant-sub-exp-edit')?.classList.add('d-none');
-            wrap.querySelector('.tenant-sub-exp-view')?.classList.remove('d-none');
-        }
     });
 
     const resetModal = document.getElementById('resetOwnerPasswordModal');
@@ -183,6 +232,131 @@
             resetForm.action = '';
             resetForm.reset();
         });
+    }
+
+    const editModal = document.getElementById('editTenantModal');
+    const editForm = document.getElementById('editTenantForm');
+    const editNameInput = document.getElementById('edit_tenant_name');
+    const editPlanInput = document.getElementById('edit_subscription_plan');
+    const editMonthsInput = document.getElementById('edit_subscription_months');
+    const editExpiresInput = document.getElementById('edit_license_expires_at');
+    const editOriginalExpiresInput = document.getElementById('edit_original_license_expires_at');
+    const editMonthsWrap = document.getElementById('edit_subscription_months_wrap');
+    if (editModal && editForm && editNameInput && editPlanInput && editMonthsInput && editExpiresInput && editOriginalExpiresInput && editMonthsWrap) {
+        const syncEditPlanUi = () => {
+            const isFree = editPlanInput.value === 'free_access';
+            editMonthsWrap.classList.toggle('d-none', isFree);
+            editMonthsInput.required = !isFree;
+        };
+        editModal.addEventListener('show.bs.modal', (ev) => {
+            const btn = ev.relatedTarget;
+            const tid = btn && btn.getAttribute ? btn.getAttribute('data-tenant-id') : null;
+            const tname = btn && btn.getAttribute ? btn.getAttribute('data-tenant-name') : '';
+            const tmonths = btn && btn.getAttribute ? btn.getAttribute('data-tenant-plan-months') : '';
+            const tplan = btn && btn.getAttribute ? btn.getAttribute('data-tenant-plan-code') : '';
+            const texpires = btn && btn.getAttribute ? btn.getAttribute('data-tenant-expires') : '';
+            if (!tid) return;
+            editForm.action = tenantsBase + '/' + tid;
+            editNameInput.value = tname || '';
+            editPlanInput.value = String(tplan || '').toLowerCase() === 'free_access' ? 'free_access' : 'paid';
+            editMonthsInput.value = ['1', '3', '6', '12'].includes(String(tmonths || '')) ? String(tmonths) : '1';
+            editExpiresInput.value = texpires || '';
+            editOriginalExpiresInput.value = texpires || '';
+            syncEditPlanUi();
+        });
+        editModal.addEventListener('hidden.bs.modal', () => {
+            editForm.action = '';
+            editForm.reset();
+        });
+        editPlanInput.addEventListener('change', syncEditPlanUi);
+    }
+
+    document.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.btn-edit-tenant');
+        if (!btn || !editModal) return;
+        const modal = bootstrap.Modal.getOrCreateInstance(editModal);
+        btn.setAttribute('data-bs-toggle', 'modal');
+        btn.setAttribute('data-bs-target', '#editTenantModal');
+        modal.show(btn);
+    });
+
+    document.addEventListener('submit', async (e) => {
+        const form = e.target.closest('.js-delete-tenant-form');
+        if (!form) return;
+        if (form.dataset.mpgConfirmBypass === '1') {
+            form.dataset.mpgConfirmBypass = '0';
+            return;
+        }
+        e.preventDefault();
+        const tenantName = form.getAttribute('data-tenant-name') || 'this store';
+        if (typeof Swal === 'undefined') {
+            const ok = await window.mpgConfirm(`Delete ${tenantName}?`, {
+                title: 'Delete store?',
+                text: 'This action cannot be undone.',
+                confirmButtonText: 'Yes, delete store',
+                cancelButtonText: 'Cancel',
+                confirmButtonColor: '#dc3545',
+            });
+            if (ok) {
+                form.dataset.mpgConfirmBypass = '1';
+                if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                else form.submit();
+            }
+            return;
+        }
+        const res = await Swal.fire({
+            icon: 'warning',
+            title: 'Delete store?',
+            text: `You are about to permanently delete ${tenantName}.`,
+            showCancelButton: true,
+            confirmButtonText: 'Yes, delete store',
+            cancelButtonText: 'Cancel',
+            confirmButtonColor: '#dc3545',
+        });
+        if (res.isConfirmed) {
+            form.dataset.mpgConfirmBypass = '1';
+            if (typeof form.requestSubmit === 'function') form.requestSubmit();
+            else form.submit();
+        }
+    });
+
+    const planSelect = document.getElementById('subscription_plan');
+    const monthsSelect = document.getElementById('subscription_months');
+    const monthsWrap = document.getElementById('subscription_months_wrap');
+    const expiresPreview = document.getElementById('subscription_expires_preview');
+    if (planSelect && monthsSelect && monthsWrap && expiresPreview) {
+        const formatDate = (d) => {
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd}`;
+        };
+        const syncCreatePlanUi = () => {
+            const isFree = planSelect.value === 'free_access';
+            monthsWrap.classList.toggle('d-none', isFree);
+            monthsSelect.required = !isFree;
+            if (isFree) {
+                const exp = new Date();
+                exp.setDate(exp.getDate() + 7);
+                expiresPreview.value = formatDate(exp);
+                return;
+            }
+            refreshExpiryPreview();
+        };
+        const refreshExpiryPreview = () => {
+            const months = parseInt(monthsSelect.value || '0', 10);
+            if (![1, 3, 6, 12].includes(months)) {
+                expiresPreview.value = 'Select a duration first';
+                return;
+            }
+            const start = new Date();
+            const exp = new Date(start);
+            exp.setMonth(exp.getMonth() + months);
+            expiresPreview.value = formatDate(exp);
+        };
+        monthsSelect.addEventListener('change', refreshExpiryPreview);
+        planSelect.addEventListener('change', syncCreatePlanUi);
+        syncCreatePlanUi();
     }
 })();
 </script>

@@ -26,7 +26,8 @@ final class ReceiptSettingsController
             'SELECT name, receipt_display_name, receipt_business_style, receipt_tax_id, receipt_phone, receipt_address, receipt_email, receipt_footer_note, receipt_lan_print_copies,
                     receipt_escpos_line_width, receipt_escpos_right_col_width, receipt_escpos_extra_feeds, receipt_escpos_cut_mode,
                     receipt_serial_number, receipt_vat_applicable, receipt_dti_number, receipt_tax_type,
-                    receipt_is_bir_registered, receipt_bir_accreditation_no, receipt_min, receipt_permit_no
+                    receipt_is_bir_registered, receipt_bir_accreditation_no, receipt_min, receipt_permit_no,
+                    receipt_ble_printer_match_rules
              FROM tenants
              WHERE id = ?
              LIMIT 1'
@@ -45,6 +46,7 @@ final class ReceiptSettingsController
                 'receipt_email' => (string) ($row['receipt_email'] ?? ''),
                 'receipt_footer_note' => (string) ($row['receipt_footer_note'] ?? ''),
                 'receipt_lan_print_copies' => (int) ($row['receipt_lan_print_copies'] ?? 1),
+                'receipt_ble_printer_match_rules' => (string) ($row['receipt_ble_printer_match_rules'] ?? ''),
                 'receipt_escpos_line_width' => (int) ($row['receipt_escpos_line_width'] ?? 32),
                 'receipt_escpos_right_col_width' => (int) ($row['receipt_escpos_right_col_width'] ?? 10),
                 'receipt_escpos_extra_feeds' => (int) ($row['receipt_escpos_extra_feeds'] ?? 8),
@@ -58,7 +60,7 @@ final class ReceiptSettingsController
                 'receipt_min' => (string) ($row['receipt_min'] ?? ''),
                 'receipt_permit_no' => (string) ($row['receipt_permit_no'] ?? ''),
             ],
-            'premium_trial_browse_lock' => Auth::isTenantFreeTrial($user),
+            'premium_trial_browse_lock' => Auth::isTenantFreePlanRestricted($user),
         ]);
     }
 
@@ -68,8 +70,8 @@ final class ReceiptSettingsController
         if (! $user || ($user['role'] ?? '') !== 'tenant_admin' || empty($user['tenant_id'])) {
             return new Response('Forbidden.', 403);
         }
-        if (Auth::isTenantFreeTrial($user)) {
-            session_flash('errors', ['Premium: saving receipt config is not available on a Free Trial.']);
+        if (Auth::isTenantFreePlanRestricted($user)) {
+            session_flash('errors', ['Premium: saving receipt config is not available on the Free version.']);
 
             return redirect(route('tenant.receipt-settings.edit'));
         }
@@ -82,6 +84,7 @@ final class ReceiptSettingsController
         $email = trim((string) $request->input('receipt_email'));
         $footerNote = trim((string) $request->input('receipt_footer_note'));
         $lanCopies = (int) $request->input('receipt_lan_print_copies', 1);
+        $blePrinterMatchRules = trim((string) $request->input('receipt_ble_printer_match_rules', ''));
         $escposLineWidth = (int) $request->input('receipt_escpos_line_width', 32);
         $escposRightColWidth = (int) $request->input('receipt_escpos_right_col_width', 10);
         $escposExtraFeeds = (int) $request->input('receipt_escpos_extra_feeds', 8);
@@ -168,6 +171,9 @@ final class ReceiptSettingsController
         if (strlen($footerNote) > 1000) {
             $errors[] = 'Footer note is too long (max 1000 characters).';
         }
+        if (strlen($blePrinterMatchRules) > 2000) {
+            $errors[] = 'Bluetooth printer match rules is too long (max 2000 characters).';
+        }
 
         if ($errors !== []) {
             session_flash('errors', $errors);
@@ -181,6 +187,7 @@ final class ReceiptSettingsController
             'UPDATE tenants
              SET receipt_display_name = ?, receipt_business_style = ?, receipt_tax_id = ?, receipt_phone = ?,
                  receipt_address = ?, receipt_email = ?, receipt_footer_note = ?, receipt_lan_print_copies = ?,
+                 receipt_ble_printer_match_rules = ?,
                  receipt_escpos_line_width = ?, receipt_escpos_right_col_width = ?, receipt_escpos_extra_feeds = ?, receipt_escpos_cut_mode = ?,
                  receipt_serial_number = ?, receipt_vat_applicable = ?, receipt_dti_number = ?, receipt_tax_type = ?,
                  receipt_is_bir_registered = ?, receipt_bir_accreditation_no = ?, receipt_min = ?, receipt_permit_no = ?,
@@ -195,6 +202,7 @@ final class ReceiptSettingsController
             $email !== '' ? $email : null,
             $footerNote !== '' ? $footerNote : null,
             $lanCopies,
+            $blePrinterMatchRules !== '' ? $blePrinterMatchRules : null,
             $escposLineWidth,
             $escposRightColWidth,
             $escposExtraFeeds,

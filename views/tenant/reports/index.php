@@ -39,11 +39,15 @@ $presetOptions = [
     'custom' => 'Custom range',
 ];
 $showCustomDates = ($chartPreset === 'custom');
-$lineItemsSum = (float) ($stats['line_items_sum'] ?? 0);
-$reconciliationDelta = (float) ($stats['reconciliation_delta'] ?? 0);
-$freeOrdersCount = (int) ($stats['free_orders_count'] ?? 0);
-$freeLineSum = (float) ($stats['free_line_sum'] ?? 0);
+$manualExpensesTotal = (float) ($stats['manual_expenses_total'] ?? 0);
+$freeReportsLimited = ! empty($free_reports_limited);
+$premiumBadge = '<span class="badge text-bg-warning text-dark ms-2">Premium</span>';
 ?>
+<?php if ($freeReportsLimited): ?>
+    <div class="alert alert-warning mb-3 border-0 shadow-sm">
+        <strong>Free Mode reports:</strong> you can view amounts only. Top customers, birthdays, graphs, daily sales, services sold, and inventory items out are Premium.
+    </div>
+<?php endif; ?>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 d-print-none">
     <div class="small text-muted">Record / audit: print the summary below.</div>
@@ -90,33 +94,127 @@ $freeLineSum = (float) ($stats['free_line_sum'] ?? 0);
     </div>
 </div>
 
+<?php if ($freeReportsLimited): ?>
+<script>
+(function () {
+    var presetEl = document.getElementById('report_preset');
+    var customWrap = document.getElementById('report_custom_dates');
+    var applyBtn = document.getElementById('report_apply_btn');
+    if (!presetEl || !customWrap || !applyBtn) {
+        return;
+    }
+    presetEl.addEventListener('change', function () {
+        var isCustom = this.value === 'custom';
+        customWrap.classList.toggle('d-none', !isCustom);
+        applyBtn.classList.toggle('d-none', !isCustom);
+        if (!isCustom) {
+            this.form.submit();
+        }
+    });
+})();
+</script>
+<?php endif; ?>
+
+<?php
+$grossSales = (float) ($stats['gross_sales_total'] ?? 0);
+$refunds = (float) ($stats['refunds_total'] ?? 0);
+$discounts = (float) ($stats['discounts_total'] ?? 0);
+$foldServiceAmount = (float) ($stats['fold_service_amount'] ?? 0);
+$showFoldAmount = $foldServiceAmount > 0;
+$foldAmount = (float) ($stats['fold_amount_total'] ?? 0);
+$foldTarget = (string) ($stats['fold_commission_target'] ?? 'staff');
+$expenses = (float) ($stats['expenses_total'] ?? 0);
+$netSales = (float) ($stats['net_sales'] ?? 0);
+$grossProfit = (float) ($stats['gross_profit'] ?? ($netSales - $expenses));
+$serviceModeSummary = (array) ($stats['service_mode_summary'] ?? []);
+?>
 <div class="row g-3 mb-3">
-    <div class="col-md-4">
+    <div class="col-lg col-md-6">
         <div class="card h-100">
             <div class="card-body">
-                <small class="text-muted"><?= $isTodayOnly ? 'Sales today' : 'Sales (selected range)' ?></small>
-                <h3 class="mb-0"><?= e(format_money((float) ($stats['sales_total'] ?? 0))) ?></h3>
+                <small class="text-muted">Gross sales<?= $isTodayOnly ? ' today' : ' (selected range)' ?></small>
+                <h3 class="mb-0"><?= e(format_money($grossSales)) ?></h3>
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-lg col-md-6">
         <div class="card h-100">
             <div class="card-body">
-                <small class="text-muted"><?= $isTodayOnly ? 'Expenses today' : 'Expenses (selected range)' ?></small>
-                <h3 class="mb-0"><?= e(format_money((float) ($stats['expenses_total'] ?? 0))) ?></h3>
+                <small class="text-muted">Refunds<?= $isTodayOnly ? ' today' : ' (selected range)' ?></small>
+                <h3 class="mb-0"><?= e(format_money($refunds)) ?></h3>
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-lg col-md-6">
         <div class="card h-100">
             <div class="card-body">
-                <small class="text-muted"><?= $isTodayOnly ? 'Net today' : 'Net (selected range)' ?></small>
-                <div class="small text-muted mb-1">Sales − expenses</div>
-                <?php
-                $net = (float) ($stats['net_sales'] ?? 0);
-                $netClass = $net < 0 ? 'text-danger' : '';
-                ?>
-                <h3 class="mb-0 <?= $netClass ?>"><?= e(format_money($net)) ?></h3>
+                <small class="text-muted">Discounts<?= $isTodayOnly ? ' today' : ' (selected range)' ?></small>
+                <h3 class="mb-0"><?= e(format_money($discounts)) ?></h3>
+            </div>
+        </div>
+    </div>
+    <?php if ($showFoldAmount): ?>
+        <div class="col-lg col-md-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">Fold amount<?= $isTodayOnly ? ' today' : ' (selected range)' ?></small>
+                    <h3 class="mb-0"><?= e(format_money($foldAmount)) ?></h3>
+                    <div class="small text-muted mt-1">
+                        <?= $foldTarget === 'branch' ? 'Included in sales (Branch target).' : 'Commission goes to staff (not added to sales).' ?>
+                    </div>
+                </div>
+            </div>
+        </div>
+    <?php endif; ?>
+    <div class="col-lg col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <small class="text-muted">Expenses<?= $isTodayOnly ? ' today' : ' (selected range)' ?></small>
+                <h3 class="mb-0"><?= e(format_money($expenses)) ?></h3>
+                <div class="small text-muted mt-1">From Expenses module only.</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <small class="text-muted">Net sales<?= $isTodayOnly ? ' today' : ' (selected range)' ?></small>
+                <h3 class="mb-0 <?= $netSales < 0 ? 'text-danger' : '' ?>"><?= e(format_money($netSales)) ?></h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <small class="text-muted">Gross profit<?= $isTodayOnly ? ' today' : ' (selected range)' ?></small>
+                <h3 class="mb-0 <?= $grossProfit < 0 ? 'text-danger' : '' ?>"><?= e(format_money($grossProfit)) ?></h3>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="row g-3 mb-3">
+    <div class="col-lg-12">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="card-title">Items out by service mode<?= $isTodayOnly ? ' (today)' : ' (selected range)' ?></h6>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th>Service mode</th>
+                            <th class="text-end">Count</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($serviceModeSummary as $mode): ?>
+                            <tr>
+                                <td><?= e((string) ($mode['label'] ?? '')) ?></td>
+                                <td class="text-end"><?= (int) ($mode['count'] ?? 0) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
@@ -130,7 +228,7 @@ $payCards = [
     ['key' => 'gcash', 'label' => 'GCash '.$suffix],
     ['key' => 'paymaya', 'label' => 'PayMaya '.$suffix],
     ['key' => 'online_banking', 'label' => 'Online banking '.$suffix],
-    ['key' => 'free', 'label' => 'FREE (employee) '.$suffix],
+    ['key' => 'qr_payment', 'label' => 'QR payment '.$suffix],
 ];
 ?>
 <div class="row g-3 mb-3">
@@ -146,61 +244,105 @@ $payCards = [
     <?php endforeach; ?>
 </div>
 
-<div class="card mb-3 border-info">
-    <div class="card-body">
-        <h6 class="card-title mb-2"><i class="fa-solid fa-scale-balanced me-1"></i>Audit: sales vs line items</h6>
-        <p class="small text-muted mb-2">
-            <strong>Sales</strong> above is <code>SUM(transactions.total_amount)</code> (completed).
-            <strong>Sum of line items</strong> is <code>SUM(transaction_items.line_total)</code> for the same date range.
-            They should match; if not, you may have rounding, an edited order, or a different range than your manual sum.
-        </p>
-        <div class="row g-2 small">
-            <div class="col-md-4">
-                <div class="text-muted">Sales (transaction totals)</div>
-                <div class="fw-semibold font-monospace"><?= e(format_money((float) ($stats['sales_total'] ?? 0))) ?></div>
-            </div>
-            <div class="col-md-4">
-                <div class="text-muted">Sum of line items</div>
-                <div class="fw-semibold font-monospace"><?= e(format_money($lineItemsSum)) ?></div>
-            </div>
-            <div class="col-md-4">
-                <div class="text-muted">Difference (sales − lines)</div>
-                <?php
-                $deltaClass = abs($reconciliationDelta) >= 0.01 ? 'text-warning' : 'text-success';
-                ?>
-                <div class="fw-semibold font-monospace <?= $deltaClass ?>"><?= e(format_money($reconciliationDelta)) ?></div>
+<?php if (! $freeReportsLimited): ?>
+    <div class="row g-3 mb-3">
+        <div class="col-lg-12">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Top customers (selected range)</h6>
+                    <?php if (($top_customers ?? []) === []): ?>
+                        <p class="small text-muted mb-0">No customer data for this period.</p>
+                    <?php else: ?>
+                        <div class="table-responsive">
+                            <table class="table table-sm mb-0">
+                                <thead><tr><th>Customer</th><th class="text-end">Visits</th><th class="text-end">Spending</th></tr></thead>
+                                <tbody>
+                                <?php foreach (($top_customers ?? []) as $row): ?>
+                                    <tr>
+                                        <td><?= e((string) ($row['name'] ?? '')) ?></td>
+                                        <td class="text-end"><?= (int) ($row['frequency'] ?? 0) ?></td>
+                                        <td class="text-end"><?= e(format_money((float) ($row['total_spending'] ?? 0))) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php endif; ?>
+                </div>
             </div>
         </div>
-        <?php if ($freeOrdersCount > 0): ?>
-            <p class="small text-muted mb-0 mt-2">
-                <strong>FREE (employee)</strong> in period: <strong><?= (int) $freeOrdersCount ?></strong> transaction(s)
-                — sales <strong>₱0</strong>; sum of line items on FREE orders:
-                <strong><?= e(format_money($freeLineSum)) ?></strong>
-                (should be <strong>0</strong> after FREE checkout zeroes the total).
-            </p>
-        <?php endif; ?>
     </div>
-</div>
 
+    <div class="row g-3 mb-3">
+        <div class="col-lg-12">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Birthdays in selected range</h6>
+                    <?php if (($birthdays_in_range ?? []) === []): ?>
+                        <p class="small text-muted mb-0">No birthdays in this period.</p>
+                    <?php else: ?>
+                        <ul class="mb-0">
+                            <?php foreach (($birthdays_in_range ?? []) as $row): ?>
+                                <li><?= e((string) ($row['name'] ?? '')) ?> - <?= e((string) ($row['birthday'] ?? '')) ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
+    </div>
+<?php else: ?>
+    <div class="row g-3 mb-3">
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Top customers<?= $premiumBadge ?></h6>
+                    <p class="small text-muted mb-0">Top customer insights are available on Premium.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Birthdays<?= $premiumBadge ?></h6>
+                    <p class="small text-muted mb-0">Birthday reports are available on Premium.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
+
+
+<?php if (! $freeReportsLimited): ?>
 <?php
+$repChartLabels = ['Gross sales', 'Refunds', 'Discounts'];
+$repChartValues = [round_money($grossSales), round_money($refunds), round_money($discounts)];
+if ($showFoldAmount) {
+    $repChartLabels[] = 'Fold amount';
+    $repChartValues[] = round_money($foldAmount);
+}
+$repChartLabels[] = 'Expenses';
+$repChartLabels[] = 'Net sales';
+$repChartLabels[] = 'Gross profit';
+$repChartValues[] = round_money($expenses);
+$repChartValues[] = round_money($netSales);
+$repChartValues[] = round_money($grossProfit);
 $repChart = [
-    'labels' => array_values((array) ($chart['labels'] ?? [])),
-    'sales' => array_map(static fn ($v) => round_money((float) $v), array_values((array) ($chart['sales'] ?? []))),
-    'expenses' => array_map(static fn ($v) => round_money((float) $v), array_values((array) ($chart['expenses'] ?? []))),
-    'profit' => array_map(static fn ($v) => round_money((float) $v), array_values((array) ($chart['profit'] ?? []))),
+    'labels' => $repChartLabels,
+    'values' => $repChartValues,
 ];
 $repChartJson = json_encode($repChart, JSON_HEX_TAG | JSON_HEX_APOS | JSON_UNESCAPED_UNICODE);
 ?>
 <div class="card mb-3 d-print-none">
     <div class="card-body">
-        <h6 class="card-title mb-3">Sales trend</h6>
-        <p class="small text-muted mb-2">Daily completed sales, manual expenses, and net (sales − expenses) for the selected period above.</p>
+        <h6 class="card-title mb-3">Report figures (selected period)</h6>
+        <p class="small text-muted mb-2">Same metrics as Dashboard, recalculated using the selected date range / preset period.</p>
         <div style="min-height: 280px; position: relative;">
             <canvas id="reportsSalesChart" aria-label="Sales trend chart" role="img"></canvas>
         </div>
     </div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script src="<?= e(url('vendor/chartjs/chart.umd.min.js')) ?>"></script>
 <script>
 (function () {
     var presetEl = document.getElementById('report_preset');
@@ -225,6 +367,22 @@ $repChartJson = json_encode($repChart, JSON_HEX_TAG | JSON_HEX_APOS | JSON_UNESC
         s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         return s.join('.');
     }
+    function paletteForCount(count) {
+        var bgBase = [
+            'rgba(13, 110, 253, 0.65)',
+            'rgba(220, 53, 69, 0.65)',
+            'rgba(253, 126, 20, 0.65)',
+            'rgba(102, 16, 242, 0.65)',
+            'rgba(111, 66, 193, 0.65)',
+            'rgba(32, 201, 151, 0.65)',
+            'rgba(25, 135, 84, 0.65)',
+        ];
+        var borderBase = ['#0d6efd', '#dc3545', '#fd7e14', '#6610f2', '#6f42c1', '#20c997', '#198754'];
+        return {
+            bg: bgBase.slice(0, Math.max(0, count)),
+            border: borderBase.slice(0, Math.max(0, count)),
+        };
+    }
     var raw = <?= $repChartJson !== false ? $repChartJson : '{}' ?>;
     var canvas = document.getElementById('reportsSalesChart');
     if (!canvas || typeof Chart === 'undefined' || !raw.labels || !raw.labels.length) {
@@ -235,43 +393,20 @@ $repChartJson = json_encode($repChart, JSON_HEX_TAG | JSON_HEX_APOS | JSON_UNESC
         return;
     }
     new Chart(ctx, {
-        type: 'line',
+        type: 'bar',
         data: {
             labels: raw.labels,
-            datasets: [
-                {
-                    label: 'Sales',
-                    data: raw.sales,
-                    borderColor: 'rgb(13, 110, 253)',
-                    backgroundColor: 'rgba(13, 110, 253, 0.08)',
-                    fill: false,
-                    tension: 0.2,
-                    pointRadius: 2,
-                },
-                {
-                    label: 'Expenses',
-                    data: raw.expenses,
-                    borderColor: 'rgb(253, 126, 20)',
-                    backgroundColor: 'rgba(253, 126, 20, 0.08)',
-                    fill: false,
-                    tension: 0.2,
-                    pointRadius: 2,
-                },
-                {
-                    label: 'Net',
-                    data: raw.profit,
-                    borderColor: 'rgb(25, 135, 84)',
-                    backgroundColor: 'rgba(25, 135, 84, 0.08)',
-                    fill: false,
-                    tension: 0.2,
-                    pointRadius: 2,
-                },
-            ],
+            datasets: [{
+                label: 'Amount',
+                data: raw.values || [],
+                backgroundColor: paletteForCount((raw.values || []).length).bg,
+                borderColor: paletteForCount((raw.values || []).length).border,
+                borderWidth: 1,
+            }],
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
             plugins: {
                 legend: { position: 'bottom' },
                 tooltip: {
@@ -301,6 +436,16 @@ $repChartJson = json_encode($repChart, JSON_HEX_TAG | JSON_HEX_APOS | JSON_UNESC
     });
 })();
 </script>
+<?php endif; ?>
+
+<?php if ($freeReportsLimited): ?>
+<div class="card mb-3 d-print-none">
+    <div class="card-body">
+        <h6 class="card-title mb-2">Report figures<?= $premiumBadge ?></h6>
+        <p class="small text-muted mb-0">Graphs are available on Premium.</p>
+    </div>
+</div>
+<?php endif; ?>
 
 <?php
 $dailyDates = array_values((array) ($chart['dates'] ?? []));
@@ -309,58 +454,68 @@ $dailyExpenses = array_values((array) ($chart['expenses'] ?? []));
 $dailyNet = array_values((array) ($chart['profit'] ?? []));
 $nDaily = count($dailyDates);
 ?>
-<div class="card mb-3">
-    <div class="card-body">
-        <h6 class="card-title mb-2">Daily sales</h6>
-        <p class="small text-muted mb-3">One row per calendar day in the selected period (e.g. Last 30 days = 30 rows), oldest to newest.</p>
-        <div class="table-responsive">
-            <?php if ($nDaily < 1): ?>
-                <p class="text-muted mb-0">No days in this range.</p>
-            <?php else: ?>
-                <table class="table table-striped table-sm mb-0">
-                    <thead>
-                    <tr>
-                        <th scope="col">Date</th>
-                        <th scope="col" class="text-end">Sales</th>
-                        <th scope="col" class="text-end">Expenses</th>
-                        <th scope="col" class="text-end">Net</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    <?php for ($i = 0; $i < $nDaily; $i++): ?>
-                        <?php
-                        $rowDate = (string) ($dailyDates[$i] ?? '');
-                        $rowSales = (float) ($dailySales[$i] ?? 0);
-                        $rowExp = (float) ($dailyExpenses[$i] ?? 0);
-                        $rowNet = (float) ($dailyNet[$i] ?? 0);
-                        $dateLabel = $rowDate !== '' && strtotime($rowDate) !== false
-                            ? date('D, M j, Y', strtotime($rowDate))
-                            : $rowDate;
-                        $netClass = $rowNet < 0 ? 'text-danger' : '';
-                        ?>
+<?php if (! $freeReportsLimited): ?>
+    <div class="card mb-3">
+        <div class="card-body">
+            <h6 class="card-title mb-2">Daily sales</h6>
+            <p class="small text-muted mb-3">One row per calendar day in the selected period (e.g. Last 30 days = 30 rows), oldest to newest.</p>
+            <div class="table-responsive">
+                <?php if ($nDaily < 1): ?>
+                    <p class="text-muted mb-0">No days in this range.</p>
+                <?php else: ?>
+                    <table class="table table-striped table-sm mb-0">
+                        <thead>
                         <tr>
-                            <td><?= e($dateLabel) ?></td>
-                            <td class="text-end font-monospace"><?= e(format_money($rowSales)) ?></td>
-                            <td class="text-end font-monospace"><?= e(format_money($rowExp)) ?></td>
-                            <td class="text-end font-monospace <?= $netClass ?>"><?= e(format_money($rowNet)) ?></td>
+                            <th scope="col">Date</th>
+                            <th scope="col" class="text-end">Sales</th>
+                            <th scope="col" class="text-end">Expenses</th>
+                            <th scope="col" class="text-end">Net</th>
                         </tr>
-                    <?php endfor; ?>
-                    </tbody>
-                </table>
-            <?php endif; ?>
+                        </thead>
+                        <tbody>
+                        <?php for ($i = 0; $i < $nDaily; $i++): ?>
+                            <?php
+                            $rowDate = (string) ($dailyDates[$i] ?? '');
+                            $rowSales = (float) ($dailySales[$i] ?? 0);
+                            $rowExp = (float) ($dailyExpenses[$i] ?? 0);
+                            $rowNet = (float) ($dailyNet[$i] ?? 0);
+                            $dateLabel = $rowDate !== '' && strtotime($rowDate) !== false
+                                ? date('D, M j, Y', strtotime($rowDate))
+                                : $rowDate;
+                            $netClass = $rowNet < 0 ? 'text-danger' : '';
+                            ?>
+                            <tr>
+                                <td><?= e($dateLabel) ?></td>
+                                <td class="text-end font-monospace"><?= e(format_money($rowSales)) ?></td>
+                                <td class="text-end font-monospace"><?= e(format_money($rowExp)) ?></td>
+                                <td class="text-end font-monospace <?= $netClass ?>"><?= e(format_money($rowNet)) ?></td>
+                            </tr>
+                        <?php endfor; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
         </div>
     </div>
-</div>
+<?php else: ?>
+    <div class="card mb-3">
+        <div class="card-body">
+            <h6 class="card-title mb-2">Daily sales<?= $premiumBadge ?></h6>
+            <p class="small text-muted mb-0">Daily sales breakdown is available on Premium.</p>
+        </div>
+    </div>
+<?php endif; ?>
 
+<?php if (! $freeReportsLimited): ?>
 <div class="card mt-3">
     <div class="card-body">
-        <h6 class="mb-1">Products sold</h6>
+        <h6 class="mb-1">Services sold</h6>
         <p class="small text-muted mb-3">Same <strong>Period</strong> as the selector above (change period there, then Apply or pick a preset to refresh this page).</p>
         <div class="table-responsive">
             <table class="table table-sm mb-0">
                 <thead>
                 <tr>
-                    <th>Product</th>
+                    <th>Service type</th>
                     <th class="text-end" style="width: 100px;">Qty sold</th>
                     <th class="text-end" style="width: 120px;">Amount (₱)</th>
                 </tr>
@@ -373,6 +528,26 @@ $nDaily = count($dailyDates);
         <div class="small text-muted mt-2">Based on completed transactions for <strong><?= e($rangeFrom) ?></strong><?= $rangeFrom !== $rangeTo ? ' – <strong>'.e($rangeTo).'</strong>' : '' ?>.</div>
     </div>
 </div>
+<div class="card mt-3">
+    <div class="card-body">
+        <h6 class="mb-1">Inventory items out</h6>
+        <p class="small text-muted mb-3">Transparency view of inventory consumed by paid orders for the same selected period.</p>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
+                <tr>
+                    <th>Item name</th>
+                    <th class="text-end" style="width: 120px;">Qty out</th>
+                    <th class="text-end" style="width: 140px;">Amount (₱)</th>
+                </tr>
+                </thead>
+                <tbody id="inventoryOutsTbody">
+                <tr><td colspan="3" class="text-muted text-center py-3">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
 
 <script>
 (() => {
@@ -380,6 +555,7 @@ $nDaily = count($dailyDates);
     const rangeFrom = <?= json_encode($rangeFrom) ?>;
     const rangeTo = <?= json_encode($rangeTo) ?>;
     const tb = document.getElementById('dailyOutsTbody');
+    const invTb = document.getElementById('inventoryOutsTbody');
     const esc = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const fmtQty = (q) => {
         const n = Number(q);
@@ -396,6 +572,9 @@ $nDaily = count($dailyDates);
 
     const load = async () => {
         tb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">Loading…</td></tr>';
+        if (invTb) {
+            invTb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">Loading…</td></tr>';
+        }
         try {
             const u = new URL(urlBase, window.location.origin);
             u.searchParams.set('from', rangeFrom);
@@ -404,6 +583,9 @@ $nDaily = count($dailyDates);
             const body = await res.json().catch(() => ({}));
             if (!res.ok || !body.success) {
                 tb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">Could not load products sold.</td></tr>';
+                if (invTb) {
+                    invTb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">Could not load inventory out data.</td></tr>';
+                }
                 return;
             }
             const rows = Array.isArray(body.data) ? body.data : [];
@@ -415,14 +597,49 @@ $nDaily = count($dailyDates);
                 const amt = r.line_amount != null ? fmtMoney(r.line_amount) : fmtMoney(0);
                 return `<tr><td>${esc(r.product_name)}</td><td class="text-end fw-semibold">${esc(fmtQty(r.qty))}</td><td class="text-end font-monospace">${esc(amt)}</td></tr>`;
             }).join('');
+
+            if (invTb) {
+                const invRows = Array.isArray(body.inventory_out) ? body.inventory_out : [];
+                if (!invRows.length) {
+                    invTb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">No inventory out records for this period.</td></tr>';
+                } else {
+                    invTb.innerHTML = invRows.map((r) => {
+                        const amt = r.amount_out != null ? fmtMoney(r.amount_out) : fmtMoney(0);
+                        return `<tr><td>${esc(r.item_name)}</td><td class="text-end fw-semibold">${esc(fmtQty(r.qty_out))}</td><td class="text-end font-monospace">${esc(amt)}</td></tr>`;
+                    }).join('');
+                }
+            }
         } catch {
             tb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">Could not load products sold.</td></tr>';
+            if (invTb) {
+                invTb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">Could not load inventory out data.</td></tr>';
+            }
         }
     };
 
     load();
 })();
 </script>
+<?php endif; ?>
+<?php if ($freeReportsLimited): ?>
+<div class="row g-3 mt-3">
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="mb-1">Services sold<?= $premiumBadge ?></h6>
+                <p class="small text-muted mb-0">Services sold breakdown is available on Premium.</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="mb-1">Inventory items out<?= $premiumBadge ?></h6>
+                <p class="small text-muted mb-0">Inventory-out details are available on Premium.</p>
+            </div>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 </div><?php /* end .reports-print-scope */ ?>
-

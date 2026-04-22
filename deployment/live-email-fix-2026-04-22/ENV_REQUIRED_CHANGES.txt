@@ -1,0 +1,16 @@
+Update your live `.env` with these values (adjust emails if needed):
+
+APP_NAME=Laundry System
+APP_URL=https://mpgtechnologysolutions.com
+
+MAIL_REPLY_TO_ADDRESS=support@mpgtechnologysolutions.com
+MAIL_REPLY_TO_NAME="MPG Support"
+MAIL_RETURN_PATH=notification@mpgtechnologysolutions.com
+MAIL_EHLO_DOMAIN=mpgtechnologysolutions.com
+MAIL_MESSAGE_ID_DOMAIN=mpgtechnologysolutions.com
+
+Also update DMARC DNS from:
+v=DMARC1; p=none;
+
+to at least:
+v=DMARC1; p=quarantine; adkim=s; aspf=s; pct=100

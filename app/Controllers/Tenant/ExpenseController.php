@@ -52,20 +52,25 @@ final class ExpenseController
             $st->execute($params);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
-            $trialBrowse = Auth::isTenantFreeTrial($user);
+            $trialBrowse = Auth::isTenantFreePlanRestricted($user);
             $data = [];
             foreach ($rows as $expense) {
-                $deleteAction = '';
+                $actions = '';
                 if (Auth::tenantMayManage($user, 'expenses') && ! $trialBrowse) {
                     $eid = (int) $expense['id'];
-                    $deleteAction = '<button type="button" class="btn btn-sm btn-outline-danger js-delete-expense" data-id="'.$eid.'" title="Delete"><i class="fa fa-trash"></i></button>';
+                    $descAttr = e((string) $expense['description']);
+                    $amountAttr = (string) ((float) $expense['amount']);
+                    $actions = '<div class="d-flex gap-1">'
+                        .'<button type="button" class="btn btn-sm btn-outline-primary js-edit-expense" data-id="'.$eid.'" data-description="'.$descAttr.'" data-amount="'.$amountAttr.'" title="Edit"><i class="fa fa-pen"></i></button>'
+                        .'<button type="button" class="btn btn-sm btn-outline-danger js-delete-expense" data-id="'.$eid.'" title="Delete"><i class="fa fa-trash"></i></button>'
+                        .'</div>';
                 }
                 $data[] = [
                     'id' => $expense['id'],
                     'description' => e((string) $expense['description']),
                     'amount' => format_money((float) $expense['amount']),
                     'created_at' => $expense['created_at'] ? date('M d, Y h:i A', strtotime((string) $expense['created_at'])) : '',
-                    'actions' => $deleteAction,
+                    'actions' => $actions,
                 ];
             }
 
@@ -78,7 +83,7 @@ final class ExpenseController
         }
 
         return view_page('Expenses', 'tenant.expenses.index', [
-            'premium_trial_browse_lock' => Auth::isTenantFreeTrial($user),
+            'premium_trial_browse_lock' => Auth::isTenantFreePlanRestricted($user),
         ]);
     }
 
@@ -88,8 +93,8 @@ final class ExpenseController
         if (! Auth::tenantMayManage($user, 'expenses')) {
             return new Response('Forbidden', 403);
         }
-        if (Auth::isTenantFreeTrial($user)) {
-            session_flash('errors', ['Premium: adding expenses is not available on a Free Trial. View plans & pricing to upgrade.']);
+        if (Auth::isTenantFreePlanRestricted($user)) {
+            session_flash('errors', ['Premium: adding expenses is not available on the Free version. View plans & pricing to upgrade.']);
 
             return redirect(url('/tenant/expenses'));
         }
@@ -110,14 +115,53 @@ final class ExpenseController
         return redirect(url('/tenant/expenses'));
     }
 
+    public function update(Request $request, string $id): Response
+    {
+        $user = Auth::user();
+        if (! Auth::tenantMayManage($user, 'expenses')) {
+            return new Response('Forbidden', 403);
+        }
+        if (Auth::isTenantFreePlanRestricted($user)) {
+            session_flash('errors', ['Premium: editing expenses is not available on the Free version.']);
+
+            return redirect(url('/tenant/expenses'));
+        }
+        $tenantId = (int) $user['tenant_id'];
+        $desc = trim((string) $request->input('description'));
+        $amount = (float) $request->input('amount');
+        if ($desc === '' || $amount < money_min_positive()) {
+            session_flash('errors', ['Description and amount are required.']);
+
+            return redirect(url('/tenant/expenses'));
+        }
+
+        $pdo = App::db();
+        $st = $pdo->prepare('SELECT type FROM expenses WHERE tenant_id = ? AND id = ? LIMIT 1');
+        $st->execute([$tenantId, (int) $id]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (! $row || ($row['type'] ?? '') !== 'manual') {
+            return new Response('Forbidden', 403);
+        }
+
+        $pdo->prepare(
+            'UPDATE expenses
+             SET description = ?, amount = ?, updated_at = NOW()
+             WHERE tenant_id = ? AND id = ?'
+        )->execute([$desc, $amount, $tenantId, (int) $id]);
+
+        session_flash('success', 'Expense updated.');
+
+        return redirect(url('/tenant/expenses'));
+    }
+
     public function destroy(Request $request, string $id): Response
     {
         $user = Auth::user();
         if (! Auth::tenantMayManage($user, 'expenses')) {
             return new Response('Forbidden', 403);
         }
-        if (Auth::isTenantFreeTrial($user)) {
-            session_flash('errors', ['Premium: deleting expenses is not available on a Free Trial.']);
+        if (Auth::isTenantFreePlanRestricted($user)) {
+            session_flash('errors', ['Premium: deleting expenses is not available on the Free version.']);
 
             return redirect(url('/tenant/expenses'));
         }

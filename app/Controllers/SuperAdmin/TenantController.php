@@ -14,6 +14,93 @@ final class TenantController
 {
     /** Stored in DB `plan` column; not shown in UI (subscription-only product). */
     private const INTERNAL_PLAN_LABEL = 'subscription';
+    /** @var list<int> */
+    private const SUBSCRIPTION_MONTH_OPTIONS = [1, 3, 6, 12];
+    private const FREE_ACCESS_PLAN_CODE = 'free_access';
+    private const FREE_PLAN_CODES = ['trial', 'free', 'free_trial', self::FREE_ACCESS_PLAN_CODE];
+    private const FREE_TRIAL_DAYS = 7;
+
+    private static function planCodeFromMonths(int $months): string
+    {
+        if (! in_array($months, self::SUBSCRIPTION_MONTH_OPTIONS, true)) {
+            return self::INTERNAL_PLAN_LABEL;
+        }
+
+        return 'subscription_'.$months.'m';
+    }
+
+    private static function planLabelFromCode(string $planCode): string
+    {
+        $v = strtolower(trim($planCode));
+        if (self::isFreePlanCode($v)) {
+            return 'Free';
+        }
+        $months = self::monthsFromPlanCode($v);
+        if ($months !== null) {
+            return self::planLabelFromMonths($months);
+        }
+
+        return 'Custom';
+    }
+
+    private static function monthsFromPlanCode(string $plan): ?int
+    {
+        if (preg_match('/^subscription_(\d+)m$/', strtolower(trim($plan)), $m)) {
+            $months = (int) ($m[1] ?? 0);
+            if (in_array($months, self::SUBSCRIPTION_MONTH_OPTIONS, true)) {
+                return $months;
+            }
+        }
+
+        return null;
+    }
+
+    private static function isFreePlanCode(string $plan): bool
+    {
+        return in_array(strtolower(trim($plan)), self::FREE_PLAN_CODES, true);
+    }
+
+    private static function planLabelFromMonths(?int $months): string
+    {
+        if ($months === null) {
+            return 'Custom';
+        }
+
+        return $months.' month'.($months === 1 ? '' : 's');
+    }
+
+    /** @return array{starts_at:string,expires_at:string} */
+    private static function computeSubscriptionWindow(int $months): array
+    {
+        if (! in_array($months, self::SUBSCRIPTION_MONTH_OPTIONS, true)) {
+            throw new \InvalidArgumentException('Invalid subscription duration.');
+        }
+        $startsAt = new \DateTimeImmutable('now');
+        $expiresAt = $startsAt->modify('+'.$months.' months');
+        if (! $expiresAt instanceof \DateTimeImmutable) {
+            throw new \RuntimeException('Could not compute subscription expiry date.');
+        }
+
+        return [
+            'starts_at' => $startsAt->format('Y-m-d H:i:s'),
+            'expires_at' => $expiresAt->format('Y-m-d H:i:s'),
+        ];
+    }
+
+    /** @return array{starts_at:string,expires_at:string} */
+    private static function computeFreeTrialWindow(): array
+    {
+        $startsAt = new \DateTimeImmutable('now');
+        $expiresAt = $startsAt->modify('+'.self::FREE_TRIAL_DAYS.' days');
+        if (! $expiresAt instanceof \DateTimeImmutable) {
+            throw new \RuntimeException('Could not compute free trial expiry date.');
+        }
+
+        return [
+            'starts_at' => $startsAt->format('Y-m-d H:i:s'),
+            'expires_at' => $expiresAt->format('Y-m-d H:i:s'),
+        ];
+    }
 
     private static function ensurePaidAmountColumn(PDO $pdo): void
     {
@@ -110,11 +197,12 @@ final class TenantController
                 2 => 't.name',
                 3 => 't.slug',
                 4 => 'mb.name',
-                5 => 't.paid_amount',
-                6 => 't.license_starts_at',
-                7 => 't.license_expires_at',
-                8 => 'u.email',
-                9 => 't.is_active',
+                5 => 't.plan',
+                6 => 't.paid_amount',
+                7 => 't.license_starts_at',
+                8 => 't.license_expires_at',
+                9 => 'u.email',
+                10 => 't.is_active',
             ];
             $orderBy = $orderColumnMap[$orderIdx] ?? 't.id';
 
@@ -135,8 +223,8 @@ final class TenantController
                 $toggleIcon = $isActive ? 'fa-toggle-on' : 'fa-toggle-off';
                 $toggleBtnClass = $isActive ? 'btn-outline-success' : 'btn-outline-secondary';
 
-                $formId = 'tenant-sub-exp-'.$id;
                 $patchUrl = url('/super-admin/tenants/'.$id);
+                $deleteUrl = url('/super-admin/tenants/'.$id);
 
                 $startsRaw = $t['license_starts_at'] ?? null;
                 $expiresRaw = $t['license_expires_at'] ?? null;
@@ -156,28 +244,46 @@ final class TenantController
                     $expiresDisplay .= ' <span class="badge text-bg-danger ms-1">Expired</span>';
                 }
 
-                $expiresField = '<span class="tenant-sub-exp-readonly">'.$expiresDisplay.'</span>';
+                $expiresField = '<span>'.$expiresDisplay.'</span>';
+                $planRaw = trim((string) ($t['plan'] ?? ''));
+                $planMonths = self::monthsFromPlanCode($planRaw);
+                if ($planMonths === null && $startsRaw && $expiresRaw) {
+                    $startTs = strtotime((string) $startsRaw);
+                    $expTs = strtotime((string) $expiresRaw);
+                    if ($startTs !== false && $expTs !== false && $expTs >= $startTs) {
+                        $days = (int) floor(($expTs - $startTs) / 86400);
+                        if ($days <= 45) {
+                            $planMonths = 1;
+                        } elseif ($days <= 120) {
+                            $planMonths = 3;
+                        } elseif ($days <= 240) {
+                            $planMonths = 6;
+                        } else {
+                            $planMonths = 12;
+                        }
+                    }
+                }
+                $isFreePlan = self::isFreePlanCode($planRaw);
+                $planLabel = self::planLabelFromCode($planRaw);
+                $planCell = '<span class="badge text-bg-info">'.e($planLabel).'</span>';
 
                 $ownerEmail = trim((string) ($t['owner_email'] ?? ''));
                 $ownerCell = $ownerEmail !== ''
                     ? '<span class="text-break">'.e($ownerEmail).'</span>'
                     : '<span class="text-muted">—</span>';
 
-                $subExpBlock = '<div class="tenant-sub-exp-wrap" data-tenant-id="'.$id.'">'
-                    .'<div class="tenant-sub-exp-view d-inline-flex flex-wrap align-items-center gap-1">'
-                    .'<button type="button" class="btn btn-sm btn-outline-secondary btn-edit-sub-exp px-2" title="Edit subscription end date" aria-label="Edit subscription end date">'
-                    .'<i class="fa-solid fa-pen" aria-hidden="true"></i></button>'
-                    .'</div>'
-                    .'<form id="'.e($formId).'" method="POST" action="'.e($patchUrl).'" class="tenant-sub-exp-edit d-none" autocomplete="off">'
+                $editBtn = '<button type="button" class="btn btn-sm btn-outline-secondary px-2 btn-edit-tenant" '
+                    .'data-tenant-id="'.$id.'" '
+                    .'data-tenant-name="'.e((string) ($t['name'] ?? '')).'" '
+                    .'data-tenant-plan-months="'.($planMonths ?? '').'" '
+                    .'data-tenant-plan-code="'.e($isFreePlan ? self::FREE_ACCESS_PLAN_CODE : $planRaw).'" '
+                    .'data-tenant-expires="'.e($expiresVal).'" '
+                    .'title="Edit store" aria-label="Edit store"><i class="fa-solid fa-pen-to-square"></i></button>';
+                $deleteForm = '<form method="POST" action="'.e($deleteUrl).'" class="d-inline js-delete-tenant-form" data-tenant-name="'.e((string) ($t['name'] ?? 'Store')).'">'
                     .csrf_field()
-                    .method_field('PATCH')
-                    .'<div class="d-flex flex-wrap align-items-center gap-1">'
-                    .'<input type="date" id="tenant-expires-'.$id.'" name="license_expires_at" class="form-control form-control-sm" value="'.e($expiresVal).'" aria-label="Subscription ends" style="width:auto;min-width:10.5rem">'
-                    .'<button type="submit" class="btn btn-sm btn-primary px-2" title="Save subscription end date" aria-label="Save subscription end date"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i></button>'
-                    .'<button type="button" class="btn btn-sm btn-outline-secondary btn-cancel-sub-exp px-2" title="Cancel" aria-label="Cancel"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>'
-                    .'</div>'
-                    .'</form>'
-                    .'</div>';
+                    .method_field('DELETE')
+                    .'<button type="submit" class="btn btn-sm btn-outline-danger px-2" title="Delete store" aria-label="Delete store"><i class="fa-solid fa-trash"></i></button>'
+                    .'</form>';
 
                 $actions = '<div class="d-flex flex-wrap gap-1 justify-content-end align-items-center">'
                     .'<a href="'.e(route('super-admin.tenants.branches.index', ['id' => $id])).'" class="btn btn-sm btn-outline-info px-2" title="Manage branches" aria-label="Manage branches"><i class="fa-solid fa-code-branch"></i></a>'
@@ -186,7 +292,8 @@ final class TenantController
                     .'<form method="POST" action="'.e($toggleUrl).'" class="d-inline">'
                     .csrf_field()
                     .'<button type="submit" class="btn btn-sm '.$toggleBtnClass.' px-2" title="'.e($toggleTitle).'" aria-label="'.e($toggleTitle).'"><i class="fa-solid '.$toggleIcon.'"></i></button></form>'
-                    .$subExpBlock
+                    .$editBtn
+                    .$deleteForm
                     .'</div>';
 
                 $status = $isActive
@@ -207,6 +314,7 @@ final class TenantController
                     'name' => e((string) $t['name']),
                     'slug' => '<span class="text-body-secondary">'.e((string) $t['slug']).'</span>',
                     'branch_details' => $branchDetails,
+                    'plan' => $planCell,
                     'paid_amount' => $paidCell,
                     'starts' => $startsDisplay,
                     'expires' => $expiresField,
@@ -233,7 +341,8 @@ final class TenantController
         $slug = strtolower(trim((string) $request->input('slug')));
         $slug = preg_replace('/[^a-z0-9\-]+/', '-', $slug);
         $slug = trim((string) preg_replace('/-+/', '-', $slug), '-');
-        $expires = trim((string) $request->input('license_expires_at'));
+        $planInput = strtolower(trim((string) $request->input('subscription_plan', '')));
+        $months = (int) $request->input('subscription_months', 0);
         $paidRaw = trim((string) $request->input('paid_amount'));
         $ownerName = trim((string) $request->input('owner_name'));
         $ownerEmail = strtolower(trim((string) $request->input('owner_email')));
@@ -254,6 +363,11 @@ final class TenantController
         }
         if (strlen($ownerPassword) < 8) {
             $errors[] = 'Store owner password must be at least 8 characters.';
+        }
+        if ($planInput === self::FREE_ACCESS_PLAN_CODE) {
+            $months = 0;
+        } elseif (! in_array($months, self::SUBSCRIPTION_MONTH_OPTIONS, true)) {
+            $errors[] = 'Subscription duration is required.';
         }
 
         $paidAmount = null;
@@ -285,15 +399,26 @@ final class TenantController
             return redirect(url('/super-admin/tenants'));
         }
 
+        try {
+            $window = $planInput === self::FREE_ACCESS_PLAN_CODE
+                ? self::computeFreeTrialWindow()
+                : self::computeSubscriptionWindow($months);
+        } catch (\Throwable) {
+            session_flash('errors', ['Could not calculate subscription end date.']);
+
+            return redirect(url('/super-admin/tenants'));
+        }
+
         $now = date('Y-m-d H:i:s');
         $hash = password_hash($ownerPassword, PASSWORD_BCRYPT);
+        $planCode = $planInput === self::FREE_ACCESS_PLAN_CODE ? self::FREE_ACCESS_PLAN_CODE : self::planCodeFromMonths($months);
 
         $pdo->beginTransaction();
         try {
             $pdo->prepare(
                 'INSERT INTO tenants (parent_tenant_id, branch_group_id, name, slug, plan, is_active, is_main_branch, license_starts_at, license_expires_at, paid_amount, max_branches, created_at, updated_at)
-                 VALUES (NULL, NULL, ?, ?, ?, 1, 1, NOW(), ?, ?, 1, NOW(), NOW())'
-            )->execute([$name, $slug, self::INTERNAL_PLAN_LABEL, $expires !== '' ? $expires : null, $paidAmount]);
+                 VALUES (NULL, NULL, ?, ?, ?, 1, 1, ?, ?, ?, 1, NOW(), NOW())'
+            )->execute([$name, $slug, $planCode, $window['starts_at'], $window['expires_at'], $paidAmount]);
 
             $tenantId = (int) $pdo->lastInsertId();
             $pdo->prepare('UPDATE tenants SET parent_tenant_id = ?, branch_group_id = ? WHERE id = ?')
@@ -344,11 +469,22 @@ final class TenantController
     public function update(Request $request, string $id): Response
     {
         $tid = (int) $id;
+        $name = trim((string) $request->input('name'));
+        $monthsRaw = trim((string) $request->input('subscription_months'));
+        $months = $monthsRaw !== '' ? (int) $monthsRaw : null;
+        $planInput = strtolower(trim((string) $request->input('subscription_plan', '')));
         $expires = trim((string) $request->input('license_expires_at'));
+        $originalExpires = trim((string) $request->input('original_license_expires_at'));
 
         $errors = [];
         if ($expires !== '' && ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $expires)) {
             $errors[] = 'Invalid subscription end date.';
+        }
+        if ($planInput !== self::FREE_ACCESS_PLAN_CODE && $months !== null && ! in_array($months, self::SUBSCRIPTION_MONTH_OPTIONS, true)) {
+            $errors[] = 'Invalid subscription plan duration.';
+        }
+        if ($name !== '' && strlen($name) > 255) {
+            $errors[] = 'Store name must be 255 characters or less.';
         }
 
         if ($errors !== []) {
@@ -366,14 +502,100 @@ final class TenantController
             return redirect(url('/super-admin/tenants'));
         }
 
-        $pdo->prepare(
-            'UPDATE tenants SET license_expires_at = ?, updated_at = NOW() WHERE id = ?'
-        )->execute([
-            $expires !== '' ? $expires : null,
-            $tid,
-        ]);
+        if ($planInput === self::FREE_ACCESS_PLAN_CODE) {
+            try {
+                $window = self::computeFreeTrialWindow();
+            } catch (\Throwable) {
+                session_flash('errors', ['Could not calculate free trial end date.']);
 
-        session_flash('status', 'Subscription end date updated.');
+                return redirect(url('/super-admin/tenants'));
+            }
+            $pdo->prepare(
+                'UPDATE tenants
+                 SET name = COALESCE(?, name),
+                     plan = ?,
+                     license_starts_at = ?,
+                     license_expires_at = ?,
+                     updated_at = NOW()
+                 WHERE id = ?'
+            )->execute([
+                $name !== '' ? $name : null,
+                self::FREE_ACCESS_PLAN_CODE,
+                $window['starts_at'],
+                $window['expires_at'],
+                $tid,
+            ]);
+            session_flash('status', 'Store details updated.');
+        } elseif ($months !== null) {
+            $window = self::computeSubscriptionWindow($months);
+            $effectiveExpires = $window['expires_at'];
+            // Treat as manual override only when user actually changed the date in modal.
+            if ($expires !== '' && $expires !== $originalExpires) {
+                $effectiveExpires = $expires.' 23:59:59';
+            }
+            $params = [
+                $name !== '' ? $name : null,
+                self::planCodeFromMonths($months),
+                $window['starts_at'],
+                $effectiveExpires,
+                $tid,
+            ];
+            $pdo->prepare(
+                'UPDATE tenants
+                 SET name = COALESCE(?, name),
+                     plan = ?,
+                     license_starts_at = ?,
+                     license_expires_at = ?,
+                     updated_at = NOW()
+                 WHERE id = ?'
+            )->execute($params);
+            session_flash('status', 'Store details updated.');
+        } else {
+            $pdo->prepare(
+                'UPDATE tenants
+                 SET name = COALESCE(?, name),
+                     license_expires_at = ?,
+                     updated_at = NOW()
+                 WHERE id = ?'
+            )->execute([
+                $name !== '' ? $name : null,
+                $expires !== '' ? $expires : null,
+                $tid,
+            ]);
+            session_flash('status', 'Subscription end date updated.');
+        }
+
+        return redirect(url('/super-admin/tenants'));
+    }
+
+    public function destroy(Request $request, string $id): Response
+    {
+        $tid = (int) $id;
+        $pdo = App::db();
+        self::ensureBranchColumns($pdo);
+        $st = $pdo->prepare('SELECT id, branch_group_id, is_main_branch FROM tenants WHERE id = ? LIMIT 1');
+        $st->execute([$tid]);
+        $tenant = $st->fetch(PDO::FETCH_ASSOC);
+        if (! $tenant) {
+            session_flash('errors', ['Store not found.']);
+            return redirect(url('/super-admin/tenants'));
+        }
+        $groupId = (int) ($tenant['branch_group_id'] ?? 0);
+        if ($groupId > 0) {
+            $st = $pdo->prepare('SELECT COUNT(*) FROM tenants WHERE branch_group_id = ?');
+            $st->execute([$groupId]);
+            $count = (int) $st->fetchColumn();
+            if ($count > 1 && (bool) ($tenant['is_main_branch'] ?? false)) {
+                session_flash('errors', ['Set another branch as main before deleting this store.']);
+                return redirect(url('/super-admin/tenants'));
+            }
+        }
+        try {
+            $pdo->prepare('DELETE FROM tenants WHERE id = ?')->execute([$tid]);
+            session_flash('status', 'Store deleted.');
+        } catch (\Throwable) {
+            session_flash('errors', ['Could not delete store. Remove related records first.']);
+        }
 
         return redirect(url('/super-admin/tenants'));
     }

@@ -76,7 +76,7 @@ final class PosController
     {
         $user = Auth::user();
         $tenantId = (int) $user['tenant_id'];
-        $canPrintReceipt = ! Auth::isTenantFreeTrial($user);
+        $canPrintReceipt = ! Auth::isTenantFreePlanRestricted($user);
         $search = trim((string) $request->input('search'));
         $page = max(1, (int) $request->query('page', 1));
         $perPage = 100;
@@ -231,8 +231,8 @@ final class PosController
     public function receiptEscpos(Request $request): Response
     {
         $user = Auth::user();
-        if (Auth::isTenantFreeTrial($user)) {
-            return json_response(['success' => false, 'message' => 'Premium feature: Receipt printing is disabled for Free Trial plans.'], 403);
+        if (Auth::isTenantFreePlanRestricted($user)) {
+            return json_response(['success' => false, 'message' => 'Premium feature: receipt printing is disabled on the Free version.'], 403);
         }
         $receipt = self::receiptArrayFromRequest($request);
         if ($receipt === null) {
@@ -253,8 +253,8 @@ final class PosController
     public function receiptPrintNetwork(Request $request): Response
     {
         $user = Auth::user();
-        if (Auth::isTenantFreeTrial($user)) {
-            return json_response(['success' => false, 'message' => 'Premium feature: Receipt printing is disabled for Free Trial plans.'], 403);
+        if (Auth::isTenantFreePlanRestricted($user)) {
+            return json_response(['success' => false, 'message' => 'Premium feature: receipt printing is disabled on the Free version.'], 403);
         }
         $receipt = self::receiptArrayFromRequest($request);
         if ($receipt === null) {

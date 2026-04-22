@@ -12,7 +12,9 @@ final class HomeController
 {
     public function welcome(Request $request): Response
     {
-        return view_guest('Pricing', 'pricing');
+        return response_view('welcome', [
+            'title' => 'Laundry Management System',
+        ]);
     }
 
     public function pricing(Request $request): Response

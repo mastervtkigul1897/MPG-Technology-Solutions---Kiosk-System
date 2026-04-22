@@ -9,10 +9,15 @@ use App\Core\App;
 use App\Core\Auth;
 use App\Core\Request;
 use App\Core\Response;
+use App\Services\EmailVerificationService;
+use App\Services\PasswordResetService;
 use PDO;
 
 final class AuthController
 {
+    private const FREE_PLAN_CODE = 'free_access';
+    private const FREE_PLANS = ['trial', 'free', 'free_trial', self::FREE_PLAN_CODE];
+
     private static function normalizeSlug(string $value): string
     {
         $slug = strtolower(trim($value));
@@ -72,9 +77,166 @@ final class AuthController
         }
     }
 
+    /** @return array{hash:string,label:string,token:string,user_agent:string,ip:string}|null */
+    private static function registerDevicePayload(Request $request): ?array
+    {
+        $tokenRaw = trim((string) $request->input('device_token'));
+        $labelRaw = trim((string) $request->input('device_name'));
+        $platformRaw = trim((string) $request->input('device_platform'));
+        $uaRaw = trim((string) $request->input('device_user_agent'));
+        $ua = $uaRaw !== '' ? $uaRaw : trim((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''));
+        $ip = trim((string) $request->ip());
+
+        $token = (string) preg_replace('/[^a-zA-Z0-9\-_]/', '', $tokenRaw);
+        if ($token !== '' && strlen($token) > 160) {
+            $token = substr($token, 0, 160);
+        }
+        $fallbackBase = strtolower(trim($ua.'|'.$platformRaw.'|'.$ip));
+        if ($token === '' && $fallbackBase === '') {
+            return null;
+        }
+        $hashSeed = $token !== '' ? ('token:'.$token) : ('fallback:'.$fallbackBase);
+        $hash = hash('sha256', $hashSeed);
+
+        $label = trim($labelRaw);
+        if ($label === '' && $platformRaw !== '') {
+            $label = $platformRaw.' device';
+        }
+        if ($label === '') {
+            $label = 'Unknown device';
+        }
+        if (strlen($label) > 190) {
+            $label = substr($label, 0, 190);
+        }
+
+        return [
+            'hash' => $hash,
+            'label' => $label,
+            'token' => $token,
+            'user_agent' => $ua !== '' ? $ua : 'unknown',
+            'ip' => $ip !== '' ? $ip : '0.0.0.0',
+        ];
+    }
+
+    /** @return array<string,mixed>|null */
+    private static function existingFreePlanDevice(PDO $pdo, string $deviceHash): ?array
+    {
+        if ($deviceHash === '') {
+            return null;
+        }
+        $inPlans = "'".implode("','", self::FREE_PLANS)."'";
+        $st = $pdo->prepare(
+            "SELECT td.tenant_id, td.device_label, t.name AS tenant_name, t.plan
+             FROM tenant_trial_devices td
+             INNER JOIN tenants t ON t.id = td.tenant_id
+             WHERE td.device_hash = ?
+               AND LOWER(TRIM(t.plan)) IN ({$inPlans})
+             LIMIT 1"
+        );
+        $st->execute([$deviceHash]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+
+        return is_array($row) ? $row : null;
+    }
+
+    private static function saveTrialDevice(PDO $pdo, int $tenantId, int $userId, array $device): void
+    {
+        $st = $pdo->prepare(
+            'INSERT INTO tenant_trial_devices
+            (tenant_id, user_id, device_hash, device_token, device_label, user_agent, ip_address, last_seen_at, created_at, updated_at)
+            VALUES
+            (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+            ON DUPLICATE KEY UPDATE
+                tenant_id = VALUES(tenant_id),
+                user_id = VALUES(user_id),
+                device_token = VALUES(device_token),
+                device_label = VALUES(device_label),
+                user_agent = VALUES(user_agent),
+                ip_address = VALUES(ip_address),
+                last_seen_at = NOW(),
+                updated_at = NOW()'
+        );
+        $st->execute([
+            $tenantId,
+            $userId,
+            (string) ($device['hash'] ?? ''),
+            (string) ($device['token'] ?? ''),
+            (string) ($device['label'] ?? 'Unknown device'),
+            (string) ($device['user_agent'] ?? 'unknown'),
+            (string) ($device['ip'] ?? '0.0.0.0'),
+        ]);
+    }
+
     public function showLogin(Request $request): Response
     {
         return view_guest('Login', 'auth.login', ['status' => session_flash('status')]);
+    }
+
+    public function showForgotPassword(Request $request): Response
+    {
+        return view_guest('Forgot password', 'auth.forgot-password');
+    }
+
+    public function sendPasswordResetLink(Request $request): Response
+    {
+        $email = strtolower(trim((string) $request->input('email')));
+        if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            session_flash('errors', ['Please enter a valid email address.']);
+            return redirect(url('/forgot-password'));
+        }
+
+        try {
+            PasswordResetService::sendResetLink(App::db(), $email);
+            session_flash('status', 'If that verified email exists, a password reset link has been sent.');
+        } catch (\Throwable) {
+            session_flash('errors', ['Password reset email could not be sent. Please check the mail settings.']);
+        }
+
+        return redirect(url('/forgot-password'));
+    }
+
+    public function showResetPassword(Request $request): Response
+    {
+        return view_guest('Reset password', 'auth.reset-password', [
+            'email' => strtolower(trim((string) $request->query('email', ''))),
+            'token' => trim((string) $request->query('token', '')),
+        ]);
+    }
+
+    public function resetPassword(Request $request): Response
+    {
+        $email = strtolower(trim((string) $request->input('email')));
+        $token = trim((string) $request->input('token'));
+        $password = (string) $request->input('password');
+        $confirm = (string) $request->input('password_confirmation');
+
+        $errors = [];
+        if (! filter_var($email, FILTER_VALIDATE_EMAIL) || $token === '') {
+            $errors[] = 'Password reset link is invalid or expired.';
+        }
+        if (strlen($password) < 8) {
+            $errors[] = 'Password must be at least 8 characters.';
+        }
+        if ($password !== $confirm) {
+            $errors[] = 'Password confirmation does not match.';
+        }
+        if ($errors !== []) {
+            session_flash('errors', $errors);
+            return redirect(url('/reset-password?email='.rawurlencode($email).'&token='.rawurlencode($token)));
+        }
+
+        try {
+            if (! PasswordResetService::resetPassword(App::db(), $email, $token, $password)) {
+                session_flash('errors', ['Password reset link is invalid or expired. Please request a new one.']);
+                return redirect(url('/forgot-password'));
+            }
+        } catch (\Throwable) {
+            session_flash('errors', ['Password could not be reset. Please try again.']);
+            return redirect(url('/forgot-password'));
+        }
+
+        session_flash('status', 'Password reset successfully. You can now log in.');
+        return redirect(url('/login'));
     }
 
     public function login(Request $request): Response
@@ -83,6 +245,7 @@ final class AuthController
         $password = (string) $request->input('password');
 
         $pdo = App::db();
+        EmailVerificationService::ensureSchema($pdo);
         $st = $pdo->prepare('SELECT * FROM users WHERE email = ? LIMIT 1');
         $st->execute([$email]);
         $user = $st->fetch(PDO::FETCH_ASSOC);
@@ -102,6 +265,11 @@ final class AuthController
 
         Auth::login((int) $user['id']);
 
+        if (($user['role'] ?? '') !== 'super_admin' && empty($user['email_verified_at'])) {
+            session_flash('status', 'Please verify your email address to continue.');
+            return redirect(url('/email/verification-notice'));
+        }
+
         $tidRaw = $user['tenant_id'] ?? null;
         $tenantIdForLog = ($tidRaw !== null && $tidRaw !== '' && (int) $tidRaw > 0) ? (int) $tidRaw : null;
         ActivityLogger::log(
@@ -116,7 +284,7 @@ final class AuthController
         );
 
         $sessionUser = Auth::user();
-        if (Auth::isTenantInactive($sessionUser) || Auth::isTenantSubscriptionExpired($sessionUser)) {
+        if (Auth::isTenantInactive($sessionUser)) {
             return redirect(url('/subscription-ended'));
         }
 
@@ -133,23 +301,22 @@ final class AuthController
             return redirect(url('/dashboard'));
         }
         $inactive = Auth::isTenantInactive($u);
-        $expired = Auth::isTenantSubscriptionExpired($u);
-        if (! $inactive && ! $expired) {
+        if (! $inactive) {
             return redirect(url('/dashboard'));
         }
 
-        $reason = $inactive ? 'inactive' : 'expired';
-        $pageTitle = $inactive ? 'Store inactive' : 'Subscription ended';
-
-        return view_subscription_screen($pageTitle, 'auth.subscription-ended', [
+        return view_subscription_screen('Store inactive', 'auth.subscription-ended', [
             'appOwnerEmail' => (string) (App::config('app_owner_email') ?? ''),
-            'reason' => $reason,
+            'reason' => 'inactive',
         ]);
     }
 
     public function showRegister(Request $request): Response
     {
-        return view_guest('Register', 'auth.register');
+        return view_guest('Register', 'auth.register', [
+            'register_upgrade_blocked' => (bool) session_flash('register_upgrade_blocked'),
+            'register_existing_store' => (string) session_flash('register_existing_store'),
+        ]);
     }
 
     public function register(Request $request): Response
@@ -181,7 +348,28 @@ final class AuthController
             return redirect(url('/register'));
         }
 
+        $device = self::registerDevicePayload($request);
+        if (! is_array($device)) {
+            session_flash('errors', ['Could not verify this device. Please refresh and try again.']);
+            return redirect(url('/register'));
+        }
+
         $pdo = App::db();
+        EmailVerificationService::ensureSchema($pdo);
+        try {
+            $existingFree = self::existingFreePlanDevice($pdo, (string) ($device['hash'] ?? ''));
+        } catch (\Throwable) {
+            session_flash('errors', ['Could not verify existing device plan. Please try again.']);
+            return redirect(url('/register'));
+        }
+        if (is_array($existingFree)) {
+            $existingStore = trim((string) ($existingFree['tenant_name'] ?? ''));
+            session_flash('errors', ['This device already has an existing Free plan account. Please upgrade now to continue.']);
+            session_flash('register_upgrade_blocked', true);
+            session_flash('register_existing_store', $existingStore);
+            return redirect(url('/register'));
+        }
+
         $st = $pdo->prepare('SELECT COUNT(*) FROM users WHERE LOWER(email) = LOWER(?)');
         $st->execute([$email]);
         if ((int) $st->fetchColumn() > 0) {
@@ -205,19 +393,25 @@ final class AuthController
         $pdo->beginTransaction();
         try {
             $st = $pdo->prepare('INSERT INTO tenants (name, slug, plan, is_active, license_starts_at, license_expires_at, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, NOW(), NOW())');
-            $st->execute([$storeName, $slug, 'trial', $now, $trialEnd]);
+            $st->execute([$storeName, $slug, self::FREE_PLAN_CODE, $now, $trialEnd]);
             $tenantId = (int) $pdo->lastInsertId();
             self::updateTenantBranchDefaults($pdo, $tenantId);
 
-            $st = $pdo->prepare('INSERT INTO users (name, email, password, role, tenant_id, email_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW(), NOW())');
+            $st = $pdo->prepare('INSERT INTO users (name, email, password, role, tenant_id, email_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NOW(), NOW())');
             $st->execute([$name, $email, $pwHash, 'tenant_admin', $tenantId]);
             $userId = (int) $pdo->lastInsertId();
+            self::saveTrialDevice($pdo, $tenantId, $userId, $device);
             $pdo->commit();
 
             Auth::login($userId);
-            session_flash('status', 'Welcome! Your 7-day trial is active until '.date('M j, Y', strtotime($trialEnd)).'.');
+            try {
+                EmailVerificationService::sendVerificationForUserId($pdo, $userId);
+                session_flash('status', 'Your 7-day trial account was created. Please verify your email to continue.');
+            } catch (\Throwable) {
+                session_flash('errors', ['Your trial account was created, but the verification email could not be sent. Please check the mail settings and resend the verification email.']);
+            }
 
-            return redirect(url('/dashboard'));
+            return redirect(url('/email/verification-notice'));
         } catch (\Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -225,6 +419,60 @@ final class AuthController
             session_flash('errors', ['Could not create trial account. Please try again.']);
             return redirect(url('/register'));
         }
+    }
+
+    public function showVerificationNotice(Request $request): Response
+    {
+        $user = Auth::user();
+        if (! $user) {
+            return redirect(url('/login'));
+        }
+        if (($user['role'] ?? '') === 'super_admin' || ! empty($user['email_verified_at'])) {
+            return redirect(url('/dashboard'));
+        }
+
+        return view_guest('Verify email', 'auth.verify-email', [
+            'email' => strtolower(trim((string) ($user['email'] ?? ''))),
+        ]);
+    }
+
+    public function resendVerification(Request $request): Response
+    {
+        $user = Auth::user();
+        if (! $user) {
+            return redirect(url('/login'));
+        }
+        if (($user['role'] ?? '') === 'super_admin' || ! empty($user['email_verified_at'])) {
+            return redirect(url('/dashboard'));
+        }
+
+        $email = strtolower(trim((string) ($user['email'] ?? '')));
+        try {
+            EmailVerificationService::sendVerificationForUserId(App::db(), (int) ($user['id'] ?? 0));
+            session_flash('status', 'A fresh verification link has been sent.');
+        } catch (\Throwable) {
+            session_flash('errors', ['Verification email could not be sent. Please check the mail settings.']);
+        }
+
+        return redirect(url('/email/verification-notice'));
+    }
+
+    public function verifyEmail(Request $request): Response
+    {
+        $email = strtolower(trim((string) $request->query('email', '')));
+        $token = trim((string) $request->query('token', ''));
+        if (EmailVerificationService::verify(App::db(), $email, $token)) {
+            session_flash('status', 'Email verified. You can now use your account.');
+            $user = Auth::user();
+            if ($user) {
+                return redirect(url('/dashboard'));
+            }
+
+            return redirect(url('/login'));
+        }
+
+        session_flash('errors', ['Verification link is invalid or has already been used. Please request a new one.']);
+        return Auth::user() ? redirect(url('/email/verification-notice')) : redirect(url('/login'));
     }
 
     public function logout(Request $request): Response

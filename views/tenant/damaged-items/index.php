@@ -8,7 +8,9 @@
                 <select class="form-select" id="damaged_ingredient_id" name="ingredient_id" required>
                     <option value="">Select item</option>
                     <?php foreach (($ingredients ?? []) as $ing): ?>
-                        <option value="<?= (int) $ing['id'] ?>"><?= e((string) ($ing['name'] ?? '')) ?> (<?= e((string) ($ing['unit'] ?? '')) ?>)</option>
+                        <option value="<?= (int) $ing['id'] ?>">
+                            <?= e((string) ($ing['name'] ?? '')) ?> (<?= e(format_stock((float) ($ing['stock_quantity'] ?? 0))) ?> <?= e((string) ($ing['unit'] ?? '')) ?>)
+                        </option>
                     <?php endforeach; ?>
                 </select>
             </div>
@@ -64,7 +66,9 @@
                         <select class="form-select" id="edit_damaged_ingredient_id" name="ingredient_id" required>
                             <option value="">Select item</option>
                             <?php foreach (($ingredients ?? []) as $ing): ?>
-                                <option value="<?= (int) $ing['id'] ?>"><?= e((string) ($ing['name'] ?? '')) ?> (<?= e((string) ($ing['unit'] ?? '')) ?>)</option>
+                                <option value="<?= (int) $ing['id'] ?>">
+                                    <?= e((string) ($ing['name'] ?? '')) ?> (<?= e(format_stock((float) ($ing['stock_quantity'] ?? 0))) ?> <?= e((string) ($ing['unit'] ?? '')) ?>)
+                                </option>
                             <?php endforeach; ?>
                         </select>
                     </div>
@@ -283,4 +287,3 @@
     });
 })();
 </script>
-

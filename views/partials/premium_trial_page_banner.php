@@ -7,7 +7,7 @@ $plansUrl = url('/tenant/plans');
 ?>
 <div id="mpgPremiumTrialBanner" class="alert alert-warning border border-warning shadow-sm mb-3 d-flex flex-wrap align-items-center justify-content-between gap-3" role="status">
     <div class="small mb-0">
-        <strong>Premium</strong> — You can browse this area on a Free Trial, but actions are disabled. Upgrade to use the full module.
+        <strong>Premium</strong> — You can browse this area on the Free version, but actions are disabled. Upgrade to use the full module.
     </div>
     <a href="<?= e($plansUrl) ?>" class="btn btn-warning btn-sm fw-semibold text-nowrap"><i class="fa-solid fa-tags me-1"></i>View plans &amp; pricing</a>
 </div>

@@ -18,6 +18,7 @@ final class DamagedItemController
         $user = Auth::user();
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        $this->ensureLaundryInventoryDamageSchema($pdo);
 
         if ($request->ajax() || $request->boolean('datatable')) {
             $search = trim((string) data_get($request->all(), 'search.value', ''));
@@ -34,7 +35,12 @@ final class DamagedItemController
                 "SELECT COUNT(*) FROM damaged_items d WHERE d.tenant_id = {$tenantId}"
             )->fetchColumn();
 
-            $st = $pdo->prepare("SELECT COUNT(*) FROM damaged_items d INNER JOIN ingredients i ON i.id = d.ingredient_id WHERE $where");
+            $st = $pdo->prepare(
+                "SELECT COUNT(*)
+                 FROM damaged_items d
+                 LEFT JOIN laundry_inventory_items i ON i.id = d.ingredient_id AND i.tenant_id = d.tenant_id
+                 WHERE $where"
+            );
             $st->execute($params);
             $filtered = (int) $st->fetchColumn();
 
@@ -52,9 +58,9 @@ final class DamagedItemController
             $start = max(0, (int) $request->input('start', 0));
             $length = min(100, max(1, (int) $request->input('length', 25)));
 
-            $sql = "SELECT d.id, d.ingredient_id, d.quantity, d.note, d.created_at, i.name AS ingredient_name, i.unit
+            $sql = "SELECT d.id, d.ingredient_id, d.quantity, d.note, d.created_at, COALESCE(i.name, 'Deleted inventory item') AS ingredient_name, COALESCE(i.unit, '') AS unit
                     FROM damaged_items d
-                    INNER JOIN ingredients i ON i.id = d.ingredient_id AND i.tenant_id = d.tenant_id
+                    LEFT JOIN laundry_inventory_items i ON i.id = d.ingredient_id AND i.tenant_id = d.tenant_id
                     WHERE $where
                     ORDER BY $orderBy $orderDir
                     LIMIT $length OFFSET $start";
@@ -62,7 +68,7 @@ final class DamagedItemController
             $st->execute($params);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
-            $trialBrowse = Auth::isTenantFreeTrial($user);
+            $trialBrowse = Auth::isTenantFreePlanRestricted($user);
             $data = [];
             foreach ($rows as $row) {
                 $did = (int) $row['id'];
@@ -97,13 +103,13 @@ final class DamagedItemController
             ]);
         }
 
-        $st = $pdo->prepare('SELECT id, name, unit FROM ingredients WHERE tenant_id = ? ORDER BY name');
+        $st = $pdo->prepare('SELECT id, name, unit, stock_quantity FROM laundry_inventory_items WHERE tenant_id = ? ORDER BY name');
         $st->execute([$tenantId]);
         $ingredients = $st->fetchAll(PDO::FETCH_ASSOC);
 
         return view_page('Damaged Items', 'tenant.damaged-items.index', [
             'ingredients' => $ingredients,
-            'premium_trial_browse_lock' => Auth::isTenantFreeTrial($user),
+            'premium_trial_browse_lock' => Auth::isTenantFreePlanRestricted($user),
         ]);
     }
 
@@ -113,10 +119,10 @@ final class DamagedItemController
         if (! Auth::tenantMayManage($user, 'damaged_items')) {
             return new Response('Forbidden', 403);
         }
-        if (Auth::isTenantFreeTrial($user)) {
+        if (Auth::isTenantFreePlanRestricted($user)) {
             return $this->jsonOrBack(
                 $request,
-                ['general' => ['Premium: damaged-item actions are not available on a Free Trial.']],
+                ['general' => ['Premium: damaged-item actions are not available on the Free version.']],
                 403,
                 '/tenant/damaged-items'
             );
@@ -130,7 +136,7 @@ final class DamagedItemController
 
         $errors = [];
         if ($ingredientId < 1) {
-            $errors['ingredient_id'] = ['Invalid ingredient.'];
+            $errors['ingredient_id'] = ['Invalid inventory item.'];
         }
         if ($qty < stock_min_positive()) {
             $errors['quantity'] = ['Quantity must be greater than zero.'];
@@ -145,11 +151,11 @@ final class DamagedItemController
 
         try {
             $pdo = App::db();
+            $this->ensureLaundryInventoryDamageSchema($pdo);
             $pdo->beginTransaction();
 
-            // Deduct stock only if enough exists (prevents negative stock).
             $st = $pdo->prepare(
-                'UPDATE ingredients
+                'UPDATE laundry_inventory_items
                  SET stock_quantity = stock_quantity - ?
                  WHERE tenant_id = ? AND id = ? AND stock_quantity >= ?'
             );
@@ -157,18 +163,13 @@ final class DamagedItemController
             if ($st->rowCount() < 1) {
                 $pdo->rollBack();
 
-                return $this->jsonOrBack($request, ['quantity' => ['Insufficient stock for selected ingredient.']], 422, '/tenant/damaged-items');
+                return $this->jsonOrBack($request, ['quantity' => ['Insufficient stock for selected inventory item.']], 422, '/tenant/damaged-items');
             }
 
             $pdo->prepare(
                 'INSERT INTO damaged_items (tenant_id, user_id, ingredient_id, quantity, note, created_at, updated_at)
                  VALUES (?, ?, ?, ?, ?, NOW(), NOW())'
             )->execute([$tenantId, (int) $user['id'], $ingredientId, $qty, $note]);
-
-            $pdo->prepare(
-                'INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
-                 VALUES (?, ?, NULL, ?, \'OUT\', ?, \'damage\', NOW(), NOW())'
-            )->execute([$tenantId, $ingredientId, (int) $user['id'], $qty]);
 
             $pdo->commit();
         } catch (\Throwable $e) {
@@ -200,10 +201,10 @@ final class DamagedItemController
         if (! Auth::tenantMayManage($user, 'damaged_items')) {
             return new Response('Forbidden', 403);
         }
-        if (Auth::isTenantFreeTrial($user)) {
+        if (Auth::isTenantFreePlanRestricted($user)) {
             return $this->jsonOrBack(
                 $request,
-                ['general' => ['Premium: damaged-item actions are not available on a Free Trial.']],
+                ['general' => ['Premium: damaged-item actions are not available on the Free version.']],
                 403,
                 '/tenant/damaged-items'
             );
@@ -222,7 +223,7 @@ final class DamagedItemController
 
         $errors = [];
         if ($newIngredientId < 1) {
-            $errors['ingredient_id'] = ['Invalid ingredient.'];
+            $errors['ingredient_id'] = ['Invalid inventory item.'];
         }
         if ($newQty < stock_min_positive()) {
             $errors['quantity'] = ['Quantity must be greater than zero.'];
@@ -235,6 +236,7 @@ final class DamagedItemController
         }
 
         $pdo = App::db();
+        $this->ensureLaundryInventoryDamageSchema($pdo);
         $st = $pdo->prepare('SELECT ingredient_id, quantity FROM damaged_items WHERE tenant_id = ? AND id = ? LIMIT 1');
         $st->execute([$tenantId, $damageId]);
         $existing = $st->fetch(PDO::FETCH_ASSOC);
@@ -250,36 +252,24 @@ final class DamagedItemController
             $pdo->beginTransaction();
 
             if ($newIngredientId !== $oldIngredientId) {
-                // Restore old ingredient stock (IN).
-                $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity + ? WHERE tenant_id = ? AND id = ?')
+                $pdo->prepare('UPDATE laundry_inventory_items SET stock_quantity = stock_quantity + ? WHERE tenant_id = ? AND id = ?')
                     ->execute([$oldQty, $tenantId, $oldIngredientId]);
 
-                // Deduct new ingredient stock (OUT) only if enough exists.
                 $st2 = $pdo->prepare(
-                    'UPDATE ingredients
+                    'UPDATE laundry_inventory_items
                      SET stock_quantity = stock_quantity - ?
                      WHERE tenant_id = ? AND id = ? AND stock_quantity >= ?'
                 );
                 $st2->execute([$newQty, $tenantId, $newIngredientId, $newQty]);
                 if ($st2->rowCount() < 1) {
                     $pdo->rollBack();
-                    return $this->jsonOrBack($request, ['quantity' => ['Insufficient stock for selected ingredient.']], 422, '/tenant/damaged-items');
+                    return $this->jsonOrBack($request, ['quantity' => ['Insufficient stock for selected inventory item.']], 422, '/tenant/damaged-items');
                 }
 
                 $pdo->prepare(
                     'UPDATE damaged_items SET ingredient_id = ?, quantity = ?, note = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?'
                 )->execute([$newIngredientId, $newQty, $note, $tenantId, $damageId]);
 
-                // Inventory movements: IN for old restore, OUT for new deduct.
-                $pdo->prepare(
-                    'INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
-                     VALUES (?, ?, NULL, ?, \'IN\', ?, \'damage_edit\', NOW(), NOW())'
-                )->execute([$tenantId, $oldIngredientId, (int) $user['id'], $oldQty]);
-
-                $pdo->prepare(
-                    'INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
-                     VALUES (?, ?, NULL, ?, \'OUT\', ?, \'damage_edit\', NOW(), NOW())'
-                )->execute([$tenantId, $newIngredientId, (int) $user['id'], $newQty]);
             } else {
                 // Same ingredient: adjust by delta.
                 if (abs($delta) > stock_epsilon()) {
@@ -287,7 +277,7 @@ final class DamagedItemController
                         // More damage => stock decreases.
                         $dOut = round_stock($delta);
                         $st2 = $pdo->prepare(
-                            'UPDATE ingredients
+                            'UPDATE laundry_inventory_items
                              SET stock_quantity = stock_quantity - ?
                              WHERE tenant_id = ? AND id = ? AND stock_quantity >= ?'
                         );
@@ -297,20 +287,11 @@ final class DamagedItemController
                             return $this->jsonOrBack($request, ['quantity' => ['Insufficient stock for the increased damage quantity.']], 422, '/tenant/damaged-items');
                         }
 
-                        $pdo->prepare(
-                            'INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
-                             VALUES (?, ?, NULL, ?, \'OUT\', ?, \'damage_edit\', NOW(), NOW())'
-                        )->execute([$tenantId, $oldIngredientId, (int) $user['id'], $dOut]);
                     } else {
                         // Less damage => stock increases.
                         $restore = round_stock(abs($delta));
-                        $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity + ? WHERE tenant_id = ? AND id = ?')
+                        $pdo->prepare('UPDATE laundry_inventory_items SET stock_quantity = stock_quantity + ? WHERE tenant_id = ? AND id = ?')
                             ->execute([$restore, $tenantId, $oldIngredientId]);
-
-                        $pdo->prepare(
-                            'INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
-                             VALUES (?, ?, NULL, ?, \'IN\', ?, \'damage_edit\', NOW(), NOW())'
-                        )->execute([$tenantId, $oldIngredientId, (int) $user['id'], $restore]);
                     }
                 }
 
@@ -348,10 +329,10 @@ final class DamagedItemController
         if (! Auth::tenantMayManage($user, 'damaged_items')) {
             return new Response('Forbidden', 403);
         }
-        if (Auth::isTenantFreeTrial($user)) {
+        if (Auth::isTenantFreePlanRestricted($user)) {
             return $this->jsonOrBack(
                 $request,
-                ['general' => ['Premium: damaged-item actions are not available on a Free Trial.']],
+                ['general' => ['Premium: damaged-item actions are not available on the Free version.']],
                 403,
                 '/tenant/damaged-items'
             );
@@ -364,6 +345,7 @@ final class DamagedItemController
         }
 
         $pdo = App::db();
+        $this->ensureLaundryInventoryDamageSchema($pdo);
         $st = $pdo->prepare('SELECT ingredient_id, quantity FROM damaged_items WHERE tenant_id = ? AND id = ? LIMIT 1');
         $st->execute([$tenantId, $damageId]);
         $existing = $st->fetch(PDO::FETCH_ASSOC);
@@ -380,14 +362,8 @@ final class DamagedItemController
             $pdo->prepare('DELETE FROM damaged_items WHERE tenant_id = ? AND id = ?')
                 ->execute([$tenantId, $damageId]);
 
-            // Restore stock (IN).
-            $pdo->prepare('UPDATE ingredients SET stock_quantity = stock_quantity + ? WHERE tenant_id = ? AND id = ?')
+            $pdo->prepare('UPDATE laundry_inventory_items SET stock_quantity = stock_quantity + ? WHERE tenant_id = ? AND id = ?')
                 ->execute([$qty, $tenantId, $ingredientId]);
-
-            $pdo->prepare(
-                'INSERT INTO inventory_movements (tenant_id, ingredient_id, transaction_id, user_id, type, quantity, reason, created_at, updated_at)
-                 VALUES (?, ?, NULL, ?, \'IN\', ?, \'damage_delete\', NOW(), NOW())'
-            )->execute([$tenantId, $ingredientId, (int) $user['id'], $qty]);
 
             $pdo->commit();
         } catch (\Throwable $e) {
@@ -429,5 +405,27 @@ final class DamagedItemController
 
         return redirect(url($redirectTo));
     }
-}
 
+    private function ensureLaundryInventoryDamageSchema(PDO $pdo): void
+    {
+        try {
+            $st = $pdo->prepare(
+                'SELECT CONSTRAINT_NAME
+                 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = "damaged_items"
+                   AND COLUMN_NAME = "ingredient_id"
+                   AND REFERENCED_TABLE_NAME = "ingredients"'
+            );
+            $st->execute();
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) ?: [] as $constraintName) {
+                $name = (string) $constraintName;
+                if ($name === '') {
+                    continue;
+                }
+                $pdo->exec('ALTER TABLE `damaged_items` DROP FOREIGN KEY `'.str_replace('`', '``', $name).'`');
+            }
+        } catch (\Throwable) {
+        }
+    }
+}

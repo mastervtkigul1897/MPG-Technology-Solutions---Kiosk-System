@@ -20,7 +20,7 @@ if (is_readable($envFile)) {
 $get = static fn (string $key, ?string $default = null): ?string => $env[$key] ?? $_ENV[$key] ?? getenv($key) ?: $default;
 
 return [
-    'name' => $get('APP_NAME', 'Kiosk System'),
+    'name' => $get('APP_NAME', 'Laundry System'),
     /** Shown in the browser tab after the app name (not in the sidebar). */
     'brand_suffix' => $get('APP_BRAND_SUFFIX', 'MPG Technology Solutions'),
     'debug' => filter_var($get('APP_DEBUG', 'false'), FILTER_VALIDATE_BOOL),
@@ -30,11 +30,26 @@ return [
     'db' => [
         'host' => $get('DB_HOST', '127.0.0.1'),
         'port' => (int) ($get('DB_PORT', '3306') ?? 3306),
-        'database' => $get('DB_DATABASE', 'forge'),
+        'database' => $get('DB_DATABASE', 'laundry_system'),
         'username' => $get('DB_USERNAME', 'forge'),
         'password' => $get('DB_PASSWORD', ''),
         'charset' => $get('DB_CHARSET', 'utf8mb4'),
         'timezone' => $get('DB_TIMEZONE', '+08:00'),
+    ],
+    'mail' => [
+        'mailer' => strtolower((string) $get('MAIL_MAILER', 'log')),
+        'host' => $get('MAIL_HOST', '127.0.0.1'),
+        'port' => (int) ($get('MAIL_PORT', '2525') ?? 2525),
+        'username' => $get('MAIL_USERNAME', ''),
+        'password' => $get('MAIL_PASSWORD', ''),
+        'encryption' => strtolower((string) $get('MAIL_ENCRYPTION', '')),
+        'from_address' => $get('MAIL_FROM_ADDRESS', 'hello@example.com'),
+        'from_name' => $get('MAIL_FROM_NAME', $get('APP_NAME', 'Laundry System')),
+        'reply_to_address' => $get('MAIL_REPLY_TO_ADDRESS', ''),
+        'reply_to_name' => $get('MAIL_REPLY_TO_NAME', ''),
+        'return_path' => $get('MAIL_RETURN_PATH', ''),
+        'ehlo_domain' => $get('MAIL_EHLO_DOMAIN', ''),
+        'message_id_domain' => $get('MAIL_MESSAGE_ID_DOMAIN', ''),
     ],
     'session' => [
         'lifetime' => 120,

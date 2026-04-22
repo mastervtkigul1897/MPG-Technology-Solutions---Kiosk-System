@@ -226,6 +226,24 @@ final class BranchService
         if (! $rootTenant) {
             throw new RuntimeException('Root account tenant not found.');
         }
+        $mainBranch = $this->getMainBranchInGroup($rootId);
+        $sourceSubscription = $mainBranch ?? $rootTenant;
+        $mainExpiresAt = trim((string) ($sourceSubscription['license_expires_at'] ?? ''));
+        $mainStartsAt = trim((string) ($sourceSubscription['license_starts_at'] ?? ''));
+        $newStartsAt = date('Y-m-d H:i:s');
+        if ($mainStartsAt !== '') {
+            $mainStartTs = strtotime($mainStartsAt);
+            if ($mainStartTs !== false) {
+                $newStartsAt = date('Y-m-d H:i:s', $mainStartTs);
+            }
+        }
+        $newExpiresAt = null;
+        if ($mainExpiresAt !== '') {
+            $mainExpTs = strtotime($mainExpiresAt);
+            if ($mainExpTs !== false) {
+                $newExpiresAt = date('Y-m-d H:i:s', $mainExpTs);
+            }
+        }
 
         $this->pdo->beginTransaction();
         try {
@@ -239,10 +257,10 @@ final class BranchService
                 $rootId,
                 $branchName,
                 $slug,
-                (string) ($rootTenant['plan'] ?? 'subscription'),
+                (string) ($sourceSubscription['plan'] ?? 'subscription'),
                 1,
-                $rootTenant['license_starts_at'] ?: null,
-                $rootTenant['license_expires_at'] ?: null,
+                $newStartsAt,
+                $newExpiresAt,
             ]);
             $newTenantId = (int) $this->pdo->lastInsertId();
 
@@ -258,6 +276,22 @@ final class BranchService
         }
 
         return $newTenantId;
+    }
+
+    /** @return array<string,mixed>|null */
+    private function getMainBranchInGroup(int $rootTenantId): ?array
+    {
+        $st = $this->pdo->prepare(
+            'SELECT id, plan, license_starts_at, license_expires_at
+             FROM tenants
+             WHERE branch_group_id = ? AND is_main_branch = 1
+             ORDER BY id ASC
+             LIMIT 1'
+        );
+        $st->execute([$rootTenantId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+
+        return $row !== false ? $row : null;
     }
 
     /**

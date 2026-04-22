@@ -9,4 +9,7 @@
         <input type="password" class="form-control" id="login_password" name="password" required autocomplete="current-password">
     </div>
     <button type="submit" class="btn btn-primary">Login</button>
+    <div class="text-center small">
+        <a href="<?= e(url('/forgot-password')) ?>">Forgot password?</a>
+    </div>
 </form>

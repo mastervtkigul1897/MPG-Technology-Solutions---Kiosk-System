@@ -240,6 +240,12 @@
     var MPG_BLE_OPTIONAL_SERVICES = [
         '49535343-fe7d-4ae5-8fa9-9fafd205e455',
         '0000ffe0-0000-1000-8000-00805f9b34fb',
+        // Seen on some BLE printer firmwares (vendor services)
+        '0000ff00-0000-1000-8000-00805f9b34fb',
+        '0000ff10-0000-1000-8000-00805f9b34fb',
+        '00001f80-0000-1000-8000-00805f9b34fb',
+        '0000ff80-0000-1000-8000-00805f9b34fb',
+        '0000ffb0-0000-1000-8000-00805f9b34fb',
         '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
         '0000fee7-0000-1000-8000-00805f9b34fb',
         'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
@@ -254,8 +260,85 @@
     ];
     var MPG_BLE_DEVICE_ID_KEY = 'mpg_ble_thermal_device_id';
     var MPG_BLE_LAST_DEVICE = null;
-    var MPG_BLE_NAME_MUST_INCLUDE_RE = /RP/i;
     var MPG_BLE_PRINTER_HINT_RE = /(thermal|receipt|printer|pos|58|80|escpos|rpp)/i;
+
+    function mpgReceiptConfig() {
+        try {
+            var cfg = (typeof window !== 'undefined' && window.MPG_RECEIPT_CONFIG) ? window.MPG_RECEIPT_CONFIG : null;
+            if (cfg && typeof cfg === 'object') return cfg;
+        } catch (e) {
+            /* ignore */
+        }
+        return {};
+    }
+
+    function mpgParseBlePrinterMatchRules(raw) {
+        var s = String(raw || '').trim();
+        if (s === '*') return [];
+        if (!s) return [{ contains: 'RP', field: 'name' }];
+        var parts = s.split(',');
+        var out = [];
+        for (var i = 0; i < parts.length; i += 1) {
+            var token = String(parts[i] || '').trim();
+            if (!token) continue;
+
+            // Accept "contains|field" or "contains:field" (fallback: "contains" => field=name)
+            var contains = token;
+            var field = 'name';
+            var pipeIdx = token.indexOf('|');
+            var colonIdx = token.indexOf(':');
+            var splitIdx = pipeIdx >= 0 ? pipeIdx : colonIdx;
+            if (splitIdx >= 0) {
+                contains = String(token.slice(0, splitIdx) || '').trim();
+                field = String(token.slice(splitIdx + 1) || '').trim().toLowerCase();
+            }
+
+            if (!contains) continue;
+            if (field !== 'name' && field !== 'id') field = 'name';
+            out.push({ contains: contains, field: field });
+        }
+        return out.length ? out : [{ contains: 'RP', field: 'name' }];
+    }
+
+    function mpgDeviceFieldValue(device, field) {
+        if (!device) return '';
+        if (field === 'id') return String(device.id || '').trim();
+        return String(device.name || '').trim();
+    }
+
+    function mpgBlePickerOptionsFromRules(rules) {
+        // WebBluetooth only supports "namePrefix" in filters; if rules are not "prefix-like", fall back to acceptAllDevices.
+        var prefixes = [];
+        for (var i = 0; i < rules.length; i += 1) {
+            var r = rules[i];
+            if (!r || r.field !== 'name') continue;
+            var c = String(r.contains || '').trim();
+            if (!c) continue;
+            if (!/^[A-Za-z0-9]{1,16}$/.test(c)) continue;
+            prefixes.push(c);
+        }
+        // de-dup, cap (Chrome limits filters count)
+        var seen = {};
+        var uniq = [];
+        for (var j = 0; j < prefixes.length; j += 1) {
+            var p = prefixes[j];
+            var key = p.toLowerCase();
+            if (seen[key]) continue;
+            seen[key] = true;
+            uniq.push(p);
+            if (uniq.length >= 5) break;
+        }
+        if (uniq.length) {
+            return {
+                filters: uniq.map(function (pfx) { return { namePrefix: pfx }; }),
+                optionalServices: MPG_BLE_OPTIONAL_SERVICES,
+            };
+        }
+        return {
+            acceptAllDevices: true,
+            optionalServices: MPG_BLE_OPTIONAL_SERVICES,
+        };
+    }
     function mpgBleStorageGet(key) {
         try {
             var v = localStorage.getItem(key);
@@ -295,9 +378,27 @@
     }
 
     function mpgBleLooksLikePrinterDevice(device) {
+        var rawRules = String(mpgReceiptConfig().ble_printer_match_rules || '').trim();
+        if (rawRules === '*') return true;
+        var hasCustomRules = rawRules !== '';
+        var rules = mpgParseBlePrinterMatchRules(mpgReceiptConfig().ble_printer_match_rules);
+        var okContains = false;
+        for (var i = 0; i < rules.length; i += 1) {
+            var r = rules[i];
+            var hay = mpgDeviceFieldValue(device, r.field).toLowerCase();
+            var needle = String(r.contains || '').toLowerCase();
+            if (!needle) continue;
+            if (hay.indexOf(needle) >= 0) {
+                okContains = true;
+                break;
+            }
+        }
+        if (!okContains) return false;
+        if (hasCustomRules) return true;
+
+        // Default behavior: keep a loose hint check to reduce accidental selection.
         var name = String((device && device.name) || '').trim();
-        if (!name) return false;
-        return MPG_BLE_NAME_MUST_INCLUDE_RE.test(name) && MPG_BLE_PRINTER_HINT_RE.test(name);
+        return !name ? false : MPG_BLE_PRINTER_HINT_RE.test(name);
     }
 
     function mpgBleFindWritableCharacteristic(server) {
@@ -352,25 +453,34 @@
     }
 
     function mpgBleRequestPrinterDevice() {
-        return navigator.bluetooth.requestDevice({
-            filters: [{ namePrefix: 'RP' }],
-            optionalServices: MPG_BLE_OPTIONAL_SERVICES,
-        }).catch(function (err) {
+        var rules = mpgParseBlePrinterMatchRules(mpgReceiptConfig().ble_printer_match_rules);
+        var rawRules = String(mpgReceiptConfig().ble_printer_match_rules || '').trim();
+        var pickerOpts = rawRules === '*' ? { acceptAllDevices: true, optionalServices: MPG_BLE_OPTIONAL_SERVICES } : mpgBlePickerOptionsFromRules(rules);
+        return navigator.bluetooth.requestDevice(pickerOpts).catch(function (err) {
             if (err && err.name === 'NotFoundError') {
                 throw new Error('No device selected or the Bluetooth picker was cancelled.');
             }
             throw err;
         }).then(function (device) {
             if (!mpgBleLooksLikePrinterDevice(device)) {
-                throw new Error('Selected device is not a valid RP thermal POS receipt printer. Please select the correct printer.');
+                var raw = String(mpgReceiptConfig().ble_printer_match_rules || '').trim();
+                var hint = raw ? ('Match rules: ' + raw) : 'Match rules: RP|name';
+                throw new Error('Selected device does not match your Bluetooth printer rules. Please select the correct printer. (' + hint + ')');
             }
             return device;
         });
     }
 
     function mpgBleWriteChunks(ch, bytes) {
-        var chunkSize = ch.properties.writeWithoutResponse ? 180 : 20;
+        var chunkSize = ch.properties.writeWithoutResponse ? 120 : 20;
+        var delayMs = ch.properties.writeWithoutResponse ? 12 : 0;
         var i = 0;
+        function sleep(ms) {
+            if (!ms) return Promise.resolve();
+            return new Promise(function (resolve) {
+                setTimeout(resolve, ms);
+            });
+        }
         function next() {
             if (i >= bytes.length) {
                 return Promise.resolve();
@@ -380,7 +490,9 @@
             var p = ch.properties.writeWithoutResponse
                 ? ch.writeValueWithoutResponse(slice)
                 : ch.writeValueWithResponse(slice);
-            return p.then(next);
+            return p.then(function () {
+                return sleep(delayMs).then(next);
+            });
         }
         return next();
     }
@@ -403,10 +515,73 @@
         return b;
     }
 
+    function mpgAndroidBridgeGetBondedPrinters(bridge) {
+        if (!bridge || typeof bridge.getBondedPrintersJson !== 'function') return [];
+        var out = mpgNativeBridgeParse(bridge.getBondedPrintersJson()) || {};
+        if (!out.ok || !out.devices || !out.devices.length) return [];
+        var list = [];
+        for (var i = 0; i < out.devices.length; i += 1) {
+            var d = out.devices[i] || {};
+            var name = String(d.name || '').trim();
+            var address = String(d.address || '').trim();
+            if (!address) continue;
+            list.push({ name: name || 'Printer', address: address });
+        }
+        return list;
+    }
+
+    function mpgAndroidBridgeSetPrinterAddress(bridge, address) {
+        if (!bridge || typeof bridge.setPrinterAddress !== 'function') return true;
+        var out = mpgNativeBridgeParse(bridge.setPrinterAddress(String(address || ''))) || {};
+        if (out && out.ok) return true;
+        throw new Error((out && out.message) ? out.message : 'Could not save selected printer.');
+    }
+
+    function mpgAndroidBridgePromptSelectPrinter(devices) {
+        var opts = {};
+        for (var i = 0; i < devices.length; i += 1) {
+            var d = devices[i];
+            var label = (d.name ? d.name : 'Printer') + ' (' + d.address + ')';
+            opts[d.address] = label;
+        }
+
+        // Prefer SweetAlert2 (already loaded in app layout); fallback to prompt().
+        if (typeof Swal !== 'undefined' && Swal && typeof Swal.fire === 'function') {
+            return Swal.fire({
+                title: 'Select Bluetooth printer',
+                input: 'select',
+                inputOptions: opts,
+                inputPlaceholder: 'Choose a paired printer',
+                showCancelButton: true,
+                confirmButtonText: 'Use this printer',
+                cancelButtonText: 'Cancel',
+                inputValidator: function (value) {
+                    if (!value) return 'Please select a printer.';
+                    return null;
+                },
+            }).then(function (r) {
+                if (!r || !r.isConfirmed) return null;
+                return String(r.value || '').trim() || null;
+            });
+        }
+
+        try {
+            var lines = devices.map(function (d, idx) {
+                return (idx + 1) + '. ' + (d.name ? d.name : 'Printer') + ' (' + d.address + ')';
+            }).join('\n');
+            var ans = prompt('Select paired printer (enter number):\n' + lines, '1');
+            var n = parseInt(String(ans || '').trim(), 10);
+            if (!n || n < 1 || n > devices.length) return Promise.resolve(null);
+            return Promise.resolve(devices[n - 1].address);
+        } catch (e) {
+            return Promise.resolve(null);
+        }
+    }
+
     function mpgWriteEscposAndroidBridge(bytes) {
         var bridge = mpgAndroidBridge();
         if (!bridge) return Promise.resolve(false);
-        return Promise.resolve().then(function () {
+        function doPrintOnce() {
             var base64 = '';
             try {
                 var bin = '';
@@ -421,7 +596,41 @@
                 throw new Error(out.message || 'Native Bluetooth print failed.');
             }
             return true;
-        });
+        }
+
+        function maybeSelectPrinterThenRetry(err) {
+            var msg = String((err && err.message) || '').toLowerCase();
+            var looksLikeNoPrinter =
+                msg.indexOf('no paired printer') >= 0 ||
+                msg.indexOf('pair the bluetooth printer first') >= 0 ||
+                msg.indexOf('no paired printer found') >= 0;
+
+            var devices = mpgAndroidBridgeGetBondedPrinters(bridge);
+            if (!devices.length) {
+                throw err;
+            }
+            if (devices.length === 1 && !looksLikeNoPrinter) {
+                // If only one paired printer exists, just try saving it then retry.
+                mpgAndroidBridgeSetPrinterAddress(bridge, devices[0].address);
+                return doPrintOnce();
+            }
+
+            return mpgAndroidBridgePromptSelectPrinter(devices).then(function (address) {
+                if (!address) throw err;
+                mpgAndroidBridgeSetPrinterAddress(bridge, address);
+                return doPrintOnce();
+            });
+        }
+
+        return Promise.resolve()
+            .then(function () {
+                return doPrintOnce();
+            })
+            .catch(function (err) {
+                return Promise.resolve().then(function () {
+                    return maybeSelectPrinterThenRetry(err);
+                });
+            });
     }
 
     /**
@@ -459,6 +668,34 @@
             });
     }
 
+    function mpgBleDeviceById(devices, id) {
+        if (!devices || !devices.length || !id) return null;
+        for (var i = 0; i < devices.length; i += 1) {
+            var d = devices[i];
+            if (d && String(d.id || '') === String(id)) return d;
+        }
+        return null;
+    }
+
+    function mpgBleResolvePrinterDevice() {
+        var rememberedId = mpgBleStorageGet(MPG_BLE_DEVICE_ID_KEY);
+        if (typeof navigator.bluetooth.getDevices !== 'function') {
+            return mpgBleRequestPrinterDevice();
+        }
+        return navigator.bluetooth
+            .getDevices()
+            .then(function (devices) {
+                var remembered = mpgBleDeviceById(devices, rememberedId);
+                if (remembered && mpgBleLooksLikePrinterDevice(remembered)) {
+                    return remembered;
+                }
+                return mpgBleRequestPrinterDevice();
+            })
+            .catch(function () {
+                return mpgBleRequestPrinterDevice();
+            });
+    }
+
     /**
      * ESC/POS over BLE thermal printer.
      * First print: requestDevice (pair/select printer). Later: getDevices + saved id — no picker while permission remains.
@@ -477,15 +714,16 @@
                 )
             );
         }
-        // Do not keep/use remembered devices: always force user selection.
-        MPG_BLE_LAST_DEVICE = null;
-        mpgBleStorageRemove(MPG_BLE_DEVICE_ID_KEY);
-        return mpgBleRequestPrinterDevice().then(function (device) {
+        return mpgBleResolvePrinterDevice().then(function (device) {
             return mpgBleTryPrintOnDevice(device, bytes).then(function (ok) {
                 if (!ok) {
                     throw new Error(
                         'No writable Bluetooth characteristic found. Pair the printer or use Wi‑Fi/LAN raw printing.'
                     );
+                }
+                MPG_BLE_LAST_DEVICE = device || null;
+                if (device && device.id) {
+                    mpgBleStorageSet(MPG_BLE_DEVICE_ID_KEY, String(device.id));
                 }
             });
         });
@@ -498,7 +736,7 @@
     };
 
     window.mpgHasRememberedBluetoothDevice = function () {
-        return false;
+        return !!mpgBleStorageGet(MPG_BLE_DEVICE_ID_KEY);
     };
 
     /**

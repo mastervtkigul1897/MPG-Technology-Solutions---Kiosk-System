@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Controllers\Tenant;
 
-use App\Core\ActivityLogger;
 use App\Core\App;
 use App\Core\Auth;
 use App\Core\FlavorSchema;
@@ -88,82 +87,6 @@ final class IngredientController
         ]);
     }
 
-    public function notifications(Request $request): Response
-    {
-        $user = Auth::user();
-        $tenantId = (int) $user['tenant_id'];
-        $pdo = App::db();
-        FlavorSchema::ensure($pdo);
-
-        if ($request->ajax() || $request->boolean('datatable')) {
-            $search = trim((string) data_get($request->all(), 'search.value', ''));
-            $where = 'tenant_id = ? AND stock_quantity <= low_stock_threshold';
-            $params = [$tenantId];
-            if ($search !== '') {
-                $where .= ' AND (name LIKE ? OR unit LIKE ? OR id LIKE ?)';
-                $like = '%'.$search.'%';
-                array_push($params, $like, $like, $like);
-            }
-
-            $total = (int) $pdo->query(
-                'SELECT COUNT(*) FROM ingredients WHERE tenant_id = '.$tenantId.' AND stock_quantity <= low_stock_threshold'
-            )->fetchColumn();
-            $st = $pdo->prepare("SELECT COUNT(*) FROM ingredients WHERE $where");
-            $st->execute($params);
-            $filtered = (int) $st->fetchColumn();
-
-            $columns = ['id', 'name', 'unit', 'stock_quantity', 'low_stock_threshold'];
-            $orderIdx = (int) data_get($request->all(), 'order.0.column', 1);
-            $orderDir = strtolower((string) data_get($request->all(), 'order.0.dir', 'asc')) === 'desc' ? 'DESC' : 'ASC';
-            $orderBy = $columns[$orderIdx] ?? 'name';
-            $start = max(0, (int) $request->input('start', 0));
-            $length = min(100, max(1, (int) $request->input('length', 25)));
-
-            $sql = "SELECT * FROM ingredients WHERE $where ORDER BY $orderBy $orderDir LIMIT $length OFFSET $start";
-            $st = $pdo->prepare($sql);
-            $st->execute($params);
-            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-
-            $trialBrowse = Auth::isTenantFreeTrial($user);
-            $data = [];
-            foreach ($rows as $ingredient) {
-                $actions = '';
-                if (! $trialBrowse && (Auth::tenantMayManage($user, 'notifications') || Auth::tenantMayManage($user, 'ingredients'))) {
-                    $id = (int) $ingredient['id'];
-                    $actions = '<button type="button" class="btn btn-sm btn-outline-primary js-edit" data-id="'.$id.'" title="Edit"><i class="fa fa-pen"></i></button>';
-                }
-                $data[] = [
-                    'id' => $ingredient['id'],
-                    'name' => e((string) $ingredient['name']),
-                    'unit' => e((string) $ingredient['unit']),
-                    'stock_quantity' => format_stock((float) $ingredient['stock_quantity']),
-                    'low_stock_threshold' => format_stock((float) $ingredient['low_stock_threshold']),
-                    'actions' => $actions,
-                ];
-            }
-
-            return json_response([
-                'draw' => (int) $request->input('draw', 1),
-                'recordsTotal' => $total,
-                'recordsFiltered' => $filtered,
-                'data' => $data,
-            ]);
-        }
-
-        $branchExpiredNotice = session_get('branch_expired_notice');
-        if (is_array($branchExpiredNotice)) {
-            session_set('branch_expired_notice', null);
-        } else {
-            $branchExpiredNotice = null;
-        }
-
-        return view_page('Notifications', 'tenant.notifications.index', [
-            'allowed_units' => explode(',', self::UNITS),
-            'branchExpiredNotice' => $branchExpiredNotice,
-            'premium_trial_browse_lock' => Auth::isTenantFreeTrial($user),
-        ]);
-    }
-
     public function store(Request $request): Response
     {
         $user = Auth::user();
@@ -230,31 +153,10 @@ final class IngredientController
             return new Response('Not found', 404);
         }
 
-        $fromNotifications = $request->input('_source') === 'notifications';
-        if ($fromNotifications && Auth::isTenantFreeTrial($user)) {
-            if ($request->wantsJson() || $request->ajax()) {
-                return json_response([
-                    'message' => 'Premium: restocking from Notifications is not available on a Free Trial.',
-                    'errors' => ['general' => ['Premium feature.']],
-                ], 403);
-            }
-            session_flash('errors', ['Premium: restocking from Notifications is not available on a Free Trial. View plans & pricing to upgrade.']);
-
-            return redirect(url('/tenant/notifications'));
-        }
-
         $canFullEdit = Auth::tenantMayManage($user, 'ingredients');
-        $canCashierNotifOnly = ($user['role'] ?? '') === 'cashier' && $fromNotifications
-            && Auth::canAccessModule($user, 'notifications')
-            && ! Auth::canAccessModule($user, 'ingredients');
 
-        if (! $canFullEdit && ! $canCashierNotifOnly) {
+        if (! $canFullEdit) {
             return new Response('Forbidden', 403);
-        }
-        if ($canCashierNotifOnly) {
-            if ((float) $ingredient['stock_quantity'] > (float) $ingredient['low_stock_threshold']) {
-                return new Response('Forbidden', 403);
-            }
         }
 
         $previousStock = (float) $ingredient['stock_quantity'];
@@ -295,45 +197,11 @@ final class IngredientController
         $fresh = $st->fetch(PDO::FETCH_ASSOC);
         $newStock = (float) ($fresh['stock_quantity'] ?? 0);
         $delta = $newStock - $previousStock;
-        $source = (string) $request->input('_source', 'ingredients');
-
-        // Log only low-stock / notification restocks (not every ingredient edit) to limit storage.
-        if ($source === 'notifications') {
-            $desc = sprintf(
-                'Restock (notifications) [ID: %d, %s] stock change: %s (was %s → %s)',
-                (int) $id,
-                (string) $fresh['name'],
-                format_stock_plain($delta),
-                format_stock_plain($previousStock),
-                format_stock_plain($newStock)
-            );
-            ActivityLogger::log(
-                $tenantId,
-                (int) $user['id'],
-                (string) $user['role'],
-                'inventory',
-                'restock',
-                $request,
-                $desc,
-                [
-                    'ingredient_id' => (int) $id,
-                    'ingredient_name' => $fresh['name'],
-                    'previous_stock' => $previousStock,
-                    'stock_change' => $delta,
-                    'source' => 'notifications',
-                ]
-            );
-        }
-
         if ($request->wantsJson() || $request->ajax()) {
             return json_response(['message' => 'Item updated successfully.']);
         }
 
         session_flash('success', 'Item updated successfully.');
-
-        if ($request->input('_source') === 'notifications') {
-            return redirect(url('/tenant/notifications'));
-        }
 
         return redirect(url('/tenant/ingredients'));
     }

@@ -33,6 +33,45 @@ final class ThermalEscPosReceipt
             $b .= $line."\n";
         };
 
+        $appendWrap = static function (string $text, bool $center = false) use (&$append, &$cfg): void {
+            $w = self::lineWidth($cfg);
+            foreach (self::wrapText($text, $w) as $ln) {
+                $append($ln, $center);
+            }
+        };
+
+        $appendLabelValue = static function (string $label, string $value, bool $center = false) use (&$append, &$cfg): void {
+            $w = self::lineWidth($cfg);
+            $label = trim(self::ascii($label));
+            $value = trim(self::ascii($value));
+            if ($label === '' && $value === '') {
+                $append('', $center);
+                return;
+            }
+            if ($label === '') {
+                foreach (self::wrapText($value, $w) as $ln) {
+                    $append($ln, $center);
+                }
+                return;
+            }
+            $prefix = $label.': ';
+            $indent = str_repeat(' ', min(8, strlen($prefix)));
+            $firstWidth = max(8, $w - strlen($prefix));
+            $restWidth = max(8, $w - strlen($indent));
+            $chunks = self::wrapText($value, $firstWidth);
+            if ($chunks === []) {
+                $append($prefix, $center);
+                return;
+            }
+            $append($prefix.($chunks[0] ?? ''), $center);
+            for ($i = 1; $i < count($chunks); $i += 1) {
+                $rest = $chunks[$i] ?? '';
+                foreach (self::wrapText($rest, $restWidth) as $ln) {
+                    $append($indent.$ln, $center);
+                }
+            }
+        };
+
         $sep = static function () use (&$b, &$cfg): void {
             $b .= "\x1B\x61\x00";
             $b .= str_repeat('-', self::lineWidth($cfg))."\n";
@@ -43,12 +82,12 @@ final class ThermalEscPosReceipt
         if ($unpaidPrep) {
             $forName = trim((string) ($r['pending_customer_name'] ?? ''));
             if ($forName !== '') {
-                $append('FOR: '.$forName, true);
+                $appendWrap('FOR: '.$forName, true);
                 $sep();
             }
             $forContact = trim((string) ($r['pending_customer_contact'] ?? ''));
             if ($forContact !== '') {
-                $append('Contact: '.$forContact);
+                $appendWrap('Contact: '.$forContact);
                 $sep();
             }
         }
@@ -57,11 +96,11 @@ final class ThermalEscPosReceipt
         if ($displayName === '') {
             $displayName = trim((string) ($r['store_name'] ?? 'Store'));
         }
-        $append($displayName !== '' ? $displayName : 'Store', true);
+        $appendWrap($displayName !== '' ? $displayName : 'Store', true);
 
         $bs = trim((string) ($r['business_style'] ?? ''));
         if ($bs !== '' && ! $unpaidPrep) {
-            $append($bs, true);
+            $appendWrap($bs, true);
         }
         $taxId = trim((string) ($r['tax_id'] ?? ''));
         $isBirRegistered = ! empty($r['is_bir_registered']);
@@ -73,31 +112,31 @@ final class ThermalEscPosReceipt
         if (! $unpaidPrep) {
             if ($isBirRegistered) {
                 if ($birAccreditationNo !== '') {
-                    $append('BIR Accreditation No: '.$birAccreditationNo, true);
+                    $appendWrap('BIR Accreditation No: '.$birAccreditationNo, true);
                 }
                 if ($taxId !== '') {
-                    $append('TIN: '.$taxId, true);
+                    $appendWrap('TIN: '.$taxId, true);
                 }
                 if ($serial !== '') {
-                    $append('Serial No: '.$serial, true);
+                    $appendWrap('Serial No: '.$serial, true);
                 }
                 if ($minNo !== '') {
-                    $append('MIN: '.$minNo, true);
+                    $appendWrap('MIN: '.$minNo, true);
                 }
                 if ($permitNo !== '') {
-                    $append('Permit No: '.$permitNo, true);
+                    $appendWrap('Permit No: '.$permitNo, true);
                 }
             } elseif ($taxId !== '') {
-                $append('TIN: '.$taxId, true);
+                $appendWrap('TIN: '.$taxId, true);
             }
             if ($dtiNumber !== '') {
-                $append('DTI No: '.$dtiNumber, true);
+                $appendWrap('DTI No: '.$dtiNumber, true);
             }
         }
         $taxType = strtolower(trim((string) ($r['tax_type'] ?? 'non_vat')));
         $taxTypeLabel = $taxType === 'vat' ? 'VAT Registered' : 'Non-VAT Registered';
         if (! $unpaidPrep) {
-            $append('Tax Type: '.$taxTypeLabel, true);
+            $appendWrap('Tax Type: '.$taxTypeLabel, true);
         }
 
         $sep();
@@ -107,21 +146,21 @@ final class ThermalEscPosReceipt
         $email = trim((string) ($c['email'] ?? ''));
         if (! $unpaidPrep) {
             if ($phone !== '') {
-                $append('Phone: '.$phone);
+                $appendLabelValue('Phone', $phone);
             }
             if ($addr !== '') {
                 foreach (preg_split("/\r\n|\n|\r/", $addr) ?: [] as $ln) {
                     $ln = trim((string) $ln);
                     if ($ln !== '') {
-                        $append('Address: '.$ln);
+                        $appendLabelValue('Address', $ln);
                     }
                 }
             }
             if ($email !== '') {
-                $append(self::truncate('Email: '.$email, self::lineWidth($cfg)));
+                $appendLabelValue('Email', $email);
             }
             if ($phone === '' && $addr === '' && $email === '') {
-                $append('No store contact on file.', true);
+                $appendWrap('No store contact on file.', true);
             }
             $sep();
         }

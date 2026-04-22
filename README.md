@@ -1,4 +1,4 @@
-# Plain PHP MVC (Kiosk System)
+# Plain PHP MVC (Laundry System)
 
 No Composer / Laravel — runs on shared hosting with PHP 8.1+ and MySQL (phpMyAdmin).
 
@@ -7,8 +7,16 @@ No Composer / Laravel — runs on shared hosting with PHP 8.1+ and MySQL (phpMyA
 | Role | Who creates them | What they can do |
 |------|------------------|------------------|
 | **Super admin** | You (platform operator), via server/DB setup | Log in, open **Tenants**, create a **store (tenant)** together with the **store owner** account (name, email, password). There is **no public registration** for stores; customers contact you and you provision accounts. |
-| **Store owner** (`tenant_admin`) | Super admin, when creating the tenant | Log in, manage **Staff** (create/remove **cashier** accounts), and use all store modules (ingredients, products, POS, reports, etc.). |
-| **Cashier** (`cashier`) | Store owner, under **Staff** | Log in, use **Create Order**, **Transactions**, **Activity Log**, and **Profile** only to **change their own password**. Name/email are read-only. |
+| **Store owner** (`tenant_admin`) | Super admin, when creating the tenant | Log in, manage **Staff** (create/remove **cashier** accounts), and use all laundry modules. |
+| **Cashier** (`cashier`) | Store owner, under **Staff** | Log in, use **Daily Sales Monitoring**, **Customer Profile**, **Inventory Management**, **Activity Log**, and **Profile** only to **change their own password**. Name/email are read-only. |
+
+## Laundry modules (Phase 1)
+
+- Sales Dashboard
+- Inventory Management
+- Attendance & Payroll
+- Daily Sales Monitoring
+- Customer Profile
 
 ## Deployment (e.g. 000webhost)
 
@@ -17,7 +25,8 @@ No Composer / Laravel — runs on shared hosting with PHP 8.1+ and MySQL (phpMyA
 3. If you cannot keep `app/` outside `public_html`, use a minimal layout: `public_html/index.php` + `.htaccess` from `public/`, and adjust `public/index.php` paths to `bootstrap.php` as needed.
 4. Copy `.env.example` to `.env` at the app root (next to `bootstrap.php`), then set `APP_URL` and database credentials from the hosting panel.
 5. Ensure folders are `chmod 755` where needed and **`storage/` is writable** (especially `storage/rate_limit/`).
-6. Import the same MySQL schema as the original Laravel app (no new migrations unless you changed the schema).
+6. Use a dedicated database name like `laundry_system` (do not reuse old legacy database names).
+7. Import the app base schema, then import `database/laundry_system_schema.sql` for laundry-specific tables.
 
 ## Security (built-in)
 
@@ -53,5 +62,13 @@ If you change the port (e.g. `8000`), update both the command and `APP_URL`. Do 
 ```bash
 php -l bootstrap.php public/index.php
 ```
+
+## Demo data seed (optional)
+
+```bash
+php scripts/seed_laundry_demo.php
+```
+
+This seeds sample laundry customers, inventory, orders, and attendance for tenants that still have no laundry orders.
 
 Use `APP_DEBUG=true` only in development.

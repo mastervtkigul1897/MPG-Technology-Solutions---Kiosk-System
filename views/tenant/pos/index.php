@@ -252,7 +252,7 @@ function posProductImageSrc(string $name, ?string $imagePath = null): string
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="receiptBleChangeBtn">Change Bluetooth printer</button>
                 </div>
                 <?php if (empty($receipt_print_allowed)): ?>
-                    <div class="w-100 small text-warning text-center fw-semibold">Premium: receipt printing is not included on Free Trial — you can still view the receipt below.</div>
+                    <div class="w-100 small text-warning text-center fw-semibold">Premium: receipt printing is not included on the Free version — you can still view the receipt below.</div>
                     <div class="w-100 d-grid">
                         <a href="<?= e(url('/tenant/plans')) ?>" class="btn btn-warning btn-sm fw-semibold"><i class="fa-solid fa-tags me-1"></i>View plans & pricing</a>
                     </div>

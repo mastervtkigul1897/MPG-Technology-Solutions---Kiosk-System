@@ -24,6 +24,8 @@ final class TenantReceiptFields
             'receipt_address' => 'TEXT NULL',
             'receipt_email' => 'VARCHAR(255) NULL DEFAULT NULL',
             'receipt_footer_note' => 'TEXT NULL',
+            // Comma-separated rules, e.g. "RP|name, RPP|name, 58|name"
+            'receipt_ble_printer_match_rules' => 'TEXT NULL',
             'receipt_lan_print_copies' => 'TINYINT UNSIGNED NOT NULL DEFAULT 1',
             'receipt_escpos_line_width' => 'TINYINT UNSIGNED NOT NULL DEFAULT 32',
             'receipt_escpos_right_col_width' => 'TINYINT UNSIGNED NOT NULL DEFAULT 10',

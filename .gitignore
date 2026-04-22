@@ -18,3 +18,8 @@ Thumbs.db
 
 # App (root)
 /storage/rate_limit/*.json
+
+# Local / IDE / generated
+/.cursor/
+/scripts/__pycache__/
+/public/uploads/
