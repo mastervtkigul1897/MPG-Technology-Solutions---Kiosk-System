@@ -23,6 +23,8 @@ $brandLogoPath = url('images/branding/mpglms-logo.png');
     <link rel="icon" type="image/png" sizes="512x512" href="<?= e($brandLogoPath) ?>">
     <link rel="shortcut icon" href="<?= e($brandLogoPath) ?>">
     <link rel="apple-touch-icon" href="<?= e($brandLogoPath) ?>">
+    <link rel="manifest" href="<?= e(url('/manifest.json')) ?>">
+    <meta name="theme-color" content="#2563eb">
     <link href="<?= e(url('vendor/bootstrap/bootstrap.min.css')) ?>" rel="stylesheet">
     <link rel="stylesheet" href="<?= e(url('vendor/fontawesome/css/all.min.css')) ?>">
     <style>

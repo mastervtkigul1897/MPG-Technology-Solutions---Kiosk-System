@@ -1239,6 +1239,9 @@ body.branch-select-open .pos-order-summary-anchor {
         const r = lastReceiptObject;
         if (!r) return Swal.fire({ icon: 'warning', title: 'No receipt', text: 'Complete a sale first.' });
         try {
+            if (typeof window.mpgPrimeEscposBluetoothPermission === 'function') {
+                await window.mpgPrimeEscposBluetoothPermission();
+            }
             Swal.fire({ title: 'Preparing data…', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
             const bytes = await fetchEscposBytes(r);
             Swal.close();

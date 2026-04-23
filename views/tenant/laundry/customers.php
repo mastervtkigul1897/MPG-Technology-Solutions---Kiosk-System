@@ -1,4 +1,9 @@
 <?php require dirname(__DIR__, 2).'/partials/premium_trial_page_banner.php'; ?>
+<?php if (! empty($reward_system_active)): ?>
+<div class="alert alert-light border small mb-3 mb-md-0">
+    Reward load on each customer increases only from <strong>paid</strong> sales whose order type has <strong>Include to Reward System</strong> turned on (see <a href="<?= e(route('tenant.laundry-order-pricing.index')) ?>">Order Type Pricing</a>). Turn off <strong>Activate Reward System</strong> on the Rewards page to stop counting entirely.
+</div>
+<?php endif; ?>
 <div class="card mb-3">
     <div class="card-body">
         <form method="POST" action="<?= e(route('tenant.customers.store')) ?>" class="row g-2 align-items-end">
@@ -66,6 +71,16 @@
                             >
                                 <i class="fa fa-pen"></i>
                             </button>
+                            <button
+                                type="button"
+                                class="btn btn-sm btn-outline-warning js-adjust-rewards"
+                                data-id="<?= $cid ?>"
+                                data-name="<?= e((string) ($customer['name'] ?? '')) ?>"
+                                data-balance="<?= e(number_format((float) ($customer['rewards_balance'] ?? 0), 2, '.', '')) ?>"
+                                title="Adjust reward count (+/-)"
+                            >
+                                <span class="fw-bold">+/-</span>
+                            </button>
                             <form method="POST" action="<?= e(route('tenant.customers.destroy', ['id' => $cid])) ?>" onsubmit="return confirm('Delete this customer?');">
                                 <?= csrf_field() ?>
                                 <?= method_field('DELETE') ?>
@@ -117,11 +132,55 @@
         </div>
     </div>
 </div>
+<div class="modal fade" id="customerRewardsAdjustModal" tabindex="-1" aria-labelledby="customerRewardsAdjustModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" id="customerRewardsAdjustForm" action="">
+                <?= csrf_field() ?>
+                <div class="modal-header">
+                    <h6 class="modal-title" id="customerRewardsAdjustModalLabel">Adjust customer reward count</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted mb-2">
+                        Customer: <strong id="customer_rewards_name">-</strong><br>
+                        Current count: <strong id="customer_rewards_balance">0.00</strong>
+                    </p>
+                    <div class="mb-2">
+                        <label class="form-label mb-1 d-block">Adjustment type</label>
+                        <div class="btn-group" role="group" aria-label="Adjustment type">
+                            <input type="radio" class="btn-check" name="adjust_type" id="customer_rewards_add" value="add" autocomplete="off" checked>
+                            <label class="btn btn-outline-success" for="customer_rewards_add">Add</label>
+                            <input type="radio" class="btn-check" name="adjust_type" id="customer_rewards_deduct" value="deduct" autocomplete="off">
+                            <label class="btn btn-outline-danger" for="customer_rewards_deduct">Deduct</label>
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label mb-1" for="customer_rewards_count">Count</label>
+                        <input class="form-control" id="customer_rewards_count" name="points_count" type="number" min="0.01" step="0.01" required placeholder="e.g. 10">
+                    </div>
+                    <p class="small text-muted mb-0">Use this for manual migration or correction of old loyalty records.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning">Apply adjustment</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 <script>
 (() => {
     const editModalEl = document.getElementById('customerEditModal');
     const editModal = editModalEl ? new bootstrap.Modal(editModalEl) : null;
     const editForm = document.getElementById('customerEditForm');
+    const adjustModalEl = document.getElementById('customerRewardsAdjustModal');
+    const adjustModal = adjustModalEl ? new bootstrap.Modal(adjustModalEl) : null;
+    const adjustForm = document.getElementById('customerRewardsAdjustForm');
+    const adjustName = document.getElementById('customer_rewards_name');
+    const adjustBalance = document.getElementById('customer_rewards_balance');
+    const adjustCount = document.getElementById('customer_rewards_count');
+    const adjustTypeAdd = document.getElementById('customer_rewards_add');
     const baseUrl = '<?= e(url('/tenant/customers')) ?>';
     const editName = document.getElementById('customer_edit_name');
     const editContact = document.getElementById('customer_edit_contact');
@@ -138,6 +197,18 @@
             if (editEmail) editEmail.value = btn.getAttribute('data-email') || '';
             if (editBirthday) editBirthday.value = btn.getAttribute('data-birthday') || '';
             editModal?.show();
+        });
+    });
+    document.querySelectorAll('.js-adjust-rewards').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const id = btn.getAttribute('data-id');
+            if (!id || !adjustForm) return;
+            adjustForm.action = `${baseUrl}/${id}/rewards-adjust`;
+            if (adjustName) adjustName.textContent = btn.getAttribute('data-name') || '-';
+            if (adjustBalance) adjustBalance.textContent = btn.getAttribute('data-balance') || '0.00';
+            if (adjustCount) adjustCount.value = '';
+            if (adjustTypeAdd) adjustTypeAdd.checked = true;
+            adjustModal?.show();
         });
     });
 })();

@@ -1,6 +1,7 @@
 <?php
 /** @var list<array<string, mixed>> $order_types */
 $rows = $order_types ?? [];
+$rewardSystemActive = ! empty($reward_system_active);
 $kindLabels = [
     'full_service' => 'Full service',
     'wash_only' => 'Wash only',
@@ -19,6 +20,9 @@ $supplyLabels = [
         <h5 class="mb-1">Order Type Pricing</h5>
         <p class="small text-muted mb-0">
             Add as many order types as you need. Each appears in <strong>Daily Sales → Add service</strong>. Use <strong>Service supply block</strong> to control which stock selectors appear (e.g. hide all chemicals for dry or rinse). Use <strong>Show add-on supplies</strong> for charged extras on top of the base price.
+            <?php if ($rewardSystemActive): ?>
+                When <strong>Activate Reward System</strong> is on (Rewards page), you can mark which order types add to the customer reward load on paid sales. Turn it off per type for legacy data entry or services that should not earn stamps.
+            <?php endif; ?>
         </p>
     </div>
 </div>
@@ -74,11 +78,24 @@ $supplyLabels = [
                         </select>
                     </div>
                     <div class="col-12">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" name="show_addon_supplies" value="1" id="new_show_addon" checked>
-                            <label class="form-check-label" for="new_show_addon">Show add-on supplies (extra charged qty)</label>
+                        <div class="d-flex flex-wrap gap-3 align-items-start">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="show_addon_supplies" value="1" id="new_show_addon" checked>
+                                <label class="form-check-label" for="new_show_addon">Show add-on supplies (extra charged qty)</label>
+                            </div>
+                            <?php if ($rewardSystemActive): ?>
+                            <div class="form-check" id="new_include_rewards_wrap">
+                                <input class="form-check-input" type="checkbox" name="include_in_rewards" value="1" id="new_include_rewards" checked>
+                                <label class="form-check-label" for="new_include_rewards">Include to Reward System</label>
+                            </div>
+                            <?php endif; ?>
                         </div>
                     </div>
+                    <?php if ($rewardSystemActive): ?>
+                    <div class="col-12">
+                        <p class="small text-muted mb-0">When checked, marking this order type as <strong>paid</strong> adds 1 toward the customer’s reward load (if rewards are active). Full service defaults to checked.</p>
+                    </div>
+                    <?php endif; ?>
                     <div class="col-12">
                         <p class="small text-muted mb-0">A short internal <strong>code</strong> is generated from the name for history and receipts. It cannot be changed after creation.</p>
                     </div>
@@ -154,10 +171,19 @@ $supplyLabels = [
                     </select>
                 </div>
                 <div class="col-md-6">
-                    <div class="form-check mt-4 pt-1">
-                        <input class="form-check-input" type="checkbox" name="show_addon_supplies" value="1" id="addon_<?= $rid ?>"
-                            <?= ! empty($r['show_addon_supplies']) ? 'checked' : '' ?>>
-                        <label class="form-check-label" for="addon_<?= $rid ?>">Show add-on supplies (extra charged qty)</label>
+                    <div class="d-flex flex-wrap gap-3 mt-4 pt-1">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="show_addon_supplies" value="1" id="addon_<?= $rid ?>"
+                                <?= ! empty($r['show_addon_supplies']) ? 'checked' : '' ?>>
+                            <label class="form-check-label" for="addon_<?= $rid ?>">Show add-on supplies (extra charged qty)</label>
+                        </div>
+                        <?php if ($rewardSystemActive): ?>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="include_in_rewards" value="1" id="inc_rewards_<?= $rid ?>"
+                                <?= ! empty($r['include_in_rewards']) ? 'checked' : '' ?>>
+                            <label class="form-check-label" for="inc_rewards_<?= $rid ?>">Include to Reward System</label>
+                        </div>
+                        <?php endif; ?>
                     </div>
                 </div>
                 <div class="col-12">
@@ -173,6 +199,7 @@ $supplyLabels = [
     const kind = document.getElementById('new_ot_kind');
     const supply = document.getElementById('new_supply_block');
     const addon = document.getElementById('new_show_addon');
+    const incRewards = document.getElementById('new_include_rewards');
     const modal = document.getElementById('addOrderTypeModal');
     if (!kind || !supply || !addon) return;
     const sync = () => {
@@ -180,20 +207,37 @@ $supplyLabels = [
         if (v === 'full_service') {
             supply.value = 'full_service';
             addon.checked = true;
+            if (incRewards) incRewards.checked = true;
         } else if (v === 'wash_only') {
             supply.value = 'wash_supplies';
             addon.checked = true;
+            if (incRewards) incRewards.checked = false;
         } else if (v === 'dry_only') {
             supply.value = 'none';
             addon.checked = false;
+            if (incRewards) incRewards.checked = false;
         } else if (v === 'rinse_only') {
             supply.value = 'rinse_supplies';
             addon.checked = false;
+            if (incRewards) incRewards.checked = false;
         }
     };
     kind.addEventListener('change', sync);
     modal?.addEventListener('hidden.bs.modal', () => {
         setTimeout(sync, 0);
+    });
+    document.querySelectorAll('form[action*="/types/"][action*="/update"]').forEach((form) => {
+        const k = form.querySelector('select[name="service_kind"]');
+        const inc = form.querySelector('input[name="include_in_rewards"]');
+        if (!k || !inc) return;
+        const rowSync = () => {
+            if (k.value === 'full_service') {
+                inc.checked = true;
+            } else {
+                inc.checked = false;
+            }
+        };
+        k.addEventListener('change', rowSync);
     });
 })();
 </script>

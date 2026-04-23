@@ -1034,6 +1034,7 @@ final class LaundryController
 
         return view_page('Order Type Pricing', 'tenant.laundry.order-type-pricing', [
             'order_types' => $st->fetchAll(PDO::FETCH_ASSOC),
+            'reward_system_active' => $this->rewardProgramIsActive($pdo, $tenantId),
         ]);
     }
 
@@ -1065,10 +1066,11 @@ final class LaundryController
         }
 
         $code = $this->generateUniqueOrderTypeCode($pdo, $tenantId, $label);
+        $includeInRewards = $this->resolveIncludeInRewardsForSave($pdo, $tenantId, $serviceKind, $request, false);
         $pdo->prepare(
-            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, price_per_load, sort_order, is_active, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())'
-        )->execute([$tenantId, $code, $label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $price, $sortOrder]);
+            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, price_per_load, sort_order, is_active, include_in_rewards, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
+        )->execute([$tenantId, $code, $label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $price, $sortOrder, $includeInRewards]);
 
         session_flash('success', 'Order type added.');
 
@@ -1110,10 +1112,18 @@ final class LaundryController
             return redirect(route('tenant.laundry-order-pricing.index'));
         }
 
-        $pdo->prepare(
-            'UPDATE laundry_order_types SET label = ?, service_kind = ?, supply_block = ?, show_addon_supplies = ?, price_per_load = ?, sort_order = ?, is_active = ?, updated_at = NOW()
-             WHERE tenant_id = ? AND id = ?'
-        )->execute([$label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $price, $sortOrder, $isActive ? 1 : 0, $tenantId, $rowId]);
+        $includeInRewards = $this->resolveIncludeInRewardsForSave($pdo, $tenantId, $serviceKind, $request, true);
+        if ($includeInRewards !== null) {
+            $pdo->prepare(
+                'UPDATE laundry_order_types SET label = ?, service_kind = ?, supply_block = ?, show_addon_supplies = ?, price_per_load = ?, sort_order = ?, is_active = ?, include_in_rewards = ?, updated_at = NOW()
+                 WHERE tenant_id = ? AND id = ?'
+            )->execute([$label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $price, $sortOrder, $isActive ? 1 : 0, $includeInRewards, $tenantId, $rowId]);
+        } else {
+            $pdo->prepare(
+                'UPDATE laundry_order_types SET label = ?, service_kind = ?, supply_block = ?, show_addon_supplies = ?, price_per_load = ?, sort_order = ?, is_active = ?, updated_at = NOW()
+                 WHERE tenant_id = ? AND id = ?'
+            )->execute([$label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $price, $sortOrder, $isActive ? 1 : 0, $tenantId, $rowId]);
+        }
 
         session_flash('success', 'Order type updated.');
 
@@ -1506,8 +1516,7 @@ final class LaundryController
 
             if ((int) ($order['is_free'] ?? 0) !== 1 && (int) ($order['is_reward'] ?? 0) !== 1) {
                 $otDef = $this->fetchOrderTypeByCode($pdo, $tenantId, (string) ($order['order_type'] ?? ''));
-                $serviceKind = (string) ($otDef['service_kind'] ?? '');
-                $this->applyRewardsCounter($pdo, $tenantId, (int) ($order['customer_id'] ?? 0) ?: null, $serviceKind, $id, (int) (Auth::user()['id'] ?? 0));
+                $this->applyRewardsCounter($pdo, $tenantId, (int) ($order['customer_id'] ?? 0) ?: null, $otDef, $id, (int) (Auth::user()['id'] ?? 0));
             } else {
                 $completedWithoutPayment = true;
             }
@@ -1560,7 +1569,7 @@ final class LaundryController
         $pdo->beginTransaction();
         try {
             $st = $pdo->prepare(
-                'SELECT id, status, is_void
+                'SELECT id, status, is_void, payment_status, customer_id, is_free, is_reward
                  FROM laundry_orders
                  WHERE tenant_id = ? AND id = ?
                  LIMIT 1
@@ -1574,6 +1583,7 @@ final class LaundryController
             if ((int) ($order['is_void'] ?? 0) === 1 || (string) ($order['status'] ?? '') === 'void') {
                 throw new \RuntimeException('Transaction is already void.');
             }
+            $this->reverseRewardEarnForVoidedOrderIfApplicable($pdo, $tenantId, $id, $order, $userId);
             $pdo->prepare(
                 'UPDATE laundry_machines
                  SET status = "available", current_order_id = NULL, updated_at = NOW()
@@ -1699,6 +1709,7 @@ final class LaundryController
         return view_page('Customer Profile', 'tenant.laundry.customers', [
             'customers' => $st->fetchAll(PDO::FETCH_ASSOC),
             'premium_trial_browse_lock' => Auth::isTenantFreePlanRestricted(Auth::user()),
+            'reward_system_active' => $this->rewardProgramIsActive($pdo, $tenantId),
         ]);
     }
 
@@ -1771,6 +1782,116 @@ final class LaundryController
         ]);
 
         session_flash('success', 'Customer updated.');
+
+        return redirect(route('tenant.customers.index'));
+    }
+
+    public function customersAdjustRewards(Request $request, string $id): Response
+    {
+        if (Auth::isTenantFreePlanRestricted(Auth::user())) {
+            session_flash('errors', ['Premium: rewards actions are not available in Free Mode.']);
+
+            return redirect(route('tenant.customers.index'));
+        }
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+        $customerId = max(0, (int) $id);
+        $adjustType = strtolower(trim((string) $request->input('adjust_type', 'add')));
+        if (! in_array($adjustType, ['add', 'deduct'], true)) {
+            $adjustType = 'add';
+        }
+        $count = round((float) $request->input('points_count', 0), 4);
+        $delta = $adjustType === 'deduct' ? -$count : $count;
+        if ($customerId < 1) {
+            session_flash('errors', ['Invalid customer selected.']);
+
+            return redirect(route('tenant.customers.index'));
+        }
+        if ($count < 0.0001) {
+            session_flash('errors', ['Enter a count greater than zero.']);
+
+            return redirect(route('tenant.customers.index'));
+        }
+        if ($count > 1000000) {
+            session_flash('errors', ['Adjustment is too large.']);
+
+            return redirect(route('tenant.customers.index'));
+        }
+
+        $userId = (int) (Auth::user()['id'] ?? 0);
+        $pdo->beginTransaction();
+        try {
+            $cst = $pdo->prepare('SELECT id, name FROM laundry_customers WHERE tenant_id = ? AND id = ? LIMIT 1 FOR UPDATE');
+            $cst->execute([$tenantId, $customerId]);
+            $customer = $cst->fetch(PDO::FETCH_ASSOC);
+            if (! is_array($customer)) {
+                throw new \RuntimeException('Customer not found.');
+            }
+
+            $pdo->prepare(
+                'INSERT INTO laundry_customer_points (tenant_id, customer_id, points_balance, lifetime_earned, lifetime_redeemed, created_at, updated_at)
+                 VALUES (?, ?, 0, 0, 0, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE updated_at = updated_at'
+            )->execute([$tenantId, $customerId]);
+
+            $ptSt = $pdo->prepare(
+                'SELECT id, points_balance, lifetime_earned, lifetime_redeemed
+                 FROM laundry_customer_points
+                 WHERE tenant_id = ? AND customer_id = ?
+                 LIMIT 1
+                 FOR UPDATE'
+            );
+            $ptSt->execute([$tenantId, $customerId]);
+            $pt = $ptSt->fetch(PDO::FETCH_ASSOC);
+            if (! is_array($pt)) {
+                throw new \RuntimeException('Customer reward row was not found.');
+            }
+
+            $before = (float) ($pt['points_balance'] ?? 0);
+            $after = round($before + $delta, 4);
+            if ($after < -0.0001) {
+                throw new \RuntimeException('Cannot deduct more than the current reward count.');
+            }
+            $after = max(0.0, $after);
+            $earned = (float) ($pt['lifetime_earned'] ?? 0);
+            $redeemed = (float) ($pt['lifetime_redeemed'] ?? 0);
+            if ($delta > 0) {
+                $earned = round($earned + $delta, 4);
+            } else {
+                $redeemed = round($redeemed + abs($delta), 4);
+            }
+
+            $pdo->prepare(
+                'UPDATE laundry_customer_points
+                 SET points_balance = ?, lifetime_earned = ?, lifetime_redeemed = ?, updated_at = NOW()
+                 WHERE id = ?'
+            )->execute([$after, $earned, $redeemed, (int) ($pt['id'] ?? 0)]);
+
+            try {
+                $pdo->prepare(
+                    'INSERT INTO laundry_reward_events (tenant_id, customer_id, order_id, event_type, points_delta, balance_after, reward_config_id, reward_order_type_code, actor_user_id, created_at)
+                     VALUES (?, ?, NULL, "manual_adjustment", ?, ?, NULL, NULL, ?, NOW())'
+                )->execute([$tenantId, $customerId, $delta, $after, $userId > 0 ? $userId : null]);
+            } catch (\Throwable) {
+                // Keep adjustment working even if reward events table is unavailable.
+            }
+            $pdo->commit();
+
+            $customerName = (string) ($customer['name'] ?? 'Customer');
+            $sign = $delta > 0 ? '+' : '';
+            session_flash('success', 'Reward count adjusted for '.$customerName.' ('.$sign.number_format($delta, 2).').');
+        } catch (\RuntimeException $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            session_flash('errors', [$e->getMessage()]);
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
 
         return redirect(route('tenant.customers.index'));
     }
@@ -2207,6 +2328,11 @@ final class LaundryController
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
 
+        $prevCfgSt = $pdo->prepare('SELECT is_active FROM laundry_reward_configs WHERE tenant_id = ? LIMIT 1');
+        $prevCfgSt->execute([$tenantId]);
+        $prevCfgRow = $prevCfgSt->fetch(PDO::FETCH_ASSOC);
+        $wasRewardSystemActive = is_array($prevCfgRow) && (int) ($prevCfgRow['is_active'] ?? 0) === 1;
+
         $fullServicesRequired = max(1, (int) $request->input('full_services_required', 10));
         $rewardName = trim((string) $request->input('reward_name', 'Reward'));
         $rewardDescription = trim((string) $request->input('reward_description', ''));
@@ -2252,6 +2378,15 @@ final class LaundryController
             $minimumPointsToRedeem,
             $isActive,
         ]);
+
+        if ($isActive === 1 && ! $wasRewardSystemActive) {
+            try {
+                $pdo->prepare(
+                    'UPDATE laundry_order_types SET include_in_rewards = 1 WHERE tenant_id = ? AND service_kind = ?'
+                )->execute([$tenantId, 'full_service']);
+            } catch (\Throwable) {
+            }
+        }
 
         session_flash('success', 'Rewards config updated.');
 
@@ -2886,19 +3021,142 @@ final class LaundryController
         return $st->fetchColumn();
     }
 
-    private function applyRewardsCounter(PDO $pdo, int $tenantId, ?int $customerId, string $serviceKind, ?int $orderId = null, ?int $actorUserId = null): void
+    /**
+     * When a paid, stamp-earning order is voided, remove the reward load that was granted at payment
+     * (prevents paying then voiding to farm stamps). Idempotent via void_reversal event per order.
+     *
+     * @param  array<string, mixed>  $order
+     */
+    private function reverseRewardEarnForVoidedOrderIfApplicable(PDO $pdo, int $tenantId, int $orderId, array $order, int $actorUserId): void
+    {
+        try {
+            if ((int) ($order['is_free'] ?? 0) === 1 || (int) ($order['is_reward'] ?? 0) === 1) {
+                return;
+            }
+            if ((string) ($order['payment_status'] ?? '') !== 'paid') {
+                return;
+            }
+            $customerId = (int) ($order['customer_id'] ?? 0);
+            if ($customerId < 1) {
+                return;
+            }
+
+            $dup = $pdo->prepare(
+                'SELECT id FROM laundry_reward_events WHERE tenant_id = ? AND order_id = ? AND event_type = ? LIMIT 1'
+            );
+            $dup->execute([$tenantId, $orderId, 'void_reversal']);
+            if ($dup->fetch(PDO::FETCH_ASSOC)) {
+                return;
+            }
+
+            $sumSt = $pdo->prepare(
+                'SELECT COALESCE(SUM(points_delta), 0) FROM laundry_reward_events WHERE tenant_id = ? AND order_id = ? AND event_type = ?'
+            );
+            $sumSt->execute([$tenantId, $orderId, 'earned']);
+            $earned = (float) $sumSt->fetchColumn();
+            if ($earned <= 1e-9) {
+                return;
+            }
+
+            $pto = $pdo->prepare(
+                'SELECT id, points_balance, lifetime_earned FROM laundry_customer_points WHERE tenant_id = ? AND customer_id = ? FOR UPDATE'
+            );
+            $pto->execute([$tenantId, $customerId]);
+            $pt = $pto->fetch(PDO::FETCH_ASSOC);
+            if (! is_array($pt)) {
+                return;
+            }
+
+            $balance = (float) ($pt['points_balance'] ?? 0);
+            $life = (float) ($pt['lifetime_earned'] ?? 0);
+            $newBalance = max(0.0, $balance - $earned);
+            $newLife = max(0.0, $life - $earned);
+
+            $pdo->prepare(
+                'UPDATE laundry_customer_points SET points_balance = ?, lifetime_earned = ?, updated_at = NOW() WHERE id = ?'
+            )->execute([$newBalance, $newLife, (int) ($pt['id'] ?? 0)]);
+
+            $cfgSt = $pdo->prepare('SELECT id, reward_order_type_code FROM laundry_reward_configs WHERE tenant_id = ? LIMIT 1');
+            $cfgSt->execute([$tenantId]);
+            $cfg = $cfgSt->fetch(PDO::FETCH_ASSOC);
+            $rewardConfigId = is_array($cfg) && (int) ($cfg['id'] ?? 0) > 0 ? (int) $cfg['id'] : null;
+            $rewardOrderTypeCode = is_array($cfg) ? ($cfg['reward_order_type_code'] ?? null) : null;
+
+            $pdo->prepare(
+                'INSERT INTO laundry_reward_events (tenant_id, customer_id, order_id, event_type, points_delta, balance_after, reward_config_id, reward_order_type_code, actor_user_id, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())'
+            )->execute([
+                $tenantId,
+                $customerId,
+                $orderId,
+                'void_reversal',
+                -$earned,
+                $newBalance,
+                $rewardConfigId,
+                $rewardOrderTypeCode !== '' ? $rewardOrderTypeCode : null,
+                $actorUserId > 0 ? $actorUserId : null,
+            ]);
+        } catch (\PDOException $e) {
+            $state = (string) ($e->errorInfo[0] ?? '');
+            if ($state === '42S02' || str_contains(strtolower($e->getMessage()), 'base table or view not found')) {
+                return;
+            }
+            throw $e;
+        }
+    }
+
+    private function rewardProgramIsActive(PDO $pdo, int $tenantId): bool
+    {
+        try {
+            $st = $pdo->prepare('SELECT is_active FROM laundry_reward_configs WHERE tenant_id = ? LIMIT 1');
+            $st->execute([$tenantId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+
+            return is_array($row) && (int) ($row['is_active'] ?? 0) === 1;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /** When $isUpdate is true and rewards are inactive, returns null so the stored flag is not changed. */
+    private function resolveIncludeInRewardsForSave(PDO $pdo, int $tenantId, string $serviceKind, Request $request, bool $isUpdate): ?int
+    {
+        if (! $this->rewardProgramIsActive($pdo, $tenantId)) {
+            if ($isUpdate) {
+                return null;
+            }
+
+            return $serviceKind === 'full_service' ? 1 : 0;
+        }
+
+        return $request->boolean('include_in_rewards') ? 1 : 0;
+    }
+
+    private function orderTypeEarnsRewardPoints(?array $orderType): bool
+    {
+        if (! is_array($orderType)) {
+            return false;
+        }
+        if (array_key_exists('include_in_rewards', $orderType)) {
+            return (int) ($orderType['include_in_rewards'] ?? 0) === 1;
+        }
+
+        return (string) ($orderType['service_kind'] ?? '') === 'full_service';
+    }
+
+    private function applyRewardsCounter(PDO $pdo, int $tenantId, ?int $customerId, ?array $orderType, ?int $orderId = null, ?int $actorUserId = null): void
     {
         if ($customerId === null || $customerId < 1) {
-            return;
-        }
-        if ($serviceKind !== 'full_service') {
             return;
         }
 
         $cfgSt = $pdo->prepare('SELECT * FROM laundry_reward_configs WHERE tenant_id = ? LIMIT 1');
         $cfgSt->execute([$tenantId]);
-        $cfg = $cfgSt->fetch(PDO::FETCH_ASSOC) ?: null;
-        if ($cfg && ! (bool) ($cfg['is_active'] ?? true)) {
+        $cfg = $cfgSt->fetch(PDO::FETCH_ASSOC);
+        if (! is_array($cfg) || ! (bool) ($cfg['is_active'] ?? false)) {
+            return;
+        }
+        if (! $this->orderTypeEarnsRewardPoints($orderType)) {
             return;
         }
         $serviceCount = 1.0;
@@ -2926,8 +3184,8 @@ final class LaundryController
             $orderId,
             $serviceCount,
             $balance,
-            is_array($cfg) ? (int) ($cfg['id'] ?? 0) : null,
-            is_array($cfg) ? ($cfg['reward_order_type_code'] ?? null) : null,
+            (int) ($cfg['id'] ?? 0) ?: null,
+            $cfg['reward_order_type_code'] ?? null,
             $actorUserId !== null && $actorUserId > 0 ? $actorUserId : null,
         ]);
         $threshold = max(1.0, (float) ($cfg['minimum_points_to_redeem'] ?? $cfg['reward_points_cost'] ?? 10));

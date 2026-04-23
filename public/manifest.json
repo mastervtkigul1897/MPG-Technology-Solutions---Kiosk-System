@@ -1,0 +1,27 @@
+{
+  "id": "/",
+  "name": "MPG LMS",
+  "short_name": "MPG LMS",
+  "description": "MPG LMS — laundry shop management, orders, staff, POS, and reports.",
+  "start_url": "/login",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7fafc",
+  "theme_color": "#2563eb",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/images/branding/mpglms-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/images/branding/mpglms-logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

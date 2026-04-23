@@ -17,6 +17,13 @@ final class HomeController
         ]);
     }
 
+    public function installApp(Request $request): Response
+    {
+        return response_view('install-app', [
+            'title' => 'Install App',
+        ]);
+    }
+
     public function pricing(Request $request): Response
     {
         return view_guest('Pricing', 'pricing');

@@ -697,6 +697,31 @@
     }
 
     /**
+     * Prompt/select Bluetooth printer as early as possible inside a direct user gesture.
+     * This is useful for installed PWAs where delayed async work can lose gesture context.
+     */
+    window.mpgPrimeEscposBluetoothPermission = function () {
+        var androidBridge = mpgAndroidBridge();
+        if (androidBridge) {
+            return Promise.resolve(true);
+        }
+        if (!navigator.bluetooth) {
+            return Promise.reject(
+                new Error(
+                    'Web Bluetooth not available. Use Chrome or Edge over HTTPS, or use Print / Wi‑Fi printing.'
+                )
+            );
+        }
+        return mpgBleResolvePrinterDevice().then(function (device) {
+            MPG_BLE_LAST_DEVICE = device || null;
+            if (device && device.id) {
+                mpgBleStorageSet(MPG_BLE_DEVICE_ID_KEY, String(device.id));
+            }
+            return true;
+        });
+    };
+
+    /**
      * ESC/POS over BLE thermal printer.
      * First print: requestDevice (pair/select printer). Later: getDevices + saved id — no picker while permission remains.
      */
@@ -713,6 +738,28 @@
                     'Web Bluetooth not available. Use Chrome or Edge over HTTPS, or use Print / Wi‑Fi printing.'
                 )
             );
+        }
+        // Installed PWA can lose gesture context on a second requestDevice() call.
+        // If we already primed/selected a device in this click flow, try it first.
+        if (MPG_BLE_LAST_DEVICE) {
+            return mpgBleTryPrintOnDevice(MPG_BLE_LAST_DEVICE, bytes).then(function (okLast) {
+                if (okLast) {
+                    return;
+                }
+                return mpgBleResolvePrinterDevice().then(function (device) {
+                    return mpgBleTryPrintOnDevice(device, bytes).then(function (ok) {
+                        if (!ok) {
+                            throw new Error(
+                                'No writable Bluetooth characteristic found. Pair the printer or use Wi‑Fi/LAN raw printing.'
+                            );
+                        }
+                        MPG_BLE_LAST_DEVICE = device || null;
+                        if (device && device.id) {
+                            mpgBleStorageSet(MPG_BLE_DEVICE_ID_KEY, String(device.id));
+                        }
+                    });
+                });
+            });
         }
         return mpgBleResolvePrinterDevice().then(function (device) {
             return mpgBleTryPrintOnDevice(device, bytes).then(function (ok) {

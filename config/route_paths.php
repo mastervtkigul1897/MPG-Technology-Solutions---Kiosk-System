@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 return [
     'welcome' => '/',
+    'install.app' => '/install-app',
     'pricing' => '/pricing',
     'login' => '/login',
     'register' => '/register',
@@ -94,6 +95,7 @@ return [
     'tenant.customers.store' => '/tenant/customers',
     'tenant.customers.update' => '/tenant/customers/{id}',
     'tenant.customers.destroy' => '/tenant/customers/{id}',
+    'tenant.customers.rewards.adjust' => '/tenant/customers/{id}/rewards-adjust',
     'tenant.redeem-config.index' => '/tenant/redeem-rewards-config',
     'tenant.redeem-config.update' => '/tenant/redeem-rewards-config',
     'tenant.redeem-config.redeem' => '/tenant/redeem-rewards-config/redeem',

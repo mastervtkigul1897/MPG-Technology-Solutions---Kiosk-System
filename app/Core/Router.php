@@ -238,6 +238,7 @@ final class Router
         };
 
         $r(['GET'], '#^/$#', HomeController::class.'::welcome', 'welcome', ['guest']);
+        $r(['GET'], '#^/install-app$#', HomeController::class.'::installApp', 'install.app', ['guest']);
         $r(['GET'], '#^/pricing$#', HomeController::class.'::pricing', 'pricing', ['guest']);
         $r(['GET'], '#^/login$#', AuthController::class.'::showLogin', 'login', ['guest']);
         $r(['POST'], '#^/login$#', AuthController::class.'::login', 'login.post', ['guest']);
@@ -356,6 +357,7 @@ final class Router
         $r(['POST'], '#^/tenant/customers$#', LaundryController::class.'::customersStore', 'tenant.customers.store', array_merge($ta, ['tenant.access:transactions']));
         $r(['PUT'], '#^/tenant/customers/(\d+)$#', LaundryController::class.'::customersUpdate', 'tenant.customers.update', array_merge($ta, ['tenant.access:transactions']));
         $r(['DELETE'], '#^/tenant/customers/(\d+)$#', LaundryController::class.'::customersDestroy', 'tenant.customers.destroy', array_merge($ta, ['tenant.access:transactions']));
+        $r(['POST'], '#^/tenant/customers/(\d+)/rewards-adjust$#', LaundryController::class.'::customersAdjustRewards', 'tenant.customers.rewards.adjust', array_merge($ta, ['tenant.access:transactions']));
         $r(['GET'], '#^/tenant/redeem-rewards-config$#', LaundryController::class.'::redeemConfigIndex', 'tenant.redeem-config.index', $tenantAdmin);
         $r(['POST'], '#^/tenant/redeem-rewards-config$#', LaundryController::class.'::redeemConfigUpdate', 'tenant.redeem-config.update', $tenantAdmin);
         $r(['POST'], '#^/tenant/redeem-rewards-config/redeem$#', LaundryController::class.'::redeemGift', 'tenant.redeem-config.redeem', $tenantAdmin);

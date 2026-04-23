@@ -274,6 +274,20 @@ final class LaundrySchema
 
         self::addColumnIfMissing($pdo, 'laundry_order_types', 'supply_block', 'VARCHAR(32) NOT NULL DEFAULT \'none\' AFTER service_kind');
         self::addColumnIfMissing($pdo, 'laundry_order_types', 'show_addon_supplies', 'TINYINT(1) NOT NULL DEFAULT 1 AFTER supply_block');
+        try {
+            $chk = $pdo->prepare('SHOW COLUMNS FROM `laundry_order_types` LIKE ?');
+            $chk->execute(['include_in_rewards']);
+            $includeRewardsMissing = $chk->fetch(PDO::FETCH_ASSOC) === false;
+        } catch (\Throwable) {
+            $includeRewardsMissing = false;
+        }
+        self::addColumnIfMissing($pdo, 'laundry_order_types', 'include_in_rewards', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER is_active');
+        if ($includeRewardsMissing) {
+            try {
+                $pdo->exec("UPDATE laundry_order_types SET include_in_rewards = 1 WHERE service_kind = 'full_service'");
+            } catch (\Throwable) {
+            }
+        }
 
         self::widenOrderTypeColumn($pdo);
         self::ensureOrderTypesForAllTenants($pdo);
@@ -390,8 +404,8 @@ final class LaundrySchema
         }
         $countSt = $pdo->prepare('SELECT COUNT(*) FROM laundry_order_types WHERE tenant_id = ?');
         $ins = $pdo->prepare(
-            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, price_per_load, sort_order, is_active, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())'
+            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, price_per_load, sort_order, is_active, include_in_rewards, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
         );
         foreach ($tenantIds as $tid) {
             $tenantId = (int) $tid;
@@ -415,10 +429,10 @@ final class LaundrySchema
                 }
             } catch (\Throwable) {
             }
-            $ins->execute([$tenantId, 'drop_off', 'Drop-off (Full Service)', 'full_service', 'full_service', 1, $pDrop, 1]);
-            $ins->execute([$tenantId, 'wash_only', 'Wash only', 'wash_only', 'wash_supplies', 1, $pWash, 2]);
-            $ins->execute([$tenantId, 'dry_only', 'Dry only', 'dry_only', 'none', 0, $pDry, 3]);
-            $ins->execute([$tenantId, 'rinse_only', 'Rinse only', 'rinse_only', 'rinse_supplies', 0, $pWash, 4]);
+            $ins->execute([$tenantId, 'drop_off', 'Drop-off (Full Service)', 'full_service', 'full_service', 1, $pDrop, 1, 1]);
+            $ins->execute([$tenantId, 'wash_only', 'Wash only', 'wash_only', 'wash_supplies', 1, $pWash, 2, 0]);
+            $ins->execute([$tenantId, 'dry_only', 'Dry only', 'dry_only', 'none', 0, $pDry, 3, 0]);
+            $ins->execute([$tenantId, 'rinse_only', 'Rinse only', 'rinse_only', 'rinse_supplies', 0, $pWash, 4, 0]);
         }
     }
 
@@ -435,8 +449,8 @@ final class LaundrySchema
         $chk = $pdo->prepare('SELECT 1 FROM laundry_order_types WHERE tenant_id = ? AND code = \'rinse_only\' LIMIT 1');
         $priceWash = $pdo->prepare('SELECT price_per_load FROM laundry_order_types WHERE tenant_id = ? AND code = \'wash_only\' LIMIT 1');
         $ins = $pdo->prepare(
-            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, price_per_load, sort_order, is_active, created_at, updated_at)
-             VALUES (?, \'rinse_only\', \'Rinse only\', \'rinse_only\', \'rinse_supplies\', 0, ?, 4, 1, NOW(), NOW())'
+            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, price_per_load, sort_order, is_active, include_in_rewards, created_at, updated_at)
+             VALUES (?, \'rinse_only\', \'Rinse only\', \'rinse_only\', \'rinse_supplies\', 0, ?, 4, 1, 0, NOW(), NOW())'
         );
         foreach ($tenantIds as $tid) {
             $tenantId = (int) $tid;

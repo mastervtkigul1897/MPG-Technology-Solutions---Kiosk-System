@@ -3,6 +3,7 @@ $appName = \App\Core\App::config('name') ?? 'Laundry System';
 $brandLogoPath = url('images/branding/mpglms-logo.png');
 $brandName = (string) $appName;
 $facebookUrl = 'https://www.facebook.com/mpgtechnologysolutionscom';
+$installAppHref = url('/install-app');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -13,6 +14,8 @@ $facebookUrl = 'https://www.facebook.com/mpgtechnologysolutionscom';
     <link rel="icon" type="image/png" sizes="512x512" href="<?= e($brandLogoPath) ?>">
     <link rel="shortcut icon" href="<?= e($brandLogoPath) ?>">
     <link rel="apple-touch-icon" href="<?= e($brandLogoPath) ?>">
+    <link rel="manifest" href="<?= e(url('/manifest.json')) ?>">
+    <meta name="theme-color" content="#2563eb">
     <link href="<?= e(url('vendor/bootstrap/bootstrap.min.css')) ?>" rel="stylesheet">
     <link href="<?= e(url('vendor/fonts/manrope/manrope.css')) ?>" rel="stylesheet">
     <link rel="stylesheet" href="<?= e(url('vendor/fontawesome/css/all.min.css')) ?>">
@@ -23,6 +26,14 @@ $facebookUrl = 'https://www.facebook.com/mpgtechnologysolutionscom';
         .feature-icon { width: 2.5rem; height: 2.5rem; }
         .pain-item { border-left: 4px solid #ef4444; background: #fff; }
         .solution-item { border-left: 4px solid #10b981; background: #fff; }
+        .btn-install-emphasis {
+            font-size: 1.125rem;
+            font-weight: 700;
+            padding: 0.85rem 1.75rem;
+            box-shadow: 0 0.35rem 1.25rem rgba(0, 0, 0, 0.2);
+        }
+        .btn-install-emphasis:hover { box-shadow: 0 0.45rem 1.5rem rgba(0, 0, 0, 0.28); }
+        a.landing-login-trigger[href="#"] { cursor: pointer; }
     </style>
 </head>
 <body>
@@ -39,7 +50,8 @@ $facebookUrl = 'https://www.facebook.com/mpgtechnologysolutionscom';
             <ul class="navbar-nav ms-auto align-items-lg-center gap-lg-2">
                 <li class="nav-item"><a class="nav-link" href="#home">Home</a></li>
                 <li class="nav-item"><a class="nav-link" href="<?= e(url('/pricing')) ?>">Pricing</a></li>
-                <li class="nav-item"><a class="nav-link" href="<?= e(url('/login')) ?>">Login</a></li>
+                <li class="nav-item"><a class="nav-link" href="<?= e($installAppHref) ?>">Install App</a></li>
+                <li class="nav-item"><a class="nav-link landing-login-trigger" href="#" role="button" data-bs-toggle="modal" data-bs-target="#landingLoginModal">Login</a></li>
                 <li class="nav-item"><a class="nav-link" href="<?= e($facebookUrl) ?>" target="_blank" rel="noopener noreferrer">Contact us</a></li>
             </ul>
         </div>
@@ -53,10 +65,13 @@ $facebookUrl = 'https://www.facebook.com/mpgtechnologysolutionscom';
                 <span class="badge text-bg-light text-dark mb-3">Built for Laundry Shop Owners</span>
                 <h1 class="display-5 fw-bold mb-3">Run your laundry business faster, cleaner, and more profitably.</h1>
                 <p class="lead mb-4">From walk-in orders and receipts to staff, expenses, inventory, branch operations, and reports — everything is in one modern system.</p>
+                <div class="mb-3">
+                    <a href="<?= e($installAppHref) ?>" class="btn btn-light btn-install-emphasis text-primary text-center"><span class="d-inline-flex flex-column align-items-center lh-sm"><span><i class="fa-solid fa-mobile-screen-button me-2"></i>Install App</span><span class="small fw-semibold mt-1 opacity-90">One Time Setup</span></span></a>
+                </div>
                 <div class="d-flex flex-wrap gap-2">
                     <a href="<?= e(url('/register')) ?>" class="btn btn-warning fw-semibold"><i class="fa-solid fa-bolt me-1"></i>Start 7-day free trial</a>
                     <a href="<?= e(url('/pricing')) ?>" class="btn btn-outline-light">View pricing</a>
-                    <a href="<?= e(url('/login')) ?>" class="btn btn-light text-primary">Login</a>
+                    <a href="#" class="btn btn-light text-primary landing-login-trigger" role="button" data-bs-toggle="modal" data-bs-target="#landingLoginModal">Login</a>
                 </div>
             </div>
             <div class="col-lg-5">
@@ -136,11 +151,14 @@ $facebookUrl = 'https://www.facebook.com/mpgtechnologysolutionscom';
         <div class="container">
             <div class="rounded-4 p-4 p-lg-5 bg-dark text-white text-center">
                 <h2 class="h3 mb-2">Ready to simplify your laundry operations?</h2>
-                <p class="text-white-50 mb-4">Start with a 7-day trial, explore pricing, or sign in to your store.</p>
+                <p class="text-white-50 mb-4">Start with a 7-day trial, explore pricing, or sign in to your store. Staff on phones can add the app from the install guide.</p>
+                <div class="mb-3 d-flex justify-content-center">
+                    <a href="<?= e($installAppHref) ?>" class="btn btn-light btn-install-emphasis text-primary text-center"><span class="d-inline-flex flex-column align-items-center lh-sm"><span><i class="fa-solid fa-mobile-screen-button me-2"></i>Install App</span><span class="small fw-semibold mt-1 opacity-90">One Time Setup</span></span></a>
+                </div>
                 <div class="d-flex flex-wrap justify-content-center gap-2">
                     <a href="<?= e(url('/register')) ?>" class="btn btn-warning fw-semibold">Start free trial</a>
                     <a href="<?= e(url('/pricing')) ?>" class="btn btn-outline-light">Pricing</a>
-                    <a href="<?= e(url('/login')) ?>" class="btn btn-light text-primary">Login</a>
+                    <a href="#" class="btn btn-light text-primary landing-login-trigger" role="button" data-bs-toggle="modal" data-bs-target="#landingLoginModal">Login</a>
                     <a href="<?= e($facebookUrl) ?>" target="_blank" rel="noopener noreferrer" class="btn btn-primary"><i class="fa-brands fa-facebook me-1"></i>Contact us</a>
                 </div>
             </div>
@@ -155,6 +173,98 @@ $facebookUrl = 'https://www.facebook.com/mpgtechnologysolutionscom';
     </div>
 </footer>
 
+<div class="modal fade" id="landingLoginModal" tabindex="-1" aria-labelledby="landingLoginModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="landingLoginModalLabel">Login</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="landingLoginErrors" class="alert alert-danger d-none py-2 small" role="alert"></div>
+                <form id="landingLoginForm" method="POST" action="<?= e(url('/login')) ?>">
+                    <?= csrf_field() ?>
+                    <div class="mb-3">
+                        <label class="form-label" for="landing_login_email">Email</label>
+                        <input type="email" class="form-control" id="landing_login_email" name="email" required autocomplete="email">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="landing_login_password">Password</label>
+                        <input type="password" class="form-control" id="landing_login_password" name="password" required autocomplete="current-password">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Login</button>
+                    <div class="text-center small mt-2">
+                        <a href="<?= e(url('/forgot-password')) ?>">Forgot password?</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="<?= e(url('vendor/bootstrap/bootstrap.bundle.min.js')) ?>"></script>
+<script>
+(function () {
+    document.querySelectorAll('.landing-login-trigger[href="#"]').forEach(function (el) {
+        el.addEventListener('click', function (e) { e.preventDefault(); });
+    });
+    var modalEl = document.getElementById('landingLoginModal');
+    var form = document.getElementById('landingLoginForm');
+    var errEl = document.getElementById('landingLoginErrors');
+    if (modalEl && form) {
+        modalEl.addEventListener('shown.bs.modal', function () {
+            var em = document.getElementById('landing_login_email');
+            if (em) { em.focus(); }
+        });
+        form.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            errEl.classList.add('d-none');
+            errEl.textContent = '';
+            var action = form.getAttribute('action');
+            try {
+                var r = await fetch(action, {
+                    method: 'POST',
+                    body: new FormData(form),
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Accept': 'application/json'
+                    },
+                    credentials: 'same-origin'
+                });
+                if (r.status === 429) {
+                    errEl.textContent = 'Too many attempts. Please wait a minute and try again.';
+                    errEl.classList.remove('d-none');
+                    return;
+                }
+                var ct = (r.headers.get('Content-Type') || '');
+                var data = {};
+                if (ct.indexOf('application/json') !== -1) {
+                    try { data = await r.json(); } catch (x) {}
+                }
+                if (r.status === 419) {
+                    errEl.textContent = (data && data.message) ? data.message : 'Session expired. Refresh the page and try again.';
+                    errEl.classList.remove('d-none');
+                    return;
+                }
+                var errs = (data.messages && data.messages.errors) ? data.messages.errors : [];
+                if (data.redirect && data.ok !== false && data.success !== false && errs.length === 0) {
+                    window.location.href = data.redirect;
+                    return;
+                }
+                if (errs.length) {
+                    errEl.textContent = errs.join(' ');
+                    errEl.classList.remove('d-none');
+                    return;
+                }
+                errEl.textContent = (data && data.message) ? data.message : 'Could not sign in. Please try again.';
+                errEl.classList.remove('d-none');
+            } catch (x) {
+                errEl.textContent = 'Network error. Please try again.';
+                errEl.classList.remove('d-none');
+            }
+        });
+    }
+})();
+</script>
 </body>
 </html>

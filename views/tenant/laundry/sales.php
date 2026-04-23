@@ -2182,11 +2182,17 @@ $machineOptionDisabled = static function (array $machine): bool {
             pushText(`${copyLabel}\n`);
         }
         pushText(line);
+        const escposMoney = (v, fallback = 'PHP 0.00') => {
+            const raw = String(v || '').trim();
+            if (!raw) return fallback;
+            // Avoid UTF-8 peso symbol on printers using legacy code pages (prevents "Ôé¼" mojibake).
+            return raw.replaceAll('₱', 'PHP ').replace(/\s+/g, ' ').trim();
+        };
         push(0x1b, 0x61, 0x00);
         pushText(`Customer: ${payload.customerName || 'Walk-in'}\n`);
         pushText(`Service: ${payload.serviceLabel || '-'}\n`);
         pushText(`Mode: ${payload.modeLabel || '-'}\n`);
-        pushText(`Total: ${payload.totalText || 'PHP 0.00'}\n`);
+        pushText(`Total: ${escposMoney(payload.totalText)}\n`);
         pushText(`Detergent: ${payload.detergentName || 'None'}\n`);
         pushText(`Fabcon: ${payload.fabconName || 'None'}\n`);
         pushText(`Bleach: ${payload.bleachName || 'None'}\n`);
@@ -2194,8 +2200,8 @@ $machineOptionDisabled = static function (array $machine): bool {
         pushText(`Included Fold: ${payload.includedFold || 'No'}\n`);
         if (includePaymentBlock) {
             pushText(`Payment: ${payload.paymentMethod || '—'}\n`);
-            if (payload.amountTenderedText) pushText(`Tendered: ${payload.amountTenderedText}\n`);
-            if (payload.changeText) pushText(`Change: ${payload.changeText}\n`);
+            if (payload.amountTenderedText) pushText(`Tendered: ${escposMoney(payload.amountTenderedText, '')}\n`);
+            if (payload.changeText) pushText(`Change: ${escposMoney(payload.changeText, '')}\n`);
         }
         if (payload.savedAt) pushText(`Saved: ${payload.savedAt}\n`);
         if (footer) {
