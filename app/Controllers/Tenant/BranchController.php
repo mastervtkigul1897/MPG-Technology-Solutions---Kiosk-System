@@ -20,6 +20,10 @@ final class BranchController
             return new Response('Forbidden.', 403);
         }
         $tenantId = (int) ($u['tenant_id'] ?? 0);
+        $activeTenantId = (int) session_get('active_tenant_id', 0);
+        if ($activeTenantId > 0) {
+            $tenantId = $activeTenantId;
+        }
         if ($tenantId < 1) {
             return new Response('Forbidden.', 403);
         }
@@ -34,6 +38,10 @@ final class BranchController
             return $baseGate;
         }
         $tenantId = (int) ($u['tenant_id'] ?? 0);
+        $activeTenantId = (int) session_get('active_tenant_id', 0);
+        if ($activeTenantId > 0) {
+            $tenantId = $activeTenantId;
+        }
         $svc = new BranchService();
         $tenant = $svc->getTenant($tenantId);
         if (! $tenant || ! (bool) ($tenant['is_main_branch'] ?? false)) {
@@ -54,6 +62,10 @@ final class BranchController
             return $gate;
         }
         $tenantId = (int) ($u['tenant_id'] ?? 0);
+        $activeTenantId = (int) session_get('active_tenant_id', 0);
+        if ($activeTenantId > 0) {
+            $tenantId = $activeTenantId;
+        }
         $svc = new BranchService();
         $activeTenant = $svc->getTenant($tenantId);
         $isMainBranchContext = (bool) ($activeTenant['is_main_branch'] ?? false);
@@ -68,6 +80,7 @@ final class BranchController
             'clone_defaults' => [],
             'premium_trial_browse_lock' => false,
             'machine_assignment_enabled' => $this->isMachineAssignmentEnabled($tenantId),
+            'laundry_status_tracking_enabled' => $this->getBoolConfig($tenantId, 'laundry_status_tracking_enabled', true),
             'fold_service_amount' => $this->getFoldServiceAmount($tenantId),
             'fold_commission_target' => $this->getFoldCommissionTarget($tenantId),
             'payroll_cutoff_days' => $this->getPayrollCutoffDays($tenantId),
@@ -178,7 +191,12 @@ final class BranchController
             return $gate;
         }
         $tenantId = (int) ($u['tenant_id'] ?? 0);
+        $activeTenantId = (int) session_get('active_tenant_id', 0);
+        if ($activeTenantId > 0) {
+            $tenantId = $activeTenantId;
+        }
         $enabled = $request->boolean('machine_assignment_enabled');
+        $laundryStatusTrackingEnabled = $request->boolean('laundry_status_tracking_enabled');
         $foldServiceAmount = max(0.0, (float) $request->input('fold_service_amount', 0));
         $foldCommissionTarget = strtolower(trim((string) $request->input('fold_commission_target', 'staff')));
         $payrollCutoffDays = max(1, min(31, (int) $request->input('payroll_cutoff_days', 15)));
@@ -202,10 +220,17 @@ final class BranchController
             $hasDailyQuota = $this->hasLaundryBranchConfigColumn($pdo, 'daily_load_quota');
             $hasCommissionRate = $this->hasLaundryBranchConfigColumn($pdo, 'commission_rate_per_load');
             $hasActivateOt = $this->hasLaundryBranchConfigColumn($pdo, 'activate_ot_incentives');
+            $hasLaundryStatusTracking = $this->hasLaundryBranchConfigColumn($pdo, 'laundry_status_tracking_enabled');
             $insertColumns = ['tenant_id', 'machine_assignment_enabled'];
             $insertValues = ['?', '?'];
             $updateParts = ['machine_assignment_enabled = VALUES(machine_assignment_enabled)'];
             $params = [$tenantId, $enabled ? 1 : 0];
+            if ($hasLaundryStatusTracking) {
+                $insertColumns[] = 'laundry_status_tracking_enabled';
+                $insertValues[] = '?';
+                $updateParts[] = 'laundry_status_tracking_enabled = VALUES(laundry_status_tracking_enabled)';
+                $params[] = $laundryStatusTrackingEnabled ? 1 : 0;
+            }
             if ($hasFoldAmount) {
                 $insertColumns[] = 'fold_service_amount';
                 $insertValues[] = '?';
@@ -267,6 +292,7 @@ final class BranchController
             $this->log($request, 'branch_laundry_config_update', 'Store owner updated branch laundry config', [
                 'tenant_id' => $tenantId,
                 'machine_assignment_enabled' => $enabled,
+                'laundry_status_tracking_enabled' => $laundryStatusTrackingEnabled,
                 'fold_service_amount' => $foldServiceAmount,
                 'fold_commission_target' => $foldCommissionTarget,
                 'payroll_cutoff_days' => $payrollCutoffDays,
@@ -459,6 +485,7 @@ final class BranchController
             }
         }
         foreach ([
+            'laundry_status_tracking_enabled' => 'ALTER TABLE laundry_branch_configs ADD COLUMN laundry_status_tracking_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER machine_assignment_enabled',
             'activate_commission' => 'ALTER TABLE laundry_branch_configs ADD COLUMN activate_commission TINYINT(1) NOT NULL DEFAULT 0 AFTER payroll_hours_per_day',
             'daily_load_quota' => 'ALTER TABLE laundry_branch_configs ADD COLUMN daily_load_quota INT NOT NULL DEFAULT 0 AFTER activate_commission',
             'commission_rate_per_load' => 'ALTER TABLE laundry_branch_configs ADD COLUMN commission_rate_per_load DECIMAL(16,4) NOT NULL DEFAULT 0 AFTER daily_load_quota',

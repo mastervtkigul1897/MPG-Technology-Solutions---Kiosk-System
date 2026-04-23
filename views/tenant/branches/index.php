@@ -5,6 +5,7 @@
 /** @var int $branch_limit */
 /** @var array<int,string> $clone_defaults */
 /** @var bool $machine_assignment_enabled */
+/** @var bool $laundry_status_tracking_enabled */
 /** @var float|int|string $fold_service_amount */
 /** @var string $fold_commission_target */
 /** @var bool $is_main_branch_context */
@@ -20,6 +21,7 @@ $currentTenantId = (int) ($current_tenant_id ?? 0);
 $limit = (int) ($branch_limit ?? 1);
 $defaults = $clone_defaults ?? ['categories', 'ingredients', 'requirements'];
 $machineAssignmentEnabled = (bool) ($machine_assignment_enabled ?? true);
+$laundryStatusTrackingEnabled = (bool) ($laundry_status_tracking_enabled ?? true);
 $foldServiceAmount = max(0.0, (float) ($fold_service_amount ?? 0));
 $foldCommissionTarget = strtolower(trim((string) ($fold_commission_target ?? 'staff')));
 $payrollCutoffDays = max(1, (int) ($payroll_cutoff_days ?? 15));
@@ -33,9 +35,16 @@ $canManageBranches = (bool) ($is_main_branch_context ?? false);
 
 <?php require dirname(__DIR__, 2).'/partials/premium_trial_page_banner.php'; ?>
 <div class="card border-0 shadow-sm mb-3">
-    <div class="card-body p-3 p-md-4">
-        <h6 class="mb-1">Your branch account</h6>
-        <div class="small text-muted">Main account: <?= e((string) ($rootTenant['name'] ?? '')) ?> · Allowed branches: <?= $limit ?></div>
+    <div class="card-body p-3 p-md-4 d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div>
+            <h6 class="mb-1">Your branch account</h6>
+            <div class="small text-muted">Main account: <?= e((string) ($rootTenant['name'] ?? '')) ?> · Allowed branches: <?= $limit ?></div>
+        </div>
+        <?php if ($canManageBranches): ?>
+            <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#createBranchModal">
+                <i class="fa-solid fa-plus me-1"></i>Add New Branch
+            </button>
+        <?php endif; ?>
     </div>
 </div>
 
@@ -45,19 +54,45 @@ $canManageBranches = (bool) ($is_main_branch_context ?? false);
         <p class="small text-muted mb-3">Set once per branch. Machine assignment and fold service amount are managed here (branch-level).</p>
         <form method="POST" action="<?= e(route('tenant.branches.laundry-config.update')) ?>" class="row g-3 align-items-end">
             <?= csrf_field() ?>
-            <div class="col-12 col-md-4">
-                <div class="form-check mb-0">
-                    <input
-                        class="form-check-input"
-                        type="checkbox"
-                        name="machine_assignment_enabled"
-                        id="machineAssignmentEnabled"
-                        value="1"
-                        <?= $machineAssignmentEnabled ? 'checked' : '' ?>
-                    >
-                    <label class="form-check-label" for="machineAssignmentEnabled">
-                        Enable machine assignment (auto by order type)
-                    </label>
+            <div class="col-12">
+                <div class="rounded-3 border bg-body-secondary bg-opacity-10 p-3">
+                    <div class="small fw-semibold text-secondary text-uppercase mb-2">Feature Toggles</div>
+                    <div class="d-flex flex-wrap gap-3">
+                        <div class="form-check mb-0">
+                            <input
+                                class="form-check-input"
+                                type="checkbox"
+                                name="machine_assignment_enabled"
+                                id="machineAssignmentEnabled"
+                                value="1"
+                                <?= $machineAssignmentEnabled ? 'checked' : '' ?>
+                            >
+                            <label class="form-check-label" for="machineAssignmentEnabled">
+                                Enable machine assignment (auto by order type)
+                            </label>
+                        </div>
+                        <div class="form-check mb-0">
+                            <input
+                                class="form-check-input"
+                                type="checkbox"
+                                name="laundry_status_tracking_enabled"
+                                id="laundryStatusTrackingEnabled"
+                                value="1"
+                                <?= $laundryStatusTrackingEnabled ? 'checked' : '' ?>
+                            >
+                            <label class="form-check-label" for="laundryStatusTrackingEnabled">
+                                Enable laundry status workflow (Pending/Washing/Drying/Finished)
+                            </label>
+                        </div>
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" name="activate_ot_incentives" id="activateOtIncentives" value="1" <?= $activateOtIncentives ? 'checked' : '' ?>>
+                            <label class="form-check-label" for="activateOtIncentives">Activate OT incentives</label>
+                        </div>
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" name="activate_commission" id="activateCommission" value="1" <?= $activateCommission ? 'checked' : '' ?>>
+                            <label class="form-check-label" for="activateCommission">Activate Commission</label>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="col-12 col-md-3">
@@ -87,18 +122,6 @@ $canManageBranches = (bool) ($is_main_branch_context ?? false);
                 <label class="form-label mb-1" for="payrollHoursPerDay">Required hours/day</label>
                 <input class="form-control" type="number" min="1" max="24" step="0.5" id="payrollHoursPerDay" name="payroll_hours_per_day" value="<?= e((string) number_format($payrollHoursPerDay, 2, '.', '')) ?>">
             </div>
-            <div class="col-12 col-md-3">
-                <div class="form-check mb-0">
-                    <input class="form-check-input" type="checkbox" name="activate_ot_incentives" id="activateOtIncentives" value="1" <?= $activateOtIncentives ? 'checked' : '' ?>>
-                    <label class="form-check-label" for="activateOtIncentives">Activate OT incentives</label>
-                </div>
-            </div>
-            <div class="col-12">
-                <div class="form-check mb-0">
-                    <input class="form-check-input" type="checkbox" name="activate_commission" id="activateCommission" value="1" <?= $activateCommission ? 'checked' : '' ?>>
-                    <label class="form-check-label" for="activateCommission">Activate Commission</label>
-                </div>
-            </div>
             <div class="col-12 row g-3 ms-0 px-0" id="commissionConfigFields">
                 <div class="col-12 col-md-3">
                     <label class="form-label mb-1" for="dailyLoadQuota">Daily load quota</label>
@@ -117,49 +140,57 @@ $canManageBranches = (bool) ($is_main_branch_context ?? false);
 </div>
 
 <?php if ($canManageBranches): ?>
-    <div class="card border-0 shadow-sm mb-3">
-        <div class="card-body p-3 p-md-4">
-            <h6 class="mb-3">Create new branch</h6>
-            <form method="POST" action="<?= e(route('tenant.branches.store')) ?>" class="vstack gap-3">
-                <?= csrf_field() ?>
-                <div class="row g-2">
-                    <div class="col-12 col-md-3">
-                        <label class="form-label mb-1">Branch name</label>
-                        <input class="form-control" name="name" maxlength="255" required>
+    <div class="modal fade" id="createBranchModal" tabindex="-1" aria-labelledby="createBranchModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content">
+                <form method="POST" action="<?= e(route('tenant.branches.store')) ?>" class="vstack gap-3">
+                    <?= csrf_field() ?>
+                    <div class="modal-header">
+                        <h6 class="modal-title" id="createBranchModalLabel">Add New Branch</h6>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
-                    <div class="col-12 col-md-3">
-                        <label class="form-label mb-1">Branch slug</label>
-                        <input class="form-control" name="slug" maxlength="120" placeholder="e.g. my-store-branch-2" required>
+                    <div class="modal-body">
+                        <div class="row g-2 mb-3">
+                            <div class="col-12 col-md-4">
+                                <label class="form-label mb-1">Branch name</label>
+                                <input class="form-control" name="name" maxlength="255" required>
+                            </div>
+                            <div class="col-12 col-md-4">
+                                <label class="form-label mb-1">Branch slug</label>
+                                <input class="form-control" name="slug" maxlength="120" placeholder="e.g. my-store-branch-2" required>
+                            </div>
+                            <div class="col-12 col-md-4">
+                                <label class="form-label mb-1">Copy data from source branch</label>
+                                <select class="form-select" name="source_tenant_id">
+                                    <option value="" selected>Fresh New Branch (no data copy)</option>
+                                    <?php foreach ($rows as $row): ?>
+                                        <option value="<?= (int) ($row['id'] ?? 0) ?>">
+                                            <?= e((string) ($row['name'] ?? '')) ?> (<?= e((string) ($row['slug'] ?? '')) ?>)
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="form-label d-block mb-1">Copy options</label>
+                            <div class="small text-muted mb-2">Optional. Leave all unchecked for a clean new branch. Excluded by default: staff/accounts, profile/contact/location, transactions, expenses, logs.</div>
+                            <div class="d-flex flex-wrap gap-3">
+                                <?php foreach (['categories' => 'Categories', 'ingredients' => 'Inventory items', 'requirements' => 'Requirements'] as $k => $label): ?>
+                                    <label class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="clone[]" value="<?= e($k) ?>" <?= in_array($k, $defaults, true) ? 'checked' : '' ?>>
+                                        <span class="form-check-label"><?= e($label) ?></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        <div class="small text-muted mt-3">Owner login is shared for all branches in your account. Staff accounts remain per-branch.</div>
                     </div>
-                    <div class="col-12 col-md-4">
-                        <label class="form-label mb-1">Copy data from source branch</label>
-                        <select class="form-select" name="source_tenant_id">
-                            <option value="" selected>Fresh New Branch (no data copy)</option>
-                            <?php foreach ($rows as $row): ?>
-                                <option value="<?= (int) ($row['id'] ?? 0) ?>">
-                                    <?= e((string) ($row['name'] ?? '')) ?> (<?= e((string) ($row['slug'] ?? '')) ?>)
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button class="btn btn-success">Create branch</button>
                     </div>
-                </div>
-                <div>
-                    <label class="form-label d-block mb-1">Copy options</label>
-                    <div class="small text-muted mb-2">Optional. Leave all unchecked for a clean new branch. Excluded by default: staff/accounts, profile/contact/location, transactions, expenses, logs.</div>
-                    <div class="d-flex flex-wrap gap-3">
-                        <?php foreach (['categories' => 'Categories', 'ingredients' => 'Inventory items', 'requirements' => 'Requirements'] as $k => $label): ?>
-                            <label class="form-check">
-                                <input class="form-check-input" type="checkbox" name="clone[]" value="<?= e($k) ?>" <?= in_array($k, $defaults, true) ? 'checked' : '' ?>>
-                                <span class="form-check-label"><?= e($label) ?></span>
-                            </label>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-                <div>
-                    <div class="small text-muted mb-2">Owner login is shared for all branches in your account. Staff accounts remain per-branch.</div>
-                    <button class="btn btn-success">Create branch</button>
-                </div>
-            </form>
+                </form>
+            </div>
         </div>
     </div>
 <?php endif; ?>

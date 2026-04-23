@@ -3,7 +3,7 @@
     <div class="card-body">
         <h6 class="mb-1">Rewards mechanics and gift setup</h6>
         <p class="small text-muted mb-0">
-            Mechanics: each <strong>paid</strong> sale using an order type with <strong>Include to Reward System</strong> (Order Type Pricing) adds 1 toward the customer’s load when rewards are active. The number below is how many such loads are required before they can redeem the <strong>Reward service</strong> you choose. Voiding a paid sale removes its load if it had counted. Customer load is not edited on the profile; it follows paid sales, voids, and redemptions.
+            Mechanics: each <strong>paid</strong> sale using an order type with <strong>Include to Reward System</strong> (Order Pricing) adds 1 toward the customer’s load when rewards are active. The number below is how many such loads are required before they can redeem the <strong>Reward service</strong> you choose. Voiding a paid sale removes its load if it had counted. Customer load is not edited on the profile; it follows paid sales, voids, and redemptions.
         </p>
     </div>
 </div>

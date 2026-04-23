@@ -252,6 +252,20 @@ body.app-theme .btn {
     -webkit-tap-highlight-color: rgba(13, 110, 253, 0.15);
 }
 
+/* Global button spacing so actions are not too cramped. */
+body.app-theme .app-content-area .btn + .btn {
+    margin-left: 0.4rem;
+}
+body.app-theme .app-content-area form.d-inline + form.d-inline,
+body.app-theme .app-content-area a.btn + form.d-inline,
+body.app-theme .app-content-area form.d-inline + a.btn {
+    margin-left: 0.4rem;
+}
+/* Keep segmented controls tight. */
+body.app-theme .app-content-area .btn-group .btn + .btn {
+    margin-left: 0;
+}
+
 body.app-theme .btn-primary {
     background: linear-gradient(135deg, #2ca7e6, #1b86cf);
     border-color: #1b86cf;

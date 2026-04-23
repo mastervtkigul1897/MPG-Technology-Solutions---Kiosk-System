@@ -1,18 +1,18 @@
 <p class="small text-muted mb-3 laundry-sales-hint" id="laundrySalesHintKanban">
-    <strong>Kanban:</strong> drag cards in sequence only: <strong>Pending - Waiting</strong> → <strong>Washing - Drying</strong> → <strong>Finishing - To Be Picked Up</strong> → <strong>Paid - Completed</strong>.
-    Payment modal only appears when moving from <strong>Finishing - To Be Picked Up</strong> to <strong>Paid - Completed</strong> for regular transactions; if you cancel, the card stays in Finishing - To Be Picked Up.
+    <strong>Kanban:</strong> drag cards in sequence only: <strong>Pending</strong> → <strong>Washing - Drying</strong> → <strong>Unpaid</strong> → <strong>Paid</strong> → <strong>Completed</strong>.
+    Payment modal appears when moving from <strong>Unpaid</strong> to <strong>Paid</strong> for regular transactions; if you cancel, the card stays in Unpaid.
     Backward moves and skipped steps are blocked.
     Use <strong>View details</strong> or double-click a card to see inclusions, add-ons, and payment info.
 </p>
 <p class="small text-muted mb-3 laundry-sales-hint d-none" id="laundrySalesHintTable">
-    <strong>Table:</strong> use <strong>Details</strong> for full line items. Use <strong>Start Washing - Drying</strong>, then <strong>Finishing - To Be Picked Up</strong>, then <strong>Paid - Completed</strong>.
-    Sequence is forward-only and follows the same status flow as Kanban.
+    <strong>Table:</strong> use <strong>Details</strong> for full line items, payments, and totals. This layout is used for quick POS checking and payment updates.
 </p>
 <?php
 $currentUser = auth_user();
 $isCashier = (($currentUser['role'] ?? '') === 'cashier');
 $isTenantAdmin = (($currentUser['role'] ?? '') === 'tenant_admin');
 $machineAssignmentEnabled = (bool) ($machine_assignment_enabled ?? true);
+$laundryStatusTrackingEnabled = (bool) ($laundry_status_tracking_enabled ?? true);
 $order_types_list = $order_types ?? [];
 $rewardConfig = is_array($reward_config ?? null) ? $reward_config : null;
 $rewardThreshold = $rewardConfig !== null ? max(1.0, (float) ($rewardConfig['minimum_points_to_redeem'] ?? $rewardConfig['reward_points_cost'] ?? 10)) : 0.0;
@@ -27,6 +27,7 @@ $laundryPaymentMethodLabel = static function (string $pm): string {
         'online_banking' => 'Online Banking',
         'qr_payment' => 'QR Payment',
         'card' => 'Card',
+        'split_payment' => 'Split Payment (Cash + Online)',
         'pending' => '—',
         default => $pm !== '' ? ucfirst(str_replace('_', ' ', $pm)) : '—',
     };
@@ -44,8 +45,9 @@ $laundryStockOptionLabel = static function (array $item): string {
 $ordersList = $orders ?? [];
 $kanbanPending = [];
 $kanbanWashing = [];
-$kanbanOpenTicket = [];
+$kanbanUnpaid = [];
 $kanbanPaid = [];
+$kanbanCompleted = [];
 $voidedToday = [];
 foreach ($ordersList as $_o) {
     $st = (string) ($_o['status'] ?? '');
@@ -55,14 +57,21 @@ foreach ($ordersList as $_o) {
         $voidedToday[] = $_o;
         continue;
     }
+    if (! $laundryStatusTrackingEnabled && in_array($st, ['pending', 'washing_drying', 'running'], true)) {
+        // Workflow OFF mode only uses Unpaid/Paid/Completed for board display.
+        $st = ($ps === 'paid') ? 'paid' : 'open_ticket';
+        $_o['status'] = $st;
+    }
     if ($st === 'pending') {
         $kanbanPending[] = $_o;
     } elseif ($st === 'washing_drying' || $st === 'running') {
         $kanbanWashing[] = $_o;
     } elseif ($st === 'open_ticket' || ($st === 'completed' && $ps !== 'paid')) {
-        $kanbanOpenTicket[] = $_o;
-    } elseif ($st === 'paid' || ($st === 'completed' && $ps === 'paid')) {
+        $kanbanUnpaid[] = $_o;
+    } elseif ($st === 'paid') {
         $kanbanPaid[] = $_o;
+    } elseif ($st === 'completed' && $ps === 'paid') {
+        $kanbanCompleted[] = $_o;
     }
 }
 
@@ -128,7 +137,7 @@ $machineOptionDisabled = static function (array $machine): bool {
             <div class="modal-header border-bottom-0 pb-0">
                 <div>
                     <h5 class="modal-title" id="laundryAddServiceModalLabel">New service</h5>
-                    <p class="small text-muted mb-0 mt-1">Choose order type and add-ons. Saving creates a Pending - Waiting load; machine selection happens when moving it to Washing - Drying.</p>
+                    <p class="small text-muted mb-0 mt-1">Use one-page POS entry: customer, loads, service, add-ons, payment timing, then save once.</p>
                 </div>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
@@ -140,8 +149,9 @@ $machineOptionDisabled = static function (array $machine): bool {
                             <div class="row g-3 align-items-end">
                                 <div class="col-md-6">
                                     <label class="form-label mb-1 fw-medium" for="customerSearchInput">Customer</label>
-                                    <p class="small text-muted mb-1">Click the field, then type to filter by name. Default is <strong>Walk-in customer</strong> (no customer selected).</p>
+                                    <p class="small text-muted mb-1">Customer is required. Select a saved customer or click <strong>Walk-in Customer</strong>.</p>
                                     <input type="hidden" name="customer_id" id="customerIdHidden" value="">
+                                    <input type="hidden" name="customer_selection" id="customerSelectionHidden" value="">
                                     <input
                                         type="search"
                                         class="form-control"
@@ -153,6 +163,9 @@ $machineOptionDisabled = static function (array $machine): bool {
                                         aria-controls="laundryCustomerDropdownPanel"
                                         aria-expanded="false"
                                     >
+                                    <div class="mt-2">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" id="walkInCustomerBtn">Walk-in Customer</button>
+                                    </div>
                                     <script type="application/json" id="laundryCustomersJsonData"><?= json_encode($customersForJson, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?></script>
                                     <?php if (($customers ?? []) === []): ?>
                                         <p class="small text-muted mb-0 mt-1">No saved customers yet. Add them under <a href="<?= e(route('tenant.customers.index')) ?>">Customer Profile</a>.</p>
@@ -194,12 +207,29 @@ $machineOptionDisabled = static function (array $machine): bool {
                                     </div>
                                     <div class="small text-muted mt-1" id="rewardAvailabilityText">Select a saved customer to check reward availability.</div>
                                 </div>
+                                <div class="col-md-4">
+                                    <label class="form-label mb-1 fw-medium" for="numberOfLoadsInput">Number of loads</label>
+                                    <input type="number" min="1" max="100" step="1" class="form-control" id="numberOfLoadsInput" name="number_of_loads" value="1" required>
+                                </div>
+                                <div class="col-md-8">
+                                    <label class="form-label mb-1 fw-medium">Payment timing</label>
+                                    <div class="btn-group flex-wrap" role="group" aria-label="Payment timing">
+                                        <input type="radio" class="btn-check" name="payment_timing" id="paymentTimingNow" value="pay_now">
+                                        <label class="btn btn-outline-success" for="paymentTimingNow">Pay Now</label>
+                                        <input type="radio" class="btn-check" name="payment_timing" id="paymentTimingLater" value="pay_later" checked>
+                                        <label class="btn btn-outline-secondary" for="paymentTimingLater">Pay Later</label>
+                                    </div>
+                                </div>
                             </div>
                             <div class="form-check mt-3" id="foldServiceWrap">
                                 <input class="form-check-input" type="checkbox" name="include_fold_service" id="includeFoldService" value="1">
                                 <label class="form-check-label" for="includeFoldService">Include fold service?</label>
                                 <p class="small text-muted mb-0 ms-4">When checked, this order counts toward staff folding commission (full service types only).</p>
                             </div>
+                            <input type="hidden" name="track_laundry_status" value="<?= $laundryStatusTrackingEnabled ? '1' : '0' ?>">
+                            <p class="small text-muted mt-2 mb-0">
+                                Status workflow: <strong><?= $laundryStatusTrackingEnabled ? 'Enabled' : 'Disabled' ?></strong> (set in Branch Settings).
+                            </p>
                             <input type="hidden" name="use_machines" value="<?= $machineAssignmentEnabled ? '1' : '0' ?>">
                             <?php if (! $machineAssignmentEnabled): ?>
                                 <p class="small text-muted mt-2 mb-0">Machine assignment is disabled in Branch Settings. This transaction will be saved without machine selection.</p>
@@ -225,11 +255,12 @@ $machineOptionDisabled = static function (array $machine): bool {
                                 <span>Estimated total</span>
                                 <span id="laundrySummaryTotal" class="font-monospace">₱0.00</span>
                             </div>
+                            <div class="small text-muted mt-1" id="laundrySummaryPaymentStatus">Payment: Pay Later (Unpaid)</div>
                         </div>
                     </div>
 
-                    <input type="hidden" name="wash_qty" value="1">
-                    <input type="hidden" name="dry_qty" value="1">
+                    <input type="hidden" name="wash_qty" id="washQtyHidden" value="1">
+                    <input type="hidden" name="dry_qty" id="dryQtyHidden" value="1">
 
                     <div class="col-12" id="fullServiceInclusionsWrap">
                         <div class="rounded-3 border p-3 p-md-4">
@@ -375,6 +406,24 @@ $machineOptionDisabled = static function (array $machine): bool {
     .laundry-kanban-card--draggable { cursor: grab; }
     .laundry-kanban-card--draggable:active { cursor: grabbing; }
     .sortable-ghost { opacity: 0.45; }
+    .laundry-kanban-board {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.75rem;
+    }
+    @media (min-width: 768px) {
+        .laundry-kanban-board {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+    @media (min-width: 992px) {
+        .laundry-kanban-board {
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+        }
+        .laundry-kanban-board.laundry-kanban-board--compact {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
     .laundry-sales-table-scroll {
         max-height: min(70vh, 640px);
         overflow: auto;
@@ -416,42 +465,73 @@ $machineOptionDisabled = static function (array $machine): bool {
         </div>
 
         <div id="laundrySalesKanbanWrap" class="laundry-sales-view-panel">
-        <div class="row g-3 laundry-kanban-board">
+        <div class="laundry-kanban-board<?= $laundryStatusTrackingEnabled ? '' : ' laundry-kanban-board--compact' ?>">
             <?php
-            $kanbanCols = [
-                'pending' => [
-                    'title' => 'Pending - Waiting',
-                    'badge' => 'bg-secondary',
-                    'border' => 'border-secondary border-opacity-50',
-                    'hint' => 'Queued loads waiting to be placed on machine.',
-                    'list' => $kanbanPending,
-                ],
-                'washing_drying' => [
-                    'title' => 'Washing - Drying',
-                    'badge' => 'bg-warning text-dark',
-                    'border' => 'border-warning border-opacity-50',
-                    'hint' => 'Cycle in progress. Move to Finishing - To Be Picked Up when cycle is finished (releases machines).',
-                    'list' => $kanbanWashing,
-                ],
-                'open_ticket' => [
-                    'title' => 'Finishing - To Be Picked Up',
-                    'badge' => 'bg-info text-dark',
-                    'border' => 'border-info border-opacity-50',
-                    'hint' => 'Ready for pickup. Drag to Paid - Completed to finalize.',
-                    'list' => $kanbanOpenTicket,
-                ],
-                'paid' => [
-                    'title' => 'Paid - Completed',
-                    'badge' => 'bg-success',
-                    'border' => 'border-success border-opacity-50',
-                    'hint' => 'Transaction completed.',
-                    'list' => $kanbanPaid,
-                ],
-            ];
+            $kanbanCols = $laundryStatusTrackingEnabled
+                ? [
+                    'pending' => [
+                        'title' => 'Pending',
+                        'badge' => 'bg-secondary',
+                        'border' => 'border-secondary border-opacity-50',
+                        'hint' => 'Queued loads waiting to be placed on machine.',
+                        'list' => $kanbanPending,
+                    ],
+                    'washing_drying' => [
+                        'title' => 'Washing - Drying',
+                        'badge' => 'bg-warning text-dark',
+                        'border' => 'border-warning border-opacity-50',
+                        'hint' => 'Cycle in progress. Move to Unpaid (or Paid if already paid) when cycle is finished.',
+                        'list' => $kanbanWashing,
+                    ],
+                    'open_ticket' => [
+                        'title' => 'Unpaid',
+                        'badge' => 'bg-info text-dark',
+                        'border' => 'border-info border-opacity-50',
+                        'hint' => 'Ready for pickup but not paid yet. Drag to Paid to record payment.',
+                        'list' => $kanbanUnpaid,
+                    ],
+                    'paid' => [
+                        'title' => 'Paid',
+                        'badge' => 'bg-primary',
+                        'border' => 'border-primary border-opacity-50',
+                        'hint' => 'Payment recorded. Drag to Completed when service is fully done.',
+                        'list' => $kanbanPaid,
+                    ],
+                    'completed' => [
+                        'title' => 'Completed',
+                        'badge' => 'bg-success',
+                        'border' => 'border-success border-opacity-50',
+                        'hint' => 'Transaction fully completed.',
+                        'list' => $kanbanCompleted,
+                    ],
+                ]
+                : [
+                    'open_ticket' => [
+                        'title' => 'Unpaid',
+                        'badge' => 'bg-info text-dark',
+                        'border' => 'border-info border-opacity-50',
+                        'hint' => 'Not paid yet. Move to Paid after collecting payment.',
+                        'list' => $kanbanUnpaid,
+                    ],
+                    'paid' => [
+                        'title' => 'Paid',
+                        'badge' => 'bg-primary',
+                        'border' => 'border-primary border-opacity-50',
+                        'hint' => 'Payment recorded. Move to Completed when service is done.',
+                        'list' => $kanbanPaid,
+                    ],
+                    'completed' => [
+                        'title' => 'Completed',
+                        'badge' => 'bg-success',
+                        'border' => 'border-success border-opacity-50',
+                        'hint' => 'Transaction fully completed.',
+                        'list' => $kanbanCompleted,
+                    ],
+                ];
             foreach ($kanbanCols as $colKey => $meta):
-                $isDraggableCol = $colKey !== 'paid';
+                $isDraggableCol = $colKey !== 'completed';
             ?>
-            <div class="col-lg-3">
+            <div class="laundry-kanban-col">
                 <div class="card h-100 border-2 <?= e($meta['border']) ?>">
                     <div class="card-header py-2 d-flex align-items-center justify-content-between flex-wrap gap-1">
                         <span class="fw-semibold"><span class="badge <?= e($meta['badge']) ?> me-1"><?= e($meta['title']) ?></span></span>
@@ -474,6 +554,8 @@ $machineOptionDisabled = static function (array $machine): bool {
                                 $typeDisp = $otLabel !== '' ? $otLabel : ucwords(str_replace('_', ' ', (string) ($order['order_type'] ?? '')));
                                 $pmRaw = strtolower(trim((string) ($order['payment_method'] ?? '')));
                                 $paymentLabel = $laundryPaymentMethodLabel($pmRaw);
+                                $paymentStatus = (string) ($order['payment_status'] ?? 'unpaid');
+                                $isPaid = $paymentStatus === 'paid';
                                 $serviceModeLabel = ! empty($order['is_reward'])
                                     ? 'Reward'
                                     : (! empty($order['is_free']) ? 'Free' : 'Regular');
@@ -497,6 +579,7 @@ $machineOptionDisabled = static function (array $machine): bool {
                                     data-order-type-label="<?= e($typeDisp) ?>"
                                     data-service-mode-label="<?= e($serviceModeLabel) ?>"
                                     data-created-at="<?= e($createdAtDisplay) ?>"
+                                    data-payment-status="<?= e($paymentStatus) ?>"
                                 >
                                     <div class="card-body py-2 px-2">
                                         <div class="d-flex justify-content-between align-items-start gap-1 mb-1">
@@ -513,16 +596,17 @@ $machineOptionDisabled = static function (array $machine): bool {
                                             <span class="text-muted">Mode:</span>
                                             <span class="fw-semibold"><?= e($serviceModeLabel) ?></span>
                                         </div>
+                                        <div class="small mb-1">
+                                            <span class="text-muted">Payment:</span>
+                                            <span class="badge <?= $isPaid ? 'bg-success' : 'bg-secondary' ?>"><?= $isPaid ? 'Paid' : 'Unpaid' ?></span>
+                                        </div>
                                         <div class="d-flex justify-content-between align-items-center small">
                                             <span class="text-muted">Total</span>
                                             <span class="fw-semibold font-monospace"><?= e(format_money((float) ($order['total_amount'] ?? 0))) ?></span>
                                         </div>
-                                        <?php if ($colKey === 'pending' || $colKey === 'paid' || $isTenantAdmin): ?>
+                                        <?php if ($colKey === 'pending' || $colKey === 'paid' || $colKey === 'completed' || $isTenantAdmin): ?>
                                             <div class="mt-1 pt-1 border-top d-flex align-items-center gap-2 flex-wrap">
-                                                <?php if ($colKey === 'pending'): ?>
-                                                    <button type="button" class="btn btn-outline-secondary btn-sm py-0 no-drag laundry-kanban-action-reprint">Print Reference</button>
-                                                <?php endif; ?>
-                                                <?php if ($colKey === 'paid'): ?>
+                                                <?php if ($colKey === 'paid' || $colKey === 'completed'): ?>
                                                     <button type="button" class="btn btn-outline-primary btn-sm py-0 no-drag laundry-kanban-action-print-receipt">Print Receipt</button>
                                                 <?php endif; ?>
                                                 <?php if ($isTenantAdmin): ?>
@@ -530,7 +614,7 @@ $machineOptionDisabled = static function (array $machine): bool {
                                                 <?php endif; ?>
                                             </div>
                                         <?php endif; ?>
-                                        <?php if ($colKey === 'paid'): ?>
+                                        <?php if ($colKey === 'paid' || $colKey === 'completed'): ?>
                                             <div class="small mt-1 pt-1 border-top">
                                                 <span class="text-muted"><?= e($paymentLabel) ?></span>
                                                 <?php if (isset($order['amount_tendered']) && $order['amount_tendered'] !== null && $order['amount_tendered'] !== ''): ?>
@@ -613,7 +697,9 @@ $machineOptionDisabled = static function (array $machine): bool {
                         <th class="text-end">Add-ons</th>
                         <th class="text-end">Total</th>
                         <th>Payment</th>
-                        <th class="text-end text-nowrap">Actions</th>
+                        <th class="text-end text-nowrap">Status Transition</th>
+                        <th class="text-end text-nowrap">Details</th>
+                        <th class="text-end text-nowrap">Void</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -627,23 +713,38 @@ $machineOptionDisabled = static function (array $machine): bool {
                         $paymentStatus = (string) ($order['payment_status'] ?? 'paid');
                         $isPaid = $paymentStatus === 'paid';
                         $statusRaw = (string) ($order['status'] ?? '');
+                        if (! $laundryStatusTrackingEnabled && in_array($statusRaw, ['pending', 'washing_drying', 'running'], true)) {
+                            // Workflow OFF should behave as Unpaid/Paid/Completed only.
+                            $statusRaw = $isPaid ? 'paid' : 'open_ticket';
+                        }
                         $isVoid = ! empty($order['is_void']) || $statusRaw === 'void';
                         $isPending = $statusRaw === 'pending';
                         $isWashingDrying = ($statusRaw === 'washing_drying' || $statusRaw === 'running');
                         $isOpenTicket = ($statusRaw === 'open_ticket' || ($statusRaw === 'completed' && ! $isPaid));
+                        $isPaidStage = $statusRaw === 'paid';
+                        $isCompletedStage = $statusRaw === 'completed' && $isPaid;
                         $pmRaw = strtolower(trim((string) ($order['payment_method'] ?? '')));
                         $paymentLabel = $laundryPaymentMethodLabel($pmRaw);
-                        $statusExport = $isVoid
-                            ? 'VOID'
-                            : ($isPending
-                            ? 'Pending - Waiting'
-                            : ($isWashingDrying ? 'Washing - Drying' : ($isOpenTicket ? 'Finishing - To Be Picked Up' : 'Paid - Completed')));
+                        if (! $laundryStatusTrackingEnabled) {
+                            $statusExport = $isVoid
+                                ? 'VOID'
+                                : ($statusRaw === 'completed'
+                                    ? 'Completed'
+                                    : ($isPaid || $statusRaw === 'paid' ? 'Paid' : 'Unpaid'));
+                        } else {
+                            $statusExport = $isVoid
+                                ? 'VOID'
+                                : ($isPending
+                                    ? 'Pending'
+                                    : ($isWashingDrying ? 'Washing - Drying' : ($isOpenTicket ? 'Unpaid' : ($isPaidStage ? 'Paid' : 'Completed'))));
+                        }
                         $otLabel = trim((string) ($order['order_type_label'] ?? ''));
                         $typeDisp = $otLabel !== '' ? $otLabel : ucwords(str_replace('_', ' ', (string) ($order['order_type'] ?? '')));
                         ?>
                         <tr
                             class="laundry-sales-table-row"
                             data-order-id="<?= $oid ?>"
+                            data-status="<?= e($statusRaw) ?>"
                             data-detail-url="<?= e(route('tenant.laundry-sales.detail', ['id' => $oid])) ?>"
                             data-advance-url="<?= e(route('tenant.laundry-sales.advance', ['id' => $oid])) ?>"
                             data-complete-url="<?= e(route('tenant.laundry-sales.complete', ['id' => $oid])) ?>"
@@ -653,6 +754,7 @@ $machineOptionDisabled = static function (array $machine): bool {
                             data-is-reward="<?= ! empty($order['is_reward']) ? '1' : '0' ?>"
                             data-total="<?= e((string) (float) ($order['total_amount'] ?? 0)) ?>"
                             data-service-kind="<?= e((string) ($order['order_type_service_kind'] ?? 'full_service')) ?>"
+                            data-payment-status="<?= e($paymentStatus) ?>"
                         >
                             <td class="font-monospace"><?= e($refDisplay) ?></td>
                             <td class="text-nowrap small"><?= e((string) ($order['created_at'] ?? '')) ?></td>
@@ -686,16 +788,28 @@ $machineOptionDisabled = static function (array $machine): bool {
                                 <?php endif; ?>
                             </td>
                             <td class="text-end text-nowrap small">
-                                <button type="button" class="btn btn-link btn-sm p-0 me-1 laundry-table-detail-trigger" data-detail-url="<?= e(route('tenant.laundry-sales.detail', ['id' => $oid])) ?>">Details</button>
-                                <?php if ($isPending): ?>
+                                <?php if (! $laundryStatusTrackingEnabled && ! $isVoid && $statusRaw !== 'completed'): ?>
+                                    <button type="button" class="btn btn-outline-success btn-sm py-0 laundry-table-action-complete">Completed</button>
+                                <?php elseif ($laundryStatusTrackingEnabled && $isPending): ?>
                                     <button type="button" class="btn btn-outline-primary btn-sm py-0 laundry-table-action-start">Start Washing - Drying</button>
-                                <?php elseif ($isWashingDrying): ?>
-                                    <button type="button" class="btn btn-outline-info btn-sm py-0 laundry-table-action-open-ticket">Finishing - To Be Picked Up</button>
-                                <?php elseif ($isOpenTicket && ! $isPaid): ?>
-                                    <button type="button" class="btn btn-outline-success btn-sm py-0 laundry-table-action-pay">Paid - Completed</button>
+                                <?php elseif ($laundryStatusTrackingEnabled && $isWashingDrying): ?>
+                                    <button type="button" class="btn btn-outline-info btn-sm py-0 laundry-table-action-open-ticket"><?= $isPaid ? 'Paid' : 'Unpaid' ?></button>
+                                <?php elseif ($laundryStatusTrackingEnabled && $isOpenTicket && ! $isPaid): ?>
+                                    <button type="button" class="btn btn-outline-success btn-sm py-0 laundry-table-action-pay">Paid</button>
+                                <?php elseif ($laundryStatusTrackingEnabled && $isPaidStage): ?>
+                                    <button type="button" class="btn btn-outline-success btn-sm py-0 laundry-table-action-complete">Completed</button>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
                                 <?php endif; ?>
+                            </td>
+                            <td class="text-end text-nowrap small">
+                                <button type="button" class="btn btn-link btn-sm p-0 laundry-table-detail-trigger" data-detail-url="<?= e(route('tenant.laundry-sales.detail', ['id' => $oid])) ?>">Details</button>
+                            </td>
+                            <td class="text-end text-nowrap small">
                                 <?php if (! $isVoid && $isTenantAdmin): ?>
                                     <button type="button" class="btn btn-outline-danger btn-sm py-0 laundry-table-action-void">Void</button>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
                                 <?php endif; ?>
                             </td>
                         </tr>
@@ -735,17 +849,22 @@ $machineOptionDisabled = static function (array $machine): bool {
                     $paymentStatus = (string) ($order['payment_status'] ?? 'paid');
                     $isPaid = $paymentStatus === 'paid';
                     $statusRaw = (string) ($order['status'] ?? '');
+                    if (! $laundryStatusTrackingEnabled && in_array($statusRaw, ['pending', 'washing_drying', 'running'], true)) {
+                        // Export table should match OFF workflow labels too.
+                        $statusRaw = $isPaid ? 'paid' : 'open_ticket';
+                    }
                     $isVoid = ! empty($order['is_void']) || $statusRaw === 'void';
                     $isPending = $statusRaw === 'pending';
                     $isWashingDrying = ($statusRaw === 'washing_drying' || $statusRaw === 'running');
                     $isOpenTicket = ($statusRaw === 'open_ticket' || ($statusRaw === 'completed' && ! $isPaid));
+                    $isPaidStage = $statusRaw === 'paid';
                     $pmRaw = strtolower(trim((string) ($order['payment_method'] ?? '')));
                     $paymentLabel = $laundryPaymentMethodLabel($pmRaw);
                     $statusExport = $isVoid
                         ? 'VOID'
                         : ($isPending
-                        ? 'Pending - Waiting'
-                        : ($isWashingDrying ? 'Washing - Drying' : ($isOpenTicket ? 'Finishing - To Be Picked Up' : 'Paid - Completed')));
+                        ? 'Pending'
+                        : ($isWashingDrying ? 'Washing - Drying' : ($isOpenTicket ? 'Unpaid' : ($isPaidStage ? 'Paid' : 'Completed'))));
                     ?>
                     <tr>
                         <td><?= e($refDisplay) ?></td>
@@ -789,7 +908,7 @@ $machineOptionDisabled = static function (array $machine): bool {
             <div class="modal-header border-bottom-0 pb-0">
                 <div>
                     <h5 class="modal-title" id="laundryPayModalLabel">Record payment</h5>
-                    <p class="small text-muted mb-0">Select method, enter amount received; change is computed automatically.</p>
+                    <p class="small text-muted mb-0">Select method, enter amount paid, and watch the live change text.</p>
                 </div>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
@@ -797,22 +916,6 @@ $machineOptionDisabled = static function (array $machine): bool {
                 <div class="rounded-3 bg-body-secondary bg-opacity-50 p-3 mb-3">
                     <div class="small text-muted mb-0">Service total (amount due)</div>
                     <div class="fs-5 fw-semibold font-monospace" id="laundryPayDueDisplay">₱0.00</div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label fw-medium" for="laundryPayDiscountPercent">Discount (%)</label>
-                    <input
-                        type="number"
-                        class="form-control form-control-lg font-monospace"
-                        name="discount_percentage"
-                        id="laundryPayDiscountPercent"
-                        min="0"
-                        max="100"
-                        step="0.01"
-                        value="0"
-                        required
-                        placeholder="0"
-                    >
-                    <div class="form-text">Default is 0%. Total due updates automatically.</div>
                 </div>
                 <label class="form-label small fw-semibold mb-2">Payment method</label>
                 <div class="row g-2 mb-3">
@@ -1031,7 +1134,9 @@ $machineOptionDisabled = static function (array $machine): bool {
     const form = document.getElementById('laundrySalesForm');
     const modalEl = document.getElementById('laundryAddServiceModal');
     const customerIdHidden = document.getElementById('customerIdHidden');
+    const customerSelectionHidden = document.getElementById('customerSelectionHidden');
     const customerSearchInput = document.getElementById('customerSearchInput');
+    const walkInCustomerBtn = document.getElementById('walkInCustomerBtn');
     const regularModeRadio = document.getElementById('serviceModeRegular');
     const freeModeRadio = document.getElementById('serviceModeFree');
     const rewardModeRadio = document.getElementById('serviceModeReward');
@@ -1051,10 +1156,16 @@ $machineOptionDisabled = static function (array $machine): bool {
     const laundrySummaryAddonsBlock = document.getElementById('laundrySummaryAddonsBlock');
     const laundrySummaryAddons = document.getElementById('laundrySummaryAddons');
     const laundrySummaryTotal = document.getElementById('laundrySummaryTotal');
+    const laundrySummaryPaymentStatus = document.getElementById('laundrySummaryPaymentStatus');
     const laundrySummaryInclusionsTitle = document.getElementById('laundrySummaryInclusionsTitle');
     const coreSuppliesHeading = document.getElementById('coreSuppliesHeading');
     const coreSuppliesHelp = document.getElementById('coreSuppliesHelp');
     const addonSuppliesSection = document.getElementById('addonSuppliesSection');
+    const numberOfLoadsInput = document.getElementById('numberOfLoadsInput');
+    const washQtyHidden = document.getElementById('washQtyHidden');
+    const dryQtyHidden = document.getElementById('dryQtyHidden');
+    const paymentTimingNow = document.getElementById('paymentTimingNow');
+    const paymentTimingLater = document.getElementById('paymentTimingLater');
     if (!orderTypeField || !fullServiceInclusionsWrap
         || !detergentWrap || !fabconWrap || !bleachWrap
         || !form || !modalEl
@@ -1150,10 +1261,12 @@ $machineOptionDisabled = static function (array $machine): bool {
                 e.preventDefault();
                 if (id === '') {
                     customerIdHidden.value = '';
+                    if (customerSelectionHidden) customerSelectionHidden.value = 'walk_in';
                     customerSearchInput.value = '';
                     customerSearchInput.placeholder = 'Walk-in customer';
                 } else {
                     customerIdHidden.value = id;
+                    if (customerSelectionHidden) customerSelectionHidden.value = 'saved';
                     customerSearchInput.value = name;
                     customerSearchInput.placeholder = 'Walk-in customer';
                 }
@@ -1196,6 +1309,7 @@ $machineOptionDisabled = static function (array $machine): bool {
     customerSearchInput.addEventListener('input', () => {
         if (customerSearchInput.value.trim() === '') {
             customerIdHidden.value = '';
+            if (customerSelectionHidden) customerSelectionHidden.value = '';
             customerSearchInput.placeholder = 'Walk-in customer';
             syncRewardModeAvailability();
         }
@@ -1205,6 +1319,14 @@ $machineOptionDisabled = static function (array $machine): bool {
             renderCustomerPanel();
             positionCustomerPanel();
         }
+    });
+    walkInCustomerBtn?.addEventListener('click', () => {
+        customerIdHidden.value = '';
+        if (customerSelectionHidden) customerSelectionHidden.value = 'walk_in';
+        customerSearchInput.value = 'Walk-in customer';
+        customerSearchInput.placeholder = 'Walk-in customer';
+        syncRewardModeAvailability();
+        hideCustomerPanel();
     });
     customerSearchInput.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') hideCustomerPanel();
@@ -1248,8 +1370,9 @@ $machineOptionDisabled = static function (array $machine): bool {
         if (freeModeRadio?.checked || rewardModeRadio?.checked) return 0;
         const sk = selectedServiceKind();
         const price = selectedPricePerLoad();
-        const wq = 1;
-        const dq = 1;
+        const loads = Math.max(1, parseInt(numberOfLoadsInput?.value || '1', 10) || 1);
+        const wq = loads;
+        const dq = loads;
         if (sk === 'dry_only') return dq * price;
         if (sk === 'wash_only' || sk === 'rinse_only') return wq * price;
         return Math.max(1, Math.max(wq, dq)) * price;
@@ -1263,6 +1386,9 @@ $machineOptionDisabled = static function (array $machine): bool {
 
     const updateSummary = () => {
         if (!laundrySummaryBase || !laundrySummaryTotal) return;
+        const loads = Math.max(1, parseInt(numberOfLoadsInput?.value || '1', 10) || 1);
+        if (washQtyHidden) washQtyHidden.value = String(loads);
+        if (dryQtyHidden) dryQtyHidden.value = String(loads);
         const base = baseSubtotal();
         const serviceModeLabel = rewardModeRadio?.checked ? 'Reward' : (freeModeRadio?.checked ? 'Free' : 'Base');
         const blk = selectedSupplyBlock();
@@ -1355,6 +1481,12 @@ $machineOptionDisabled = static function (array $machine): bool {
         }
 
         laundrySummaryTotal.textContent = money(base + addOnSum);
+        if (laundrySummaryPaymentStatus) {
+            const payNow = !!paymentTimingNow?.checked;
+            laundrySummaryPaymentStatus.textContent = payNow
+                ? 'Payment: Pay Now (Paid)'
+                : 'Payment: Pay Later (Unpaid)';
+        }
     };
 
     const toggle = () => {
@@ -1435,9 +1567,21 @@ $machineOptionDisabled = static function (array $machine): bool {
         inclusionDetergentSelect, inclusionFabconSelect, inclusionBleachSelect,
         addonDetergentSelect, addonFabconSelect, addonBleachSelect,
         detergentQtyInput, fabconQtyInput, bleachQtyInput,
+        numberOfLoadsInput, paymentTimingNow, paymentTimingLater,
     ].forEach((el) => {
         if (el) el.addEventListener('input', updateSummary);
         if (el) el.addEventListener('change', updateSummary);
+    });
+    form.addEventListener('submit', (e) => {
+        const sel = (customerSelectionHidden?.value || '').trim();
+        if (sel !== 'saved' && sel !== 'walk_in') {
+            e.preventDefault();
+            Swal.fire({
+                icon: 'warning',
+                title: 'Customer required',
+                text: 'Select an existing customer or click Walk-in Customer before saving.',
+            });
+        }
     });
     toggle();
     syncRewardModeAvailability();
@@ -1449,6 +1593,7 @@ $machineOptionDisabled = static function (array $machine): bool {
         hideCustomerPanel();
         form.reset();
         customerIdHidden.value = '';
+        if (customerSelectionHidden) customerSelectionHidden.value = '';
         customerSearchInput.value = '';
         customerSearchInput.placeholder = 'Walk-in customer';
         if (regularModeRadio) regularModeRadio.checked = true;
@@ -1464,6 +1609,8 @@ $machineOptionDisabled = static function (array $machine): bool {
 <script>
 (() => {
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+    const laundryStatusTrackingEnabled = <?= $laundryStatusTrackingEnabled ? 'true' : 'false' ?>;
+    const machineAssignmentEnabled = <?= $machineAssignmentEnabled ? 'true' : 'false' ?>;
 
     const viewSelect = document.getElementById('laundrySalesViewSelect');
     const kanbanWrap = document.getElementById('laundrySalesKanbanWrap');
@@ -1485,6 +1632,7 @@ $machineOptionDisabled = static function (array $machine): bool {
     };
 
     if (viewSelect) {
+        viewSelect.value = 'kanban';
         try {
             const saved = localStorage.getItem(VIEW_STORAGE_KEY);
             if (saved === 'table' || saved === 'kanban') {
@@ -1501,7 +1649,6 @@ $machineOptionDisabled = static function (array $machine): bool {
     const modalEl = document.getElementById('laundryPayModal');
     const form = document.getElementById('laundryPayForm');
     const dueEl = document.getElementById('laundryPayDueDisplay');
-    const discountEl = document.getElementById('laundryPayDiscountPercent');
     const tenderedEl = document.getElementById('laundryPayTendered');
     const changeEl = document.getElementById('laundryPayChangeDisplay');
     const cashRadio = document.getElementById('laundry-pm-cash');
@@ -1569,7 +1716,11 @@ $machineOptionDisabled = static function (array $machine): bool {
             return false;
         }
         if (options.reloadOnSuccess) {
-            options.row?.remove?.();
+            if (options.row instanceof HTMLTableRowElement) {
+                options.row.setAttribute('data-status', String(toStatus || '').trim());
+            } else {
+                options.row?.remove?.();
+            }
             document.dispatchEvent(new CustomEvent('mpg:ajax-success', {
                 detail: { method: 'POST', payload: data, response: res },
             }));
@@ -1658,24 +1809,15 @@ $machineOptionDisabled = static function (array $machine): bool {
         return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(x);
     };
 
-    const payModalReady = modalEl && form && dueEl && discountEl && tenderedEl && changeEl;
+    const payModalReady = modalEl && form && dueEl && tenderedEl && changeEl;
 
     let baseTotal = 0;
     let totalDue = 0;
     let paySourceEl = null;
 
-    const normalizeDiscountPercent = () => {
-        if (!discountEl) return 0;
-        const raw = parseFloat(discountEl.value || '0');
-        if (!Number.isFinite(raw)) return 0;
-        return Math.min(100, Math.max(0, raw));
-    };
-
     const recalcPaymentTotals = () => {
         if (!payModalReady) return;
-        const discountPercent = normalizeDiscountPercent();
-        const discountAmount = baseTotal * (discountPercent / 100);
-        totalDue = Math.max(0, baseTotal - discountAmount);
+        totalDue = Math.max(0, baseTotal);
         dueEl.textContent = money(totalDue);
         tenderedEl.min = String(totalDue.toFixed(2));
     };
@@ -1745,7 +1887,6 @@ $machineOptionDisabled = static function (array $machine): bool {
         paySourceEl = card;
         form.action = card.getAttribute('data-pay-url') || '';
         baseTotal = parseFloat(card.getAttribute('data-total') || '0') || 0;
-        discountEl.value = '0';
         recalcPaymentTotals();
         tenderedEl.value = totalDue.toFixed(2);
         if (cashRadio) cashRadio.checked = true;
@@ -1757,10 +1898,6 @@ $machineOptionDisabled = static function (array $machine): bool {
     };
 
     if (payModalReady) {
-    discountEl.addEventListener('input', () => {
-        recalcPaymentTotals();
-        updateChange();
-    });
     tenderedEl.addEventListener('input', updateChange);
 
     form.addEventListener('submit', async (e) => {
@@ -1799,7 +1936,35 @@ $machineOptionDisabled = static function (array $machine): bool {
                 confirmButtonColor: '#198754',
             });
         }
-        sourceEl?.remove?.();
+        if (sourceEl instanceof HTMLTableRowElement) {
+            sourceEl.setAttribute('data-payment-status', 'paid');
+            sourceEl.setAttribute('data-status', 'paid');
+            const paymentCell = sourceEl.children[10];
+            if (paymentCell instanceof HTMLElement) {
+                paymentCell.textContent = 'Paid';
+            }
+            updateTableRowStatusUI(sourceEl);
+        } else {
+            if (sourceEl instanceof HTMLElement) {
+                sourceEl.setAttribute('data-payment-status', 'paid');
+                const paidList = document.getElementById('kanban-paid');
+                if (paidList) {
+                    paidList.appendChild(sourceEl);
+                    ensureEmptyPlaceholder(paidList);
+                }
+                const openTicketList = document.getElementById('kanban-open_ticket');
+                if (openTicketList) {
+                    ensureEmptyPlaceholder(openTicketList);
+                }
+                const paymentBadge = sourceEl.querySelector('.small.mb-1 .badge');
+                if (paymentBadge instanceof HTMLElement) {
+                    paymentBadge.className = 'badge bg-success';
+                    paymentBadge.textContent = 'Paid';
+                }
+            } else {
+                sourceEl?.remove?.();
+            }
+        }
         paySourceEl = null;
         document.dispatchEvent(new CustomEvent('mpg:ajax-success', {
             detail: { method: 'POST', payload: data, response: res },
@@ -1809,7 +1974,6 @@ $machineOptionDisabled = static function (array $machine): bool {
     modalEl.addEventListener('hidden.bs.modal', () => {
         form.action = '';
         paySourceEl = null;
-        discountEl.value = '0';
         tenderedEl.value = '';
         baseTotal = 0;
         totalDue = 0;
@@ -1818,7 +1982,7 @@ $machineOptionDisabled = static function (array $machine): bool {
         if (cashRadio) cashRadio.checked = true;
     });
 
-    const kanbanIds = ['kanban-pending', 'kanban-washing_drying', 'kanban-open_ticket', 'kanban-paid'];
+    const kanbanIds = ['kanban-pending', 'kanban-washing_drying', 'kanban-open_ticket', 'kanban-paid', 'kanban-completed'];
     if (typeof Sortable !== 'undefined') {
     kanbanIds.forEach((id) => {
         const el = document.getElementById(id);
@@ -1834,14 +1998,24 @@ $machineOptionDisabled = static function (array $machine): bool {
                 if (!drag.classList.contains('laundry-kanban-card--draggable')) return false;
                 const fromCol = evt.from.dataset.kanbanColumn;
                 const toCol = evt.to.dataset.kanbanColumn;
-                if (fromCol === 'paid') return false;
-                if (toCol === 'paid' && isNoPaymentMode(drag)) {
+                if (fromCol === 'completed') return false;
+                if (!laundryStatusTrackingEnabled) {
+                    if (fromCol === 'open_ticket' && (toCol === 'paid' || toCol === 'completed')) return true;
+                    if (fromCol === 'paid' && toCol === 'completed') return true;
+                    return false;
+                }
+                if (fromCol === 'paid' && toCol === 'completed') {
                     return true;
+                }
+                if (fromCol === 'washing_drying') {
+                    const ps = String(drag.getAttribute('data-payment-status') || '').toLowerCase();
+                    const expected = ps === 'paid' ? 'paid' : 'open_ticket';
+                    return expected === toCol;
                 }
                 const nextMap = {
                     pending: 'washing_drying',
-                    washing_drying: 'open_ticket',
                     open_ticket: 'paid',
+                    paid: 'completed',
                 };
                 return nextMap[fromCol] === toCol;
             },
@@ -1852,18 +2026,37 @@ $machineOptionDisabled = static function (array $machine): bool {
                 const toCol = evt.to.dataset.kanbanColumn;
                 if (fromCol === toCol) return;
 
-                if (toCol === 'paid' && isNoPaymentMode(item)) {
+                if (!laundryStatusTrackingEnabled) {
+                    if (fromCol === 'open_ticket' && toCol === 'paid') {
+                        evt.to.removeChild(item);
+                        const ref = evt.from.children[evt.oldIndex] || null;
+                        evt.from.insertBefore(item, ref);
+                        ensureEmptyPlaceholder(evt.to);
+                        ensureEmptyPlaceholder(evt.from);
+                        openPayModalFromCard(item);
+                        return;
+                    }
+                    if ((fromCol === 'open_ticket' || fromCol === 'paid') && toCol === 'completed') {
+                        const ok = await postAdvance(item, 'completed', {});
+                        if (!ok) {
+                            evt.to.removeChild(item);
+                            const ref = evt.from.children[evt.oldIndex] || null;
+                            evt.from.insertBefore(item, ref);
+                        }
+                        ensureEmptyPlaceholder(evt.from);
+                        ensureEmptyPlaceholder(evt.to);
+                        return;
+                    }
                     evt.to.removeChild(item);
                     const ref = evt.from.children[evt.oldIndex] || null;
                     evt.from.insertBefore(item, ref);
-                    ensureEmptyPlaceholder(evt.to);
-                    ensureEmptyPlaceholder(evt.from);
-                    await submitNoPaymentCompletion(item);
                     return;
                 }
 
                 if (fromCol === 'pending' && toCol === 'washing_drying') {
-                    const ok = await openMachineAssignModal(item, {});
+                    const ok = machineAssignmentEnabled
+                        ? await openMachineAssignModal(item, {})
+                        : await postAdvance(item, 'washing_drying', {});
                     if (!ok) {
                         evt.to.removeChild(item);
                         const ref = evt.from.children[evt.oldIndex] || null;
@@ -1874,7 +2067,7 @@ $machineOptionDisabled = static function (array $machine): bool {
                     return;
                 }
 
-                if (fromCol === 'washing_drying' && toCol === 'open_ticket') {
+                if (fromCol === 'washing_drying' && (toCol === 'open_ticket' || toCol === 'paid')) {
                     const ok = await postAdvance(item, 'open_ticket', {});
                     if (!ok) {
                         evt.to.removeChild(item);
@@ -1893,6 +2086,18 @@ $machineOptionDisabled = static function (array $machine): bool {
                     ensureEmptyPlaceholder(evt.to);
                     ensureEmptyPlaceholder(evt.from);
                     openPayModalFromCard(item);
+                    return;
+                }
+
+                if (fromCol === 'paid' && toCol === 'completed') {
+                    const ok = await postAdvance(item, 'completed', {});
+                    if (!ok) {
+                        evt.to.removeChild(item);
+                        const ref = evt.from.children[evt.oldIndex] || null;
+                        evt.from.insertBefore(item, ref);
+                    }
+                    ensureEmptyPlaceholder(evt.from);
+                    ensureEmptyPlaceholder(evt.to);
                     return;
                 }
 
@@ -1924,6 +2129,7 @@ $machineOptionDisabled = static function (array $machine): bool {
             online_banking: 'Online banking',
             qr_payment: 'QR payment',
             card: 'Card',
+            split_payment: 'Split Payment (Cash + Online)',
             pending: '—',
         };
         if (map[m]) return map[m];
@@ -1951,10 +2157,16 @@ $machineOptionDisabled = static function (array $machine): bool {
     const statusLabelFromOrder = (o) => {
         const st = String(o.status || '');
         const ps = String(o.payment_status || '');
-        if (st === 'pending') return 'Pending - Waiting';
+        if (!laundryStatusTrackingEnabled) {
+            if (st === 'completed') return 'Completed';
+            if (st === 'paid' || ps === 'paid') return 'Paid';
+            return 'Unpaid';
+        }
+        if (st === 'pending') return 'Pending';
         if (st === 'washing_drying' || st === 'running') return 'Washing - Drying';
-        if (st === 'open_ticket' || (st === 'completed' && ps !== 'paid')) return 'Finishing - To Be Picked Up';
-        if (st === 'paid' || (st === 'completed' && ps === 'paid')) return 'Paid - Completed';
+        if (st === 'open_ticket' || (st === 'completed' && ps !== 'paid')) return 'Unpaid';
+        if (st === 'paid') return 'Paid';
+        if (st === 'completed' && ps === 'paid') return 'Completed';
         return st || '—';
     };
 
@@ -2052,6 +2264,63 @@ $machineOptionDisabled = static function (array $machine): bool {
         }
     };
 
+    const updateTableRowStatusUI = (row) => {
+        if (!(row instanceof HTMLTableRowElement)) return;
+        const statusRaw = String(row.getAttribute('data-status') || '').trim();
+        const paymentStatus = String(row.getAttribute('data-payment-status') || 'unpaid').trim();
+        const isPaid = paymentStatus === 'paid';
+        const isVoid = statusRaw === 'void';
+        const isPending = statusRaw === 'pending';
+        const isWashingDrying = statusRaw === 'washing_drying' || statusRaw === 'running';
+        const isOpenTicket = statusRaw === 'open_ticket' || (statusRaw === 'completed' && !isPaid);
+        const isPaidStage = statusRaw === 'paid';
+        const isCompleted = statusRaw === 'completed';
+
+        const statusCell = row.children[6];
+        const actionCell = row.children[11];
+        if (!(statusCell instanceof HTMLElement) || !(actionCell instanceof HTMLElement)) return;
+
+        const statusLabel = !laundryStatusTrackingEnabled
+            ? (isCompleted ? 'Completed' : (isPaid || isPaidStage ? 'Paid' : 'Unpaid'))
+            : (isPending
+                ? 'Pending'
+                : (isWashingDrying
+                    ? 'Washing - Drying'
+                    : (isOpenTicket ? 'Unpaid' : (isPaidStage ? 'Paid' : 'Completed'))));
+
+        const rewardBadge = row.getAttribute('data-is-reward') === '1'
+            ? '<span class="badge text-bg-info text-dark ms-1">Reward</span>'
+            : '';
+        const freeBadge = row.getAttribute('data-is-free') === '1'
+            ? '<span class="badge text-bg-secondary ms-1">Free</span>'
+            : '';
+        statusCell.innerHTML = isVoid
+            ? '<span class="badge text-bg-danger">VOID</span>'
+            : `<span class="small">${statusLabel}</span>${rewardBadge}${freeBadge}`;
+
+        if (!laundryStatusTrackingEnabled && !isVoid && !isCompleted) {
+            actionCell.innerHTML = '<button type="button" class="btn btn-outline-success btn-sm py-0 laundry-table-action-complete">Completed</button>';
+            return;
+        }
+        if (laundryStatusTrackingEnabled && isPending) {
+            actionCell.innerHTML = '<button type="button" class="btn btn-outline-primary btn-sm py-0 laundry-table-action-start">Start Washing - Drying</button>';
+            return;
+        }
+        if (laundryStatusTrackingEnabled && isWashingDrying) {
+            actionCell.innerHTML = `<button type="button" class="btn btn-outline-info btn-sm py-0 laundry-table-action-open-ticket">${isPaid ? 'Paid' : 'Unpaid'}</button>`;
+            return;
+        }
+        if (laundryStatusTrackingEnabled && isOpenTicket && !isPaid) {
+            actionCell.innerHTML = '<button type="button" class="btn btn-outline-success btn-sm py-0 laundry-table-action-pay">Paid</button>';
+            return;
+        }
+        if (laundryStatusTrackingEnabled && isPaidStage) {
+            actionCell.innerHTML = '<button type="button" class="btn btn-outline-success btn-sm py-0 laundry-table-action-complete">Completed</button>';
+            return;
+        }
+        actionCell.innerHTML = '<span class="text-muted">—</span>';
+    };
+
     const receiptCfg = (window.MPG_RECEIPT_CONFIG && typeof window.MPG_RECEIPT_CONFIG === 'object')
         ? window.MPG_RECEIPT_CONFIG
         : {};
@@ -2104,6 +2373,11 @@ $machineOptionDisabled = static function (array $machine): bool {
             changeText: order?.change_amount != null && order?.change_amount !== '' ? money(parseMoneyValue(order.change_amount)) : '',
         };
     };
+    const sharedPrintFooterHtml = 'This is not an official receipt<br>For reference only';
+    const sharedPrintFooterLines = [
+        'This is not an official receipt',
+        'For reference only',
+    ];
     const renderReceiptPreviewHtml = (receiptData, includePaymentBlock = false) => {
         const headerName = cfgText('display_name') || cfgText('store_name') || 'Laundry Shop';
         const style = includePaymentBlock ? cfgText('business_style') : '';
@@ -2111,10 +2385,9 @@ $machineOptionDisabled = static function (array $machine): bool {
         const address = includePaymentBlock ? cfgText('address') : '';
         const email = includePaymentBlock ? cfgText('email') : '';
         const tin = includePaymentBlock ? cfgText('tax_id') : '';
-        const footer = isBirCompliant
-            ? cfgText('footer_note')
-            : 'This is not an official receipt';
-        const paymentRow = includePaymentBlock
+        const paymentMethodRaw = String(receiptData.paymentMethod || '').toLowerCase();
+        const includePaymentDetails = includePaymentBlock && paymentMethodRaw !== 'free' && paymentMethodRaw !== 'reward';
+        const paymentRow = includePaymentDetails
             ? `<div><span>Payment:</span><strong>${escapeHtml(receiptData.paymentMethod || '—')}</strong></div>`
                 + (receiptData.amountTenderedText ? `<div><span>Tendered:</span><strong>${escapeHtml(receiptData.amountTenderedText)}</strong></div>` : '')
                 + (receiptData.changeText ? `<div><span>Change:</span><strong>${escapeHtml(receiptData.changeText)}</strong></div>` : '')
@@ -2142,7 +2415,7 @@ $machineOptionDisabled = static function (array $machine): bool {
                 <div><span>Included Fold:</span><strong> ${escapeHtml(receiptData.includedFold)}</strong></div>
                 ${paymentRow}
                 ${receiptData.savedAt ? `<div><span>Date:</span><strong> ${escapeHtml(receiptData.savedAt)}</strong></div>` : ''}
-                ${footer ? `<hr class="my-1"><div class="text-center">${escapeHtml(footer)}</div>` : ''}
+                <hr class="my-1"><div class="text-center">${sharedPrintFooterHtml}</div>
             </div>
         `;
     };
@@ -2161,9 +2434,6 @@ $machineOptionDisabled = static function (array $machine): bool {
         const address = includePaymentBlock ? cfgText('address') : '';
         const email = includePaymentBlock ? cfgText('email') : '';
         const tin = includePaymentBlock ? cfgText('tax_id') : '';
-        const footer = isBirCompliant
-            ? cfgText('footer_note')
-            : 'This is not an official receipt';
 
         push(0x1b, 0x40);
         push(0x1b, 0x61, 0x01);
@@ -2198,18 +2468,18 @@ $machineOptionDisabled = static function (array $machine): bool {
         pushText(`Bleach: ${payload.bleachName || 'None'}\n`);
         pushText(`Add Ons: ${payload.addonsText || 'None'}\n`);
         pushText(`Included Fold: ${payload.includedFold || 'No'}\n`);
-        if (includePaymentBlock) {
+        const paymentMethodRaw = String(payload.paymentMethod || '').toLowerCase();
+        const includePaymentDetails = includePaymentBlock && paymentMethodRaw !== 'free' && paymentMethodRaw !== 'reward';
+        if (includePaymentDetails) {
             pushText(`Payment: ${payload.paymentMethod || '—'}\n`);
             if (payload.amountTenderedText) pushText(`Tendered: ${escposMoney(payload.amountTenderedText, '')}\n`);
             if (payload.changeText) pushText(`Change: ${escposMoney(payload.changeText, '')}\n`);
         }
         if (payload.savedAt) pushText(`Saved: ${payload.savedAt}\n`);
-        if (footer) {
-            pushText(line);
-            push(0x1b, 0x61, 0x01);
-            pushText(`${footer}\n`);
-            push(0x1b, 0x61, 0x00);
-        }
+        pushText(line);
+        push(0x1b, 0x61, 0x01);
+        sharedPrintFooterLines.forEach((row) => pushText(`${row}\n`));
+        push(0x1b, 0x61, 0x00);
         pushText('\n'.repeat(extraFeeds));
         if (cutMode === 'full') {
             push(0x1d, 0x56, 0x00);
@@ -2228,12 +2498,7 @@ $machineOptionDisabled = static function (array $machine): bool {
     };
     const escposReceiptBytes = (payload, includePaymentBlock = false) => {
         if (!includePaymentBlock) {
-            const customerCopy = escposReceiptBytesSingle(payload, false, "Customer's Copy");
-            const shopCopy = escposReceiptBytesSingle(payload, false, 'Shop Copy');
-            const merged = new Uint8Array(customerCopy.length + shopCopy.length);
-            merged.set(customerCopy, 0);
-            merged.set(shopCopy, customerCopy.length);
-            return merged;
+            return escposReceiptBytesSingle(payload, false, "Customer's Copy");
         }
         const copyCount = lanPrintCopies;
         const single = escposReceiptBytesSingle(payload, true, '');
@@ -2268,7 +2533,7 @@ $machineOptionDisabled = static function (array $machine): bool {
                 title: includePaymentBlock ? 'Receipt preview' : 'Reference preview',
                 html: renderReceiptPreviewHtml(payload, includePaymentBlock)
                     + (!includePaymentBlock
-                        ? '<div class="small text-muted mt-2">This will print 2 copies: Customer\'s Copy and Shop Copy.</div>'
+                        ? '<div class="small text-muted mt-2">This will print 1 copy: Customer\'s Copy only.</div>'
                         : `<div class="small text-muted mt-2">Copies to print: ${lanPrintCopies} (from Receipt Config).</div>`),
                 showCancelButton: true,
                 confirmButtonText: 'Print via Bluetooth',
@@ -2291,22 +2556,6 @@ $machineOptionDisabled = static function (array $machine): bool {
             });
         }
     };
-    document.addEventListener('click', async (e) => {
-        const reprintBtn = e.target.closest('.laundry-kanban-action-reprint');
-        if (!reprintBtn) return;
-        e.preventDefault();
-        const card = reprintBtn.closest('.laundry-kanban-card');
-        try {
-            await printReceiptWithPreview(card, false);
-        } catch (error) {
-            const message = error instanceof Error ? error.message : 'Bluetooth print failed.';
-            if (typeof Swal !== 'undefined') {
-                await Swal.fire({ icon: 'warning', title: 'Print Reference failed', text: message, confirmButtonColor: '#dc3545' });
-            } else {
-                showProcessError(`Print Reference failed: ${message}`);
-            }
-        }
-    });
     document.addEventListener('click', async (e) => {
         const printBtn = e.target.closest('.laundry-kanban-action-print-receipt');
         if (!printBtn) return;
@@ -2339,7 +2588,15 @@ $machineOptionDisabled = static function (array $machine): bool {
         e.preventDefault();
         const tr = startBtn.closest('tr');
         if (!tr) return;
-        openMachineAssignModal(tr, { reloadOnSuccess: true, row: tr });
+        if (!machineAssignmentEnabled) {
+            postAdvance(tr, 'washing_drying', { reloadOnSuccess: true, row: tr }).then((ok) => {
+                if (ok) updateTableRowStatusUI(tr);
+            });
+            return;
+        }
+        openMachineAssignModal(tr, { reloadOnSuccess: true, row: tr }).then((ok) => {
+            if (ok) updateTableRowStatusUI(tr);
+        });
     });
 
     document.addEventListener('click', (e) => {
@@ -2348,7 +2605,9 @@ $machineOptionDisabled = static function (array $machine): bool {
         e.preventDefault();
         const tr = openTicketBtn.closest('tr');
         if (!tr) return;
-        postAdvance(tr, 'open_ticket', { reloadOnSuccess: true, row: tr });
+        postAdvance(tr, 'open_ticket', { reloadOnSuccess: true, row: tr }).then((ok) => {
+            if (ok) updateTableRowStatusUI(tr);
+        });
     });
 
     document.addEventListener('click', async (e) => {
@@ -2357,11 +2616,18 @@ $machineOptionDisabled = static function (array $machine): bool {
         e.preventDefault();
         const tr = payBtn.closest('tr');
         if (!tr) return;
-        if (isNoPaymentMode(tr)) {
-            await submitNoPaymentCompletion(tr);
-            return;
-        }
         openPayModalFromCard(tr);
+    });
+
+    document.addEventListener('click', (e) => {
+        const completeBtn = e.target.closest('.laundry-table-action-complete');
+        if (!completeBtn) return;
+        e.preventDefault();
+        const tr = completeBtn.closest('tr');
+        if (!tr) return;
+        postAdvance(tr, 'completed', { reloadOnSuccess: true, row: tr }).then((ok) => {
+            if (ok) updateTableRowStatusUI(tr);
+        });
     });
 
     const voidModalEl = document.getElementById('laundryVoidModal');

@@ -5,6 +5,7 @@ declare(strict_types=1);
 return [
     'welcome' => '/',
     'install.app' => '/install-app',
+    'demo.video' => '/demo-video',
     'pricing' => '/pricing',
     'login' => '/login',
     'register' => '/register',

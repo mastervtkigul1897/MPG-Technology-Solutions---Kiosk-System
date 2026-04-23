@@ -198,6 +198,7 @@ final class LaundrySchema
                 id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
                 tenant_id BIGINT UNSIGNED NOT NULL,
                 machine_assignment_enabled TINYINT(1) NOT NULL DEFAULT 1,
+                laundry_status_tracking_enabled TINYINT(1) NOT NULL DEFAULT 1,
                 fold_service_amount DECIMAL(16,4) NOT NULL DEFAULT 10,
                 fold_commission_target VARCHAR(20) NOT NULL DEFAULT "staff",
                 created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
@@ -261,6 +262,7 @@ final class LaundrySchema
                 service_kind VARCHAR(32) NOT NULL,
                 supply_block VARCHAR(32) NOT NULL DEFAULT \'none\',
                 show_addon_supplies TINYINT(1) NOT NULL DEFAULT 1,
+                required_weight TINYINT(1) NOT NULL DEFAULT 0,
                 price_per_load DECIMAL(16,4) NOT NULL DEFAULT 0,
                 sort_order INT NOT NULL DEFAULT 0,
                 is_active TINYINT(1) NOT NULL DEFAULT 1,
@@ -274,6 +276,7 @@ final class LaundrySchema
 
         self::addColumnIfMissing($pdo, 'laundry_order_types', 'supply_block', 'VARCHAR(32) NOT NULL DEFAULT \'none\' AFTER service_kind');
         self::addColumnIfMissing($pdo, 'laundry_order_types', 'show_addon_supplies', 'TINYINT(1) NOT NULL DEFAULT 1 AFTER supply_block');
+        self::addColumnIfMissing($pdo, 'laundry_order_types', 'required_weight', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER show_addon_supplies');
         try {
             $chk = $pdo->prepare('SHOW COLUMNS FROM `laundry_order_types` LIKE ?');
             $chk->execute(['include_in_rewards']);
@@ -292,6 +295,7 @@ final class LaundrySchema
         self::widenOrderTypeColumn($pdo);
         self::ensureOrderTypesForAllTenants($pdo);
         self::ensureRinseOnlyOrderType($pdo);
+        self::ensureDryCleaningOrderType($pdo);
 
         self::addColumnIfMissing($pdo, 'users', 'day_rate', 'DECIMAL(16,4) NOT NULL DEFAULT 350');
         self::addColumnIfMissing($pdo, 'users', 'folding_fee_per_load', 'DECIMAL(16,4) NOT NULL DEFAULT 10');
@@ -310,6 +314,7 @@ final class LaundrySchema
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'daily_load_quota', 'INT NOT NULL DEFAULT 0 AFTER activate_commission');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'commission_rate_per_load', 'DECIMAL(16,4) NOT NULL DEFAULT 0 AFTER daily_load_quota');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'activate_ot_incentives', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER commission_rate_per_load');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'laundry_status_tracking_enabled', 'TINYINT(1) NOT NULL DEFAULT 1 AFTER machine_assignment_enabled');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'created_by_user_id', 'BIGINT UNSIGNED DEFAULT NULL AFTER tenant_id');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'machine_id', 'BIGINT UNSIGNED DEFAULT NULL AFTER created_by_user_id');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'reference_code', 'VARCHAR(32) NULL DEFAULT NULL AFTER id');
@@ -330,6 +335,7 @@ final class LaundrySchema
         self::addColumnIfMissing($pdo, 'laundry_orders', 'inclusion_fabcon_item_id', 'BIGINT UNSIGNED NULL DEFAULT NULL AFTER inclusion_detergent_item_id');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'inclusion_bleach_item_id', 'BIGINT UNSIGNED NULL DEFAULT NULL AFTER inclusion_fabcon_item_id');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'payment_status', "VARCHAR(20) NOT NULL DEFAULT 'paid' AFTER payment_method");
+        self::addColumnIfMissing($pdo, 'laundry_orders', 'service_weight', 'DECIMAL(10,3) NULL DEFAULT NULL AFTER dry_minutes');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'amount_tendered', 'DECIMAL(16,4) NULL DEFAULT NULL AFTER payment_status');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'change_amount', 'DECIMAL(16,4) NULL DEFAULT NULL AFTER amount_tendered');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'discount_percentage', 'DECIMAL(6,2) NOT NULL DEFAULT 0 AFTER change_amount');
@@ -404,8 +410,8 @@ final class LaundrySchema
         }
         $countSt = $pdo->prepare('SELECT COUNT(*) FROM laundry_order_types WHERE tenant_id = ?');
         $ins = $pdo->prepare(
-            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, price_per_load, sort_order, is_active, include_in_rewards, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
+            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, required_weight, price_per_load, sort_order, is_active, include_in_rewards, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
         );
         foreach ($tenantIds as $tid) {
             $tenantId = (int) $tid;
@@ -429,10 +435,11 @@ final class LaundrySchema
                 }
             } catch (\Throwable) {
             }
-            $ins->execute([$tenantId, 'drop_off', 'Drop-off (Full Service)', 'full_service', 'full_service', 1, $pDrop, 1, 1]);
-            $ins->execute([$tenantId, 'wash_only', 'Wash only', 'wash_only', 'wash_supplies', 1, $pWash, 2, 0]);
-            $ins->execute([$tenantId, 'dry_only', 'Dry only', 'dry_only', 'none', 0, $pDry, 3, 0]);
-            $ins->execute([$tenantId, 'rinse_only', 'Rinse only', 'rinse_only', 'rinse_supplies', 0, $pWash, 4, 0]);
+            $ins->execute([$tenantId, 'drop_off', 'Drop-off (Full Service)', 'full_service', 'full_service', 1, 0, $pDrop, 1, 1]);
+            $ins->execute([$tenantId, 'wash_only', 'Wash only', 'wash_only', 'wash_supplies', 1, 0, $pWash, 2, 0]);
+            $ins->execute([$tenantId, 'dry_only', 'Dry only', 'dry_only', 'none', 0, 0, $pDry, 3, 0]);
+            $ins->execute([$tenantId, 'rinse_only', 'Rinse only', 'rinse_only', 'rinse_supplies', 0, 0, $pWash, 4, 0]);
+            $ins->execute([$tenantId, 'dry_cleaning', 'Dry Cleaning', 'dry_cleaning', 'none', 0, 1, $pWash, 5, 0]);
         }
     }
 
@@ -449,8 +456,8 @@ final class LaundrySchema
         $chk = $pdo->prepare('SELECT 1 FROM laundry_order_types WHERE tenant_id = ? AND code = \'rinse_only\' LIMIT 1');
         $priceWash = $pdo->prepare('SELECT price_per_load FROM laundry_order_types WHERE tenant_id = ? AND code = \'wash_only\' LIMIT 1');
         $ins = $pdo->prepare(
-            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, price_per_load, sort_order, is_active, include_in_rewards, created_at, updated_at)
-             VALUES (?, \'rinse_only\', \'Rinse only\', \'rinse_only\', \'rinse_supplies\', 0, ?, 4, 1, 0, NOW(), NOW())'
+            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, required_weight, price_per_load, sort_order, is_active, include_in_rewards, created_at, updated_at)
+             VALUES (?, \'rinse_only\', \'Rinse only\', \'rinse_only\', \'rinse_supplies\', 0, 0, ?, 4, 1, 0, NOW(), NOW())'
         );
         foreach ($tenantIds as $tid) {
             $tenantId = (int) $tid;
@@ -468,6 +475,41 @@ final class LaundrySchema
                 $ins->execute([$tenantId, $p]);
             } catch (\Throwable) {
             }
+        }
+    }
+
+    /**
+     * Add default "Dry Cleaning" order type for legacy tenants.
+     */
+    private static function ensureDryCleaningOrderType(PDO $pdo): void
+    {
+        try {
+            $tenantIds = $pdo->query('SELECT id FROM tenants')->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        } catch (\Throwable) {
+            return;
+        }
+        $chk = $pdo->prepare('SELECT 1 FROM laundry_order_types WHERE tenant_id = ? AND code = \'dry_cleaning\' LIMIT 1');
+        $priceWash = $pdo->prepare('SELECT price_per_load FROM laundry_order_types WHERE tenant_id = ? AND code = \'wash_only\' LIMIT 1');
+        $ins = $pdo->prepare(
+            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, required_weight, price_per_load, sort_order, is_active, include_in_rewards, created_at, updated_at)
+             VALUES (?, \'dry_cleaning\', \'Dry Cleaning\', \'dry_cleaning\', \'none\', 0, 1, ?, 5, 1, 0, NOW(), NOW())'
+        );
+        foreach ($tenantIds as $tid) {
+            $tenantId = (int) $tid;
+            $chk->execute([$tenantId]);
+            if ($chk->fetch() !== false) {
+                continue;
+            }
+            $p = 60.0;
+            try {
+                $priceWash->execute([$tenantId]);
+                $v = $priceWash->fetchColumn();
+                if ($v !== false) {
+                    $p = max(0.0, (float) $v);
+                }
+            } catch (\Throwable) {
+            }
+            $ins->execute([$tenantId, $p]);
         }
     }
 

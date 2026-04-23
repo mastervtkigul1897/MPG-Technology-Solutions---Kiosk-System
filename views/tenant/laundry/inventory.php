@@ -73,10 +73,6 @@
                         <input class="form-control" name="quantity" id="inventoryStockQty" type="number" min="0.01" step="0.01" value="1" required>
                     </div>
                     <div class="col-12">
-                        <label class="form-label mb-1">Note</label>
-                        <input class="form-control" name="note" maxlength="255">
-                    </div>
-                    <div class="col-12">
                         <div class="d-flex flex-wrap gap-2">
                             <button class="btn btn-success" type="submit" name="stock_action" value="add">Add stock</button>
                             <button class="btn btn-danger" type="submit" name="stock_action" value="reduce">Reduce stock</button>

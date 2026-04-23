@@ -24,6 +24,13 @@ final class HomeController
         ]);
     }
 
+    public function demoVideo(Request $request): Response
+    {
+        return response_view('demo-video', [
+            'title' => 'Demo Video',
+        ]);
+    }
+
     public function pricing(Request $request): Response
     {
         return view_guest('Pricing', 'pricing');

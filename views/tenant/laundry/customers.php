@@ -1,7 +1,7 @@
 <?php require dirname(__DIR__, 2).'/partials/premium_trial_page_banner.php'; ?>
 <?php if (! empty($reward_system_active)): ?>
 <div class="alert alert-light border small mb-3 mb-md-0">
-    Reward load on each customer increases only from <strong>paid</strong> sales whose order type has <strong>Include to Reward System</strong> turned on (see <a href="<?= e(route('tenant.laundry-order-pricing.index')) ?>">Order Type Pricing</a>). Turn off <strong>Activate Reward System</strong> on the Rewards page to stop counting entirely.
+    Reward load on each customer increases only from <strong>paid</strong> sales whose order type has <strong>Include to Reward System</strong> turned on (see <a href="<?= e(route('tenant.laundry-order-pricing.index')) ?>">Order Pricing</a>). Turn off <strong>Activate Reward System</strong> on the Rewards page to stop counting entirely.
 </div>
 <?php endif; ?>
 <div class="card mb-3">

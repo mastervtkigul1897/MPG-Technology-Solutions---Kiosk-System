@@ -239,6 +239,7 @@ final class Router
 
         $r(['GET'], '#^/$#', HomeController::class.'::welcome', 'welcome', ['guest']);
         $r(['GET'], '#^/install-app$#', HomeController::class.'::installApp', 'install.app', ['guest']);
+        $r(['GET'], '#^/demo-video$#', HomeController::class.'::demoVideo', 'demo.video', ['guest']);
         $r(['GET'], '#^/pricing$#', HomeController::class.'::pricing', 'pricing', ['guest']);
         $r(['GET'], '#^/login$#', AuthController::class.'::showLogin', 'login', ['guest']);
         $r(['POST'], '#^/login$#', AuthController::class.'::login', 'login.post', ['guest']);

@@ -3,6 +3,7 @@ $appName = \App\Core\App::config('name') ?? 'Laundry System';
 $brandLogoPath = url('images/branding/mpglms-logo.png');
 $brandName = (string) $appName;
 $facebookUrl = 'https://www.facebook.com/mpgtechnologysolutionscom';
+$demoVideoUrl = url('/demo-video');
 $installAppHref = url('/install-app');
 ?>
 <!DOCTYPE html>
@@ -33,6 +34,37 @@ $installAppHref = url('/install-app');
             box-shadow: 0 0.35rem 1.25rem rgba(0, 0, 0, 0.2);
         }
         .btn-install-emphasis:hover { box-shadow: 0 0.45rem 1.5rem rgba(0, 0, 0, 0.28); }
+        .device-card {
+            border: 1px solid rgba(37, 99, 235, 0.18);
+            border-radius: 14px;
+            background: #ffffff;
+            padding: 1rem;
+            height: 100%;
+            box-shadow: 0 0.45rem 1.2rem rgba(2, 6, 23, 0.06);
+        }
+        .device-card .icon-wrap {
+            width: 52px;
+            height: 52px;
+            border-radius: 12px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(37, 99, 235, 0.12);
+            color: #1d4ed8;
+            font-size: 1.4rem;
+        }
+        .os-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            border: 1px solid rgba(15, 23, 42, 0.12);
+            border-radius: 999px;
+            padding: 0.45rem 0.7rem;
+            background: #fff;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #334155;
+        }
         a.landing-login-trigger[href="#"] { cursor: pointer; }
     </style>
 </head>
@@ -50,6 +82,7 @@ $installAppHref = url('/install-app');
             <ul class="navbar-nav ms-auto align-items-lg-center gap-lg-2">
                 <li class="nav-item"><a class="nav-link" href="#home">Home</a></li>
                 <li class="nav-item"><a class="nav-link" href="<?= e(url('/pricing')) ?>">Pricing</a></li>
+                <li class="nav-item"><a class="nav-link" href="<?= e($demoVideoUrl) ?>">Demo Video</a></li>
                 <li class="nav-item"><a class="nav-link" href="<?= e($installAppHref) ?>">Install App</a></li>
                 <li class="nav-item"><a class="nav-link landing-login-trigger" href="#" role="button" data-bs-toggle="modal" data-bs-target="#landingLoginModal">Login</a></li>
                 <li class="nav-item"><a class="nav-link" href="<?= e($facebookUrl) ?>" target="_blank" rel="noopener noreferrer">Contact us</a></li>
@@ -69,6 +102,9 @@ $installAppHref = url('/install-app');
                     <a href="<?= e($installAppHref) ?>" class="btn btn-light btn-install-emphasis text-primary text-center"><span class="d-inline-flex flex-column align-items-center lh-sm"><span><i class="fa-solid fa-mobile-screen-button me-2"></i>Install App</span><span class="small fw-semibold mt-1 opacity-90">One Time Setup</span></span></a>
                 </div>
                 <div class="d-flex flex-wrap gap-2">
+                    <a href="<?= e($demoVideoUrl) ?>" class="btn btn-info fw-semibold text-white">
+                        <i class="fa-brands fa-facebook me-2"></i>Watch Demo Video
+                    </a>
                     <a href="<?= e(url('/register')) ?>" class="btn btn-warning fw-semibold"><i class="fa-solid fa-bolt me-1"></i>Start 7-day free trial</a>
                     <a href="<?= e(url('/pricing')) ?>" class="btn btn-outline-light">View pricing</a>
                     <a href="#" class="btn btn-light text-primary landing-login-trigger" role="button" data-bs-toggle="modal" data-bs-target="#landingLoginModal">Login</a>
@@ -93,6 +129,40 @@ $installAppHref = url('/install-app');
 <main>
     <section class="py-5">
         <div class="container">
+            <div class="text-center mb-4">
+                <h2 class="h3 mb-2">Works on your everyday devices</h2>
+                <p class="text-muted mb-0">Use one system across phone, tablet, and desktop for faster laundry operations anywhere.</p>
+            </div>
+            <div class="row g-3 mb-4">
+                <div class="col-12 col-md-4">
+                    <div class="device-card">
+                        <span class="icon-wrap mb-2"><i class="fa-solid fa-mobile-screen-button"></i></span>
+                        <h3 class="h6 mb-1">Phone Ready</h3>
+                        <p class="small text-muted mb-0">Ideal for cashier flow and quick order updates while moving around the shop.</p>
+                    </div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="device-card">
+                        <span class="icon-wrap mb-2"><i class="fa-solid fa-tablet-screen-button"></i></span>
+                        <h3 class="h6 mb-1">Tablet Friendly</h3>
+                        <p class="small text-muted mb-0">Comfortable touch UI for front-desk encoding, summary checks, and payment capture.</p>
+                    </div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="device-card">
+                        <span class="icon-wrap mb-2"><i class="fa-solid fa-desktop"></i></span>
+                        <h3 class="h6 mb-1">Desktop Optimized</h3>
+                        <p class="small text-muted mb-0">Great for owners and admins doing reports, branch settings, and full monitoring.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="d-flex flex-wrap justify-content-center gap-2 mb-5">
+                <span class="os-chip"><i class="fa-brands fa-android"></i>Android</span>
+                <span class="os-chip"><i class="fa-brands fa-apple"></i>iOS</span>
+                <span class="os-chip"><i class="fa-brands fa-windows"></i>Windows</span>
+                <span class="os-chip"><i class="fa-brands fa-apple"></i>Mac</span>
+                <span class="os-chip"><i class="fa-brands fa-linux"></i>Linux</span>
+            </div>
             <div class="row g-4">
                 <div class="col-lg-6">
                     <h2 class="h4 mb-3">Pain points in day-to-day operations</h2>
@@ -156,6 +226,9 @@ $installAppHref = url('/install-app');
                     <a href="<?= e($installAppHref) ?>" class="btn btn-light btn-install-emphasis text-primary text-center"><span class="d-inline-flex flex-column align-items-center lh-sm"><span><i class="fa-solid fa-mobile-screen-button me-2"></i>Install App</span><span class="small fw-semibold mt-1 opacity-90">One Time Setup</span></span></a>
                 </div>
                 <div class="d-flex flex-wrap justify-content-center gap-2">
+                    <a href="<?= e($demoVideoUrl) ?>" class="btn btn-info fw-semibold text-white">
+                        <i class="fa-brands fa-facebook me-2"></i>Watch Demo Video
+                    </a>
                     <a href="<?= e(url('/register')) ?>" class="btn btn-warning fw-semibold">Start free trial</a>
                     <a href="<?= e(url('/pricing')) ?>" class="btn btn-outline-light">Pricing</a>
                     <a href="#" class="btn btn-light text-primary landing-login-trigger" role="button" data-bs-toggle="modal" data-bs-target="#landingLoginModal">Login</a>

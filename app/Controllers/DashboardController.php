@@ -50,6 +50,7 @@ final class DashboardController
 
         LaundrySchema::ensure($pdo);
         $this->ensureTimeLogPhotoColumns($pdo);
+        $laundryStatusTrackingEnabled = $this->isLaundryStatusTrackingEnabled($pdo, $tenantId);
         $today = date('Y-m-d');
         $rangeStart = $today.' 00:00:00';
         $rangeEnd = $today.' 23:59:59';
@@ -94,7 +95,7 @@ final class DashboardController
         $foldAmountToday = $foldCommissionTarget === 'branch'
             ? ($foldServiceAmount * $foldOrdersToday)
             : 0.0;
-        $loadStatusRows = $this->fetchLoadStatusSummary($pdo, $tenantId, $today);
+        $loadStatusRows = $this->fetchLoadStatusSummary($pdo, $tenantId, $today, $laundryStatusTrackingEnabled);
         $serviceModeSummary = $this->fetchServiceModeSummary($pdo, $tenantId, $today);
         $machineCreditRows = $this->fetchMachineCreditBalances($pdo, $tenantId);
         $cashAvailable = ($salesToday + $foldAmountToday) - $expensesToday;
@@ -204,6 +205,7 @@ final class DashboardController
             ],
             'payment_breakdown' => $paymentBreakdown,
             'load_status_summary' => $loadStatusRows,
+            'laundry_status_tracking_enabled' => $laundryStatusTrackingEnabled,
             'service_mode_summary' => $serviceModeSummary,
             'machine_credit_balances' => $machineCreditRows,
             'clock_open' => $clockOpen,
@@ -215,40 +217,53 @@ final class DashboardController
     /**
      * @return array<string,array{label:string,count:int,amount:float}>
      */
-    private function fetchLoadStatusSummary(PDO $pdo, int $tenantId, string $today): array
+    private function fetchLoadStatusSummary(PDO $pdo, int $tenantId, string $today, bool $trackingEnabled): array
     {
-        $summary = [
-            'pending' => ['label' => 'Pending - Waiting', 'count' => 0, 'amount' => 0.0],
-            'washing_drying' => ['label' => 'Washing - Drying', 'count' => 0, 'amount' => 0.0],
-            'open_ticket' => ['label' => 'Finishing - To Be Picked Up', 'count' => 0, 'amount' => 0.0],
-            'paid' => ['label' => 'Paid - Completed', 'count' => 0, 'amount' => 0.0],
-        ];
+        $summary = $trackingEnabled
+            ? [
+                'pending' => ['label' => 'Pending', 'count' => 0, 'amount' => 0.0],
+                'washing_drying' => ['label' => 'Washing - Drying', 'count' => 0, 'amount' => 0.0],
+                'open_ticket' => ['label' => 'Unpaid', 'count' => 0, 'amount' => 0.0],
+                'paid' => ['label' => 'Paid', 'count' => 0, 'amount' => 0.0],
+                'completed' => ['label' => 'Completed', 'count' => 0, 'amount' => 0.0],
+            ]
+            : [
+                'open_ticket' => ['label' => 'Unpaid', 'count' => 0, 'amount' => 0.0],
+                'paid' => ['label' => 'Paid', 'count' => 0, 'amount' => 0.0],
+                'completed' => ['label' => 'Completed', 'count' => 0, 'amount' => 0.0],
+            ];
         try {
             $st = $pdo->prepare(
                 'SELECT
                     CASE
-                        WHEN status IN ("washing_drying", "running") THEN "washing_drying"
-                        WHEN status = "open_ticket" OR (status = "completed" AND payment_status <> "paid") THEN "open_ticket"
-                        WHEN status = "pending" THEN "pending"
-                        WHEN (status = "paid" OR (status = "completed" AND payment_status = "paid")) AND DATE(created_at) = ? THEN "paid"
+                        WHEN o.status = "pending" THEN "pending"
+                        WHEN o.status IN ("washing_drying", "running") THEN "washing_drying"
+                        WHEN o.status = "open_ticket" THEN "open_ticket"
+                        WHEN o.status = "paid" THEN "paid"
+                        WHEN o.status = "completed" AND LOWER(TRIM(COALESCE(o.payment_status, "unpaid"))) = "paid" THEN "completed"
+                        WHEN o.status = "completed" THEN "open_ticket"
                         ELSE ""
                     END AS bucket,
                     COUNT(*) AS cnt,
-                    COALESCE(SUM(total_amount), 0) AS total
-                 FROM laundry_orders
+                    COALESCE(SUM(o.total_amount), 0) AS total
+                 FROM laundry_orders o
                  WHERE o.tenant_id = ?
-                   AND COALESCE(is_void, 0) = 0
-                   AND status <> "void"
+                   AND COALESCE(o.is_void, 0) = 0
+                   AND o.status <> "void"
                    AND (
-                        status IN ("pending", "washing_drying", "running", "open_ticket")
-                        OR (status = "completed" AND payment_status <> "paid")
-                        OR ((status = "paid" OR (status = "completed" AND payment_status = "paid")) AND DATE(created_at) = ?)
+                        o.status IN ("pending", "washing_drying", "running", "open_ticket")
+                        OR (o.status IN ("paid", "completed") AND DATE(o.created_at) = ?)
                    )
                  GROUP BY bucket'
             );
-            $st->execute([$today, $tenantId, $today]);
+            $st->execute([$tenantId, $today]);
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
                 $bucket = (string) ($row['bucket'] ?? '');
+                if (! $trackingEnabled) {
+                    if ($bucket === 'pending' || $bucket === 'washing_drying') {
+                        $bucket = 'open_ticket';
+                    }
+                }
                 if (! isset($summary[$bucket])) {
                     continue;
                 }
@@ -259,6 +274,31 @@ final class DashboardController
         }
 
         return $summary;
+    }
+
+    private function isLaundryStatusTrackingEnabled(PDO $pdo, int $tenantId): bool
+    {
+        if ($tenantId < 1) {
+            return true;
+        }
+        try {
+            $st = $pdo->prepare(
+                'SELECT laundry_status_tracking_enabled
+                 FROM laundry_branch_configs
+                 WHERE tenant_id = ?
+                 LIMIT 1'
+            );
+            $st->execute([$tenantId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (! is_array($row)) {
+                return true;
+            }
+
+            return (int) ($row['laundry_status_tracking_enabled'] ?? 1) === 1;
+        } catch (\Throwable) {
+            // Fail-safe aligned with POS/load board behavior.
+            return false;
+        }
     }
 
     /**

@@ -123,12 +123,23 @@ $stockQtyLabel = static function (float $qty): string {
 
 <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" id="staffKioskOrderForm" data-mpg-native-submit>
     <?= csrf_field() ?>
+    <input type="hidden" name="origin" value="staff_portal">
     <input type="hidden" name="customer_id" id="kioskCustomerId" value="">
+    <input type="hidden" name="customer_selection" id="kioskCustomerSelection" value="">
     <input type="hidden" name="order_type" id="kioskOrderTypeCode" value="">
     <input type="hidden" name="service_mode" id="kioskServiceMode" value="regular">
     <input type="hidden" name="reward_redemption" id="kioskRewardRedemption" value="0">
     <input type="hidden" name="reference_code" id="kioskReferenceCode" value="<?= e($referencePreview) ?>">
+    <input type="hidden" name="payment_timing" id="kioskPaymentTiming" value="pay_later">
+    <input type="hidden" name="payment_method" id="kioskPaymentMethod" value="pending">
+    <input type="hidden" name="amount_tendered" id="kioskAmountTendered" value="">
+    <input type="hidden" name="change_amount" id="kioskChangeAmount" value="">
+    <input type="hidden" name="split_cash_amount" id="kioskSplitCashAmount" value="">
+    <input type="hidden" name="split_online_amount" id="kioskSplitOnlineAmount" value="">
+    <input type="hidden" name="split_online_method" id="kioskSplitOnlineMethod" value="">
+    <input type="hidden" name="track_laundry_status" id="kioskTrackLaundryStatus" value="<?= ! empty($laundry_status_tracking_enabled) ? '1' : '0' ?>">
     <input type="hidden" name="use_machines" id="kioskUseMachines" value="0">
+    <input type="hidden" name="service_weight" id="kioskServiceWeightHidden" value="">
     <input type="hidden" name="wash_qty" value="1">
     <input type="hidden" name="dry_qty" value="1">
     <input type="hidden" name="include_fold_service" id="kioskFoldService" value="0">
@@ -142,12 +153,11 @@ $stockQtyLabel = static function (float $qty): string {
     <input type="hidden" name="fabcon_qty" id="kioskAddonFabconQty" value="0">
     <input type="hidden" name="bleach_qty" id="kioskAddonBleachQty" value="0">
 
-    <div class="small text-muted mb-2" id="kioskStepLabel">Step 1 of 5</div>
-    <div class="kiosk-step-context d-none" id="kioskStepContext"></div>
+    <div class="small text-muted mb-2">Single-page mode: tap selections below, then submit via Pay Now or Pay Later.</div>
 
     <div class="card mb-3 kiosk-step" data-step="1">
         <div class="card-body">
-            <h6 class="mb-2">1) Order type</h6>
+            <h6 class="mb-2">Order type</h6>
             <div class="d-flex flex-wrap gap-2 mb-3" id="kioskOrderTypeCards">
                 <?php foreach ($orderTypes as $ot): ?>
                     <button
@@ -157,6 +167,8 @@ $stockQtyLabel = static function (float $qty): string {
                         data-service-kind="<?= e((string) ($ot['service_kind'] ?? 'full_service')) ?>"
                         data-supply-block="<?= e((string) ($ot['supply_block'] ?? 'none')) ?>"
                         data-show-addon-supplies="<?= ! empty($ot['show_addon_supplies']) ? '1' : '0' ?>"
+                        data-required-weight="<?= (! empty($ot['required_weight']) || (string) ($ot['service_kind'] ?? '') === 'dry_cleaning') ? '1' : '0' ?>"
+                        data-price-per-load="<?= e((string) (float) ($ot['price_per_load'] ?? 0)) ?>"
                     >
                         <img src="<?= e($orderTypeCardImageSrc($ot)) ?>" alt="<?= e((string) ($ot['label'] ?? 'Order type')) ?>" class="rounded border mb-1" style="width:52px;height:52px;object-fit:cover;">
                         <div class="small fw-semibold"><?= e((string) ($ot['label'] ?? 'Order')) ?></div>
@@ -189,7 +201,7 @@ $stockQtyLabel = static function (float $qty): string {
                 <?php endif; ?>
             </div>
             <h6 class="mb-2 mt-3">Service mode</h6>
-            <div class="btn-group flex-wrap" role="group">
+            <div class="d-flex flex-wrap gap-2" role="group" aria-label="Service mode">
                 <button type="button" class="btn btn-primary kiosk-service-mode-btn kiosk-selectable-btn" data-mode="regular" id="kioskModeRegular">Regular</button>
                 <button type="button" class="btn btn-outline-secondary kiosk-service-mode-btn kiosk-selectable-btn" data-mode="free" id="kioskModeFree">Free</button>
                 <button
@@ -202,12 +214,23 @@ $stockQtyLabel = static function (float $qty): string {
                 >Reward</button>
             </div>
             <div class="small text-muted mt-1" id="kioskRewardStatus">Select a saved customer to check reward availability.</div>
+            <div class="row g-2 mt-2">
+                <div class="col-md-4">
+                    <label class="form-label mb-1" for="kioskNumberOfLoads">Number of loads</label>
+                    <input type="number" min="1" max="100" step="1" class="form-control" id="kioskNumberOfLoads" name="number_of_loads" value="1" required>
+                    <div class="small text-muted mt-1">Estimated Total: <strong id="kioskEstimatedTotalAmount">₱0.00</strong></div>
+                </div>
+                <div class="col-md-4 d-none" id="kioskWeightWrap">
+                    <label class="form-label mb-1" for="kioskServiceWeightInput">Weight</label>
+                    <input type="number" min="0.01" step="0.01" class="form-control" id="kioskServiceWeightInput" placeholder="e.g. 7.5">
+                </div>
+            </div>
         </div>
     </div>
 
-    <div class="card mb-3 kiosk-step d-none" data-step="2">
+    <div class="card mb-3 kiosk-step" data-step="2">
         <div class="card-body">
-            <h6 class="mb-2">2) Service supplies (depends on order type)</h6>
+            <h6 class="mb-2">Service Inclusion</h6>
             <div id="kioskNoSuppliesMessage" class="small text-muted d-none">No required service supplies for this order type.</div>
             <div class="vstack gap-3" id="kioskSuppliesWrap">
                 <div id="kioskSupplyDetWrap">
@@ -250,15 +273,15 @@ $stockQtyLabel = static function (float $qty): string {
         </div>
     </div>
 
-    <div class="card mb-3 kiosk-step d-none" data-step="3">
+    <div class="card mb-3 kiosk-step" data-step="3">
         <div class="card-body">
-            <h6 class="mb-2">3) Add-ons (optional)</h6>
+            <h6 class="mb-2">Add-ons (optional)</h6>
             <div class="row g-3">
                 <div class="col-md-4">
                     <label class="form-label mb-1">Add-on detergent</label>
                     <div class="d-flex flex-wrap gap-2 mb-2" id="kioskAddonDetCards">
                         <?php foreach ($detergentItems as $item): ?>
-                            <button type="button" class="btn btn-outline-primary kiosk-item-card kiosk-addon-det-btn kiosk-selectable-btn" data-id="<?= (int) ($item['id'] ?? 0) ?>" data-name="<?= e((string) ($item['name'] ?? '')) ?>" data-stock-qty="<?= e((string) (float) ($item['stock_quantity'] ?? 0)) ?>" data-low-stock-threshold="<?= e((string) (float) ($item['low_stock_threshold'] ?? 0)) ?>">
+                            <button type="button" class="btn btn-outline-primary kiosk-item-card kiosk-addon-det-btn kiosk-selectable-btn" data-id="<?= (int) ($item['id'] ?? 0) ?>" data-name="<?= e((string) ($item['name'] ?? '')) ?>" data-unit-cost="<?= e((string) (float) ($item['unit_cost'] ?? 0)) ?>" data-stock-qty="<?= e((string) (float) ($item['stock_quantity'] ?? 0)) ?>" data-low-stock-threshold="<?= e((string) (float) ($item['low_stock_threshold'] ?? 0)) ?>">
                                 <img src="<?= e($inventoryCardImageSrc($item)) ?>" alt="<?= e((string) ($item['name'] ?? 'Detergent')) ?>" class="rounded border mb-1" style="width:44px;height:44px;object-fit:cover;">
                                 <div class="small fw-semibold"><?= e((string) ($item['name'] ?? '')) ?></div>
                                 <div class="small text-muted kiosk-item-stock">Stock: <?= e($stockQtyLabel((float) ($item['stock_quantity'] ?? 0))) ?></div>
@@ -271,7 +294,7 @@ $stockQtyLabel = static function (float $qty): string {
                     <label class="form-label mb-1">Add-on fabcon</label>
                     <div class="d-flex flex-wrap gap-2 mb-2" id="kioskAddonFabCards">
                         <?php foreach ($fabconItems as $item): ?>
-                            <button type="button" class="btn btn-outline-primary kiosk-item-card kiosk-addon-fab-btn kiosk-selectable-btn" data-id="<?= (int) ($item['id'] ?? 0) ?>" data-name="<?= e((string) ($item['name'] ?? '')) ?>" data-stock-qty="<?= e((string) (float) ($item['stock_quantity'] ?? 0)) ?>" data-low-stock-threshold="<?= e((string) (float) ($item['low_stock_threshold'] ?? 0)) ?>">
+                            <button type="button" class="btn btn-outline-primary kiosk-item-card kiosk-addon-fab-btn kiosk-selectable-btn" data-id="<?= (int) ($item['id'] ?? 0) ?>" data-name="<?= e((string) ($item['name'] ?? '')) ?>" data-unit-cost="<?= e((string) (float) ($item['unit_cost'] ?? 0)) ?>" data-stock-qty="<?= e((string) (float) ($item['stock_quantity'] ?? 0)) ?>" data-low-stock-threshold="<?= e((string) (float) ($item['low_stock_threshold'] ?? 0)) ?>">
                                 <img src="<?= e($inventoryCardImageSrc($item)) ?>" alt="<?= e((string) ($item['name'] ?? 'Fabcon')) ?>" class="rounded border mb-1" style="width:44px;height:44px;object-fit:cover;">
                                 <div class="small fw-semibold"><?= e((string) ($item['name'] ?? '')) ?></div>
                                 <div class="small text-muted kiosk-item-stock">Stock: <?= e($stockQtyLabel((float) ($item['stock_quantity'] ?? 0))) ?></div>
@@ -284,7 +307,7 @@ $stockQtyLabel = static function (float $qty): string {
                     <label class="form-label mb-1">Add-on bleach</label>
                     <div class="d-flex flex-wrap gap-2 mb-2" id="kioskAddonBleachCards">
                         <?php foreach ($bleachItems as $item): ?>
-                            <button type="button" class="btn btn-outline-primary kiosk-item-card kiosk-addon-bleach-btn kiosk-selectable-btn" data-id="<?= (int) ($item['id'] ?? 0) ?>" data-name="<?= e((string) ($item['name'] ?? '')) ?>" data-stock-qty="<?= e((string) (float) ($item['stock_quantity'] ?? 0)) ?>" data-low-stock-threshold="<?= e((string) (float) ($item['low_stock_threshold'] ?? 0)) ?>">
+                            <button type="button" class="btn btn-outline-primary kiosk-item-card kiosk-addon-bleach-btn kiosk-selectable-btn" data-id="<?= (int) ($item['id'] ?? 0) ?>" data-name="<?= e((string) ($item['name'] ?? '')) ?>" data-unit-cost="<?= e((string) (float) ($item['unit_cost'] ?? 0)) ?>" data-stock-qty="<?= e((string) (float) ($item['stock_quantity'] ?? 0)) ?>" data-low-stock-threshold="<?= e((string) (float) ($item['low_stock_threshold'] ?? 0)) ?>">
                                 <img src="<?= e($inventoryCardImageSrc($item)) ?>" alt="<?= e((string) ($item['name'] ?? 'Bleach')) ?>" class="rounded border mb-1" style="width:44px;height:44px;object-fit:cover;">
                                 <div class="small fw-semibold"><?= e((string) ($item['name'] ?? '')) ?></div>
                                 <div class="small text-muted kiosk-item-stock">Stock: <?= e($stockQtyLabel((float) ($item['stock_quantity'] ?? 0))) ?></div>
@@ -297,54 +320,143 @@ $stockQtyLabel = static function (float $qty): string {
         </div>
     </div>
 
-    <div class="card mb-3 kiosk-step d-none" data-step="5">
+    <div class="card mb-3 kiosk-step" data-step="5">
         <div class="card-body">
-            <h6 class="mb-2">4) Include Fold Service?</h6>
+            <h6 class="mb-2">Include Fold Service?</h6>
             <p class="small text-muted mb-3">Available for all order types.</p>
-            <div class="btn-group" role="group">
+            <div class="d-flex flex-wrap gap-2" role="group" aria-label="Include fold service">
                 <button type="button" class="btn btn-outline-primary kiosk-selectable-btn" id="kioskFoldNoBtn">No</button>
                 <button type="button" class="btn btn-outline-primary kiosk-selectable-btn" id="kioskFoldYesBtn">Yes</button>
             </div>
         </div>
     </div>
 
-    <div class="card kiosk-step d-none" data-step="6">
+    <div class="card kiosk-step" data-step="6">
         <div class="card-body">
-            <h6 class="mb-2">5) Summary</h6>
+            <h6 class="mb-2">Summary</h6>
             <div class="small text-muted mb-2">Review before saving.</div>
             <div class="fw-semibold" id="kioskSelectionSummary">No selection yet.</div>
-            <div class="d-flex flex-wrap gap-2 mt-3">
-                <button type="submit" class="btn btn-lg btn-primary px-4" id="kioskCreateTransactionBtn">
-                    <i class="fa-solid fa-circle-check me-1"></i> Save transaction
-                </button>
+            <div class="mt-3">
+                <div class="d-flex flex-wrap gap-2" role="group" aria-label="Payment timing" id="kioskRegularSubmitWrap">
+                    <button type="submit" class="btn btn-outline-success kiosk-payment-timing-btn" data-timing="pay_now">Pay Now</button>
+                    <button type="submit" class="btn btn-primary kiosk-payment-timing-btn" data-timing="pay_later">Pay Later</button>
+                </div>
+                <div class="d-none" id="kioskFreeRewardSubmitWrap">
+                    <button type="submit" class="btn btn-primary" id="kioskSaveTransactionBtn">Save Transaction</button>
+                </div>
             </div>
         </div>
     </div>
 
-    <div class="d-flex justify-content-between mt-3">
-        <button type="button" class="btn btn-outline-secondary" id="kioskPrevBtn">Previous</button>
-        <button type="button" class="btn btn-primary" id="kioskNextBtn">Next</button>
-    </div>
 </form>
+
+<div class="modal fade" id="kioskPaymentMethodModal" tabindex="-1" aria-labelledby="kioskPaymentMethodModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header border-bottom-0 pb-0">
+                <h5 class="modal-title" id="kioskPaymentMethodModalLabel">Select payment method</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body pt-2">
+                <div class="rounded-3 bg-body-secondary bg-opacity-50 p-3 mb-3">
+                    <div class="small text-muted mb-0">Amount to pay</div>
+                    <div class="fs-5 fw-semibold font-monospace" id="kioskPayNowDueDisplay">₱0.00</div>
+                </div>
+                <div class="row g-2">
+                    <div class="col-6 col-md-4"><button type="button" class="btn btn-outline-secondary w-100 kiosk-pay-method-option" data-method="cash"><i class="fa-solid fa-money-bill-wave me-1"></i>Cash</button></div>
+                    <div class="col-6 col-md-4"><button type="button" class="btn btn-outline-secondary w-100 kiosk-pay-method-option" data-method="gcash"><i class="fa-solid fa-mobile-screen-button me-1"></i>GCash</button></div>
+                    <div class="col-6 col-md-4"><button type="button" class="btn btn-outline-secondary w-100 kiosk-pay-method-option" data-method="paymaya"><i class="fa-solid fa-wallet me-1"></i>PayMaya</button></div>
+                    <div class="col-6 col-md-4"><button type="button" class="btn btn-outline-secondary w-100 kiosk-pay-method-option" data-method="online_banking"><i class="fa-solid fa-building-columns me-1"></i>Online Banking</button></div>
+                    <div class="col-6 col-md-4"><button type="button" class="btn btn-outline-secondary w-100 kiosk-pay-method-option" data-method="qr_payment"><i class="fa-solid fa-qrcode me-1"></i>QR Payment</button></div>
+                    <div class="col-6 col-md-4"><button type="button" class="btn btn-outline-secondary w-100 kiosk-pay-method-option" data-method="card"><i class="fa-solid fa-credit-card me-1"></i>Card</button></div>
+                    <div class="col-12"><button type="button" class="btn btn-outline-secondary w-100 kiosk-pay-method-option" data-method="split_payment"><i class="fa-solid fa-money-bill-transfer me-1"></i>Split Payment (Cash + Online)</button></div>
+                </div>
+                <div class="row g-2 mt-2" id="kioskSinglePaymentFields">
+                    <div class="col-12">
+                        <label class="form-label mb-1" for="kioskAmountPaidInput">Amount paid</label>
+                        <input type="number" min="0" step="0.01" class="form-control" id="kioskAmountPaidInput" placeholder="0.00">
+                    </div>
+                    <div class="col-12">
+                        <div class="rounded-2 border px-3 py-2 bg-body-tertiary bg-opacity-25">
+                            <div class="small text-muted mb-0">Change</div>
+                            <div class="fw-semibold font-monospace text-success" id="kioskChangeDisplay">₱0.00</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-3 d-none" id="kioskSplitPaymentFields">
+                    <div class="small text-muted mb-2">Enter split amounts (must equal total amount).</div>
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <label class="form-label mb-1" for="kioskSplitCashAmountInput">Cash amount</label>
+                            <input type="number" min="0" step="0.01" class="form-control" id="kioskSplitCashAmountInput" placeholder="0.00">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label mb-1" for="kioskSplitOnlineAmountInput">Online amount</label>
+                            <input type="number" min="0" step="0.01" class="form-control" id="kioskSplitOnlineAmountInput" placeholder="0.00">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label mb-1" for="kioskSplitOnlineMethodSelect">Online payment method</label>
+                            <select class="form-select" id="kioskSplitOnlineMethodSelect">
+                                <option value="">Select online method</option>
+                                <option value="gcash">GCash</option>
+                                <option value="paymaya">PayMaya</option>
+                                <option value="online_banking">Online Banking</option>
+                                <option value="qr_payment">QR Payment</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer border-top-0">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="kioskPaymentMethodConfirmBtn">Confirm & Save</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <script>
 (() => {
     const kioskReferenceCode = <?= json_embed($referencePreview) ?>;
 
     const steps = Array.from(document.querySelectorAll('.kiosk-step'));
-    const stepLabel = document.getElementById('kioskStepLabel');
-    const prevBtn = document.getElementById('kioskPrevBtn');
-    const nextBtn = document.getElementById('kioskNextBtn');
+    const paymentMethod = document.getElementById('kioskPaymentMethod');
+    const paymentMethodModalEl = document.getElementById('kioskPaymentMethodModal');
+    const paymentMethodModal = paymentMethodModalEl ? new bootstrap.Modal(paymentMethodModalEl) : null;
+    const paymentMethodConfirmBtn = document.getElementById('kioskPaymentMethodConfirmBtn');
+    const amountTenderedHidden = document.getElementById('kioskAmountTendered');
+    const changeAmountHidden = document.getElementById('kioskChangeAmount');
+    const payNowDueDisplay = document.getElementById('kioskPayNowDueDisplay');
+    const singlePaymentFieldsWrap = document.getElementById('kioskSinglePaymentFields');
+    const amountPaidInput = document.getElementById('kioskAmountPaidInput');
+    const changeDisplay = document.getElementById('kioskChangeDisplay');
+    const splitCashAmountHidden = document.getElementById('kioskSplitCashAmount');
+    const splitOnlineAmountHidden = document.getElementById('kioskSplitOnlineAmount');
+    const splitOnlineMethodHidden = document.getElementById('kioskSplitOnlineMethod');
+    const splitFieldsWrap = document.getElementById('kioskSplitPaymentFields');
+    const splitCashAmountInput = document.getElementById('kioskSplitCashAmountInput');
+    const splitOnlineAmountInput = document.getElementById('kioskSplitOnlineAmountInput');
+    const splitOnlineMethodSelect = document.getElementById('kioskSplitOnlineMethodSelect');
+    const regularSubmitWrap = document.getElementById('kioskRegularSubmitWrap');
+    const freeRewardSubmitWrap = document.getElementById('kioskFreeRewardSubmitWrap');
     const orderTypeCode = document.getElementById('kioskOrderTypeCode');
     const serviceMode = document.getElementById('kioskServiceMode');
     const rewardRedemption = document.getElementById('kioskRewardRedemption');
     const customerId = document.getElementById('kioskCustomerId');
+    const customerSelection = document.getElementById('kioskCustomerSelection');
+    const paymentTiming = document.getElementById('kioskPaymentTiming');
+    const numberOfLoadsInput = document.getElementById('kioskNumberOfLoads');
+    const serviceWeightHidden = document.getElementById('kioskServiceWeightHidden');
+    const serviceWeightInput = document.getElementById('kioskServiceWeightInput');
+    const weightWrap = document.getElementById('kioskWeightWrap');
     const foldService = document.getElementById('kioskFoldService');
     const inclusionDet = document.getElementById('kioskInclusionDetergent');
     const inclusionFab = document.getElementById('kioskInclusionFabcon');
     const inclusionBleach = document.getElementById('kioskInclusionBleach');
     const summary = document.getElementById('kioskSelectionSummary');
+    const estimatedTotalAmount = document.getElementById('kioskEstimatedTotalAmount');
     const customerSearch = document.getElementById('kioskCustomerSearch');
+    const customerCards = document.getElementById('kioskCustomerCards');
     const form = document.getElementById('staffKioskOrderForm');
     const supplyDetCards = document.getElementById('kioskSupplyDetCards');
     const supplyFabCards = document.getElementById('kioskSupplyFabCards');
@@ -364,7 +476,6 @@ $stockQtyLabel = static function (float $qty): string {
     const addonBleachQtyInput = document.getElementById('kioskAddonBleachQtyInput');
     const foldNoBtn = document.getElementById('kioskFoldNoBtn');
     const foldYesBtn = document.getElementById('kioskFoldYesBtn');
-    const stepContext = document.getElementById('kioskStepContext');
     const modeRegularBtn = document.getElementById('kioskModeRegular');
     const modeFreeBtn = document.getElementById('kioskModeFree');
     const modeRewardBtn = document.getElementById('kioskModeReward');
@@ -379,28 +490,42 @@ $stockQtyLabel = static function (float $qty): string {
     const showWarn = (message) => {
         const text = String(message || 'Please review your input.');
         if (typeof Swal !== 'undefined') {
-            Swal.fire({
+            return Swal.fire({
                 icon: 'warning',
                 title: 'Action needed',
                 text,
                 confirmButtonText: 'OK',
             });
-            return;
         }
         window.mpgAlert(text, { title: 'Action needed', icon: 'warning' });
+        return Promise.resolve();
     };
     const listHtml = (items) => {
         if (!Array.isArray(items) || items.length === 0) return 'None';
         return `<ul>${items.map((x) => `<li>• ${esc(x)}</li>`).join('')}</ul>`;
+    };
+    const parseJsonBody = async (res) => {
+        const raw = await res.text();
+        let data = {};
+        if (raw) {
+            try {
+                data = JSON.parse(raw);
+            } catch (_) {
+                data = {};
+            }
+        }
+        return { data };
     };
 
     let selectedOrderLabel = '';
     let selectedServiceKind = '';
     let selectedSupplyBlock = 'none';
     let selectedShowAddonSupplies = false;
-    let selectedCustomerLabel = 'Walk-in customer';
-    let currentStep = 1;
-    let visibleSteps = [1, 2, 3, 5, 6];
+    let selectedRequiredWeight = false;
+    let selectedPricePerLoad = 0;
+    let selectedCustomerLabel = 'No customer selected';
+    let selectedPayNowMethod = 'cash';
+    let isSubmittingOrder = false;
     let rewardPromptOpen = false;
     let rewardIntentCustomerId = '';
     const rewardThreshold = parseFloat(modeRewardBtn?.getAttribute('data-reward-threshold') || '0') || 0;
@@ -411,6 +536,61 @@ $stockQtyLabel = static function (float $qty): string {
         if (!id) return 0;
         const btn = document.querySelector(`.kiosk-customer-btn[data-id="${id}"]`);
         return parseFloat(btn?.getAttribute('data-rewards-balance') || '0') || 0;
+    };
+    const hasExplicitCustomerSelection = () => {
+        const customerMode = (customerSelection?.value || '').trim();
+        return customerMode === 'saved' || customerMode === 'walk_in';
+    };
+    const warnCustomerRequired = () => {
+        const focusTarget = customerSearch || customerCards?.querySelector('.kiosk-customer-btn') || null;
+        const customerSection = customerSearch?.closest('.card') || customerCards?.closest('.card') || focusTarget;
+        const refocusCustomerArea = () => {
+            if (customerSection && typeof customerSection.scrollIntoView === 'function') {
+                customerSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            try {
+                focusTarget?.focus?.({ preventScroll: true });
+            } catch (_) {
+                focusTarget?.focus?.();
+            }
+        };
+        refocusCustomerArea();
+        void showWarn('Customer is required. Select a customer or choose Walk-in customer first.')
+            .then(() => {
+                // After popup closes, force focus back to customer area
+                // so viewport does not jump back to submit buttons.
+                refocusCustomerArea();
+            });
+    };
+    const warnAndFocus = (message, focusTarget, sectionTarget = null) => {
+        const refocus = () => {
+            const section = sectionTarget || focusTarget;
+            if (section && typeof section.scrollIntoView === 'function') {
+                section.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            try {
+                focusTarget?.focus?.({ preventScroll: true });
+            } catch (_) {
+                focusTarget?.focus?.();
+            }
+        };
+        refocus();
+        void showWarn(message).then(() => refocus());
+    };
+    const defaultSupplyBlockForKind = (kind) => {
+        switch (String(kind || '')) {
+            case 'full_service':
+                return 'full_service';
+            case 'wash_only':
+                return 'wash_supplies';
+            case 'rinse_only':
+                return 'rinse_supplies';
+            default:
+                return 'none';
+        }
+    };
+    const defaultShowAddonForKind = (kind) => {
+        return String(kind || '') === 'full_service' || String(kind || '') === 'wash_only';
     };
 
     const isRewardAvailable = () => {
@@ -448,6 +628,7 @@ $stockQtyLabel = static function (float $qty): string {
                 rewardStatus.textContent = `No reward available yet (${balance.toFixed(2)} / ${rewardThreshold.toFixed(2)}).`;
             }
         }
+        syncSubmitButtonsByMode();
     };
 
     const applyRewardRedemption = () => {
@@ -464,6 +645,7 @@ $stockQtyLabel = static function (float $qty): string {
             rewardOrderBtn?.click();
         }
         syncRewardMode();
+        syncSubmitButtonsByMode();
         computeSupplyStep();
         renderStep();
     };
@@ -500,20 +682,30 @@ $stockQtyLabel = static function (float $qty): string {
     };
 
     const recomputeVisibleSteps = () => {
-        const noSupplies = selectedSupplyBlock === 'none';
-        const showAddons = selectedShowAddonSupplies && serviceMode.value !== 'free' && serviceMode.value !== 'reward';
-        if (noSupplies && !showAddons) {
-            visibleSteps = [1, 5, 6];
-        } else if (noSupplies) {
-            visibleSteps = [1, 3, 5, 6];
-        } else if (!showAddons) {
-            visibleSteps = [1, 2, 5, 6];
-        } else {
-            visibleSteps = [1, 2, 3, 5, 6];
-        }
-        if (!visibleSteps.includes(currentStep)) {
-            currentStep = visibleSteps[0] || 1;
-        }
+        steps.forEach((el) => {
+            const step = String(el.getAttribute('data-step') || '').trim();
+            if (step === '3') {
+                // Show Add-ons section only when selected order type enables it.
+                const showAddons = selectedShowAddonSupplies === true;
+                el.classList.toggle('d-none', !showAddons);
+                if (!showAddons) {
+                    addonDetId.value = '';
+                    addonFabId.value = '';
+                    addonBleachId.value = '';
+                    addonDetQty.value = '0';
+                    addonFabQty.value = '0';
+                    addonBleachQty.value = '0';
+                    if (addonDetQtyInput) addonDetQtyInput.value = '';
+                    if (addonFabQtyInput) addonFabQtyInput.value = '';
+                    if (addonBleachQtyInput) addonBleachQtyInput.value = '';
+                    setButtonState('.kiosk-addon-det-btn', null);
+                    setButtonState('.kiosk-addon-fab-btn', null);
+                    setButtonState('.kiosk-addon-bleach-btn', null);
+                }
+                return;
+            }
+            el.classList.remove('d-none');
+        });
     };
 
     const computeMachineNeed = () => {
@@ -593,6 +785,216 @@ $stockQtyLabel = static function (float $qty): string {
         syncCategory('.kiosk-supply-bleach-btn', '.kiosk-addon-bleach-btn', inclusionBleach, addonBleachId, addonBleachQtyInput);
     };
 
+    const getCurrentTotals = () => {
+        const loadsLabel = Math.max(1, parseInt(numberOfLoadsInput?.value || '1', 10) || 1);
+        const weightValue = Math.max(0, parseFloat(serviceWeightInput?.value || '0') || 0);
+        const addonDetBtn = document.querySelector(`.kiosk-addon-det-btn[data-id="${addonDetId.value}"]`);
+        const addonFabBtn = document.querySelector(`.kiosk-addon-fab-btn[data-id="${addonFabId.value}"]`);
+        const addonBleachBtn = document.querySelector(`.kiosk-addon-bleach-btn[data-id="${addonBleachId.value}"]`);
+        const addOnTotal = (serviceMode.value === 'free' || serviceMode.value === 'reward' || !selectedShowAddonSupplies)
+            ? 0
+            : (
+                (parseFloat(addonDetQty.value || '0') || 0) * (parseFloat(addonDetBtn?.getAttribute('data-unit-cost') || '0') || 0)
+                + (parseFloat(addonFabQty.value || '0') || 0) * (parseFloat(addonFabBtn?.getAttribute('data-unit-cost') || '0') || 0)
+                + (parseFloat(addonBleachQty.value || '0') || 0) * (parseFloat(addonBleachBtn?.getAttribute('data-unit-cost') || '0') || 0)
+            );
+        const baseSubtotal = (serviceMode.value === 'free' || serviceMode.value === 'reward')
+            ? 0
+            : (selectedRequiredWeight ? (weightValue * selectedPricePerLoad) : (loadsLabel * selectedPricePerLoad));
+        const totalPrice = baseSubtotal + addOnTotal;
+        return { loadsLabel, weightValue, addOnTotal, baseSubtotal, totalPrice };
+    };
+    const formatPeso = (value) => `₱${(Math.max(0, Number(value) || 0)).toFixed(2)}`;
+    const getPaymentDue = () => Math.max(0, Number(getCurrentTotals().totalPrice || 0));
+    const updatePayNowAmountsUI = () => {
+        const due = getPaymentDue();
+        const isSplit = selectedPayNowMethod === 'split_payment';
+        if (payNowDueDisplay) {
+            payNowDueDisplay.textContent = formatPeso(due);
+        }
+        if (singlePaymentFieldsWrap) {
+            singlePaymentFieldsWrap.classList.toggle('d-none', isSplit);
+        }
+        let paid = Math.max(0, Number(amountPaidInput?.value || 0));
+        if (isSplit) {
+            const splitCash = Math.max(0, Number(splitCashAmountInput?.value || 0));
+            const splitOnline = Math.max(0, Number(splitOnlineAmountInput?.value || 0));
+            paid = splitCash + splitOnline;
+        }
+        const change = Math.max(0, paid - due);
+        if (changeDisplay) {
+            changeDisplay.textContent = formatPeso(change);
+        }
+    };
+    const resetSplitPaymentValues = () => {
+        if (splitCashAmountHidden) splitCashAmountHidden.value = '';
+        if (splitOnlineAmountHidden) splitOnlineAmountHidden.value = '';
+        if (splitOnlineMethodHidden) splitOnlineMethodHidden.value = '';
+        if (splitCashAmountInput) splitCashAmountInput.value = '';
+        if (splitOnlineAmountInput) splitOnlineAmountInput.value = '';
+        if (splitOnlineMethodSelect) splitOnlineMethodSelect.value = '';
+        updatePayNowAmountsUI();
+    };
+
+    const kioskPrintFooterLines = [
+        'This is not an official receipt',
+        'For reference only',
+    ];
+
+    const buildKioskEscposBytesSingle = (payload, copyLabel = '') => {
+        const enc = new TextEncoder();
+        const chunks = [];
+        const push = (...bytes) => chunks.push(Uint8Array.from(bytes));
+        const pushText = (text) => chunks.push(enc.encode(String(text || '')));
+        const line = '--------------------------------\n';
+        const centerText = (text = '') => {
+            push(0x1b, 0x61, 0x01);
+            pushText(`${String(text || '')}\n`);
+            push(0x1b, 0x61, 0x00);
+        };
+        push(0x1b, 0x40);
+        centerText('LAUNDRY RECEIPT');
+        pushText(line);
+        centerText('REFERENCE NO.');
+        push(0x1d, 0x21, 0x11);
+        centerText(`${payload.referenceCode || '-'}`);
+        push(0x1d, 0x21, 0x00);
+        if (copyLabel) {
+            centerText(copyLabel);
+        }
+        pushText(line);
+        pushText(`Customer: ${payload.customerName || 'Walk-in'}\n`);
+        pushText(`Order: ${payload.orderType || '-'}\n`);
+        pushText(`Mode: ${payload.modeLabel || 'Regular'}\n`);
+        if (!payload.isFreeOrReward) {
+            pushText(`Payment: ${payload.paymentLabel || '-'}\n`);
+        }
+        pushText(`Total: PHP ${Number(payload.totalPrice || 0).toFixed(2)}\n`);
+        if (payload.savedAt) pushText(`Date: ${payload.savedAt}\n`);
+        pushText(line);
+        push(0x1b, 0x61, 0x01);
+        kioskPrintFooterLines.forEach((row) => pushText(`${row}\n`));
+        push(0x1b, 0x61, 0x00);
+        pushText(line);
+        centerText('Thank you!');
+        pushText('\n\n\n');
+        push(0x1d, 0x56, 0x01);
+        const totalLength = chunks.reduce((acc, part) => acc + part.length, 0);
+        const merged = new Uint8Array(totalLength);
+        let offset = 0;
+        chunks.forEach((part) => {
+            merged.set(part, offset);
+            offset += part.length;
+        });
+        return merged;
+    };
+    const buildKioskEscposBytes = (payload) => {
+        const customerCopy = buildKioskEscposBytesSingle(payload, "Customer's Copy");
+        const shopCopy = buildKioskEscposBytesSingle(payload, 'Shop Copy');
+        const merged = new Uint8Array(customerCopy.length + shopCopy.length);
+        merged.set(customerCopy, 0);
+        merged.set(shopCopy, customerCopy.length);
+        return merged;
+    };
+
+    const askPrintAfterSave = async (payload) => {
+        let shouldPrint = false;
+        if (typeof Swal !== 'undefined') {
+            const result = await Swal.fire({
+                icon: 'success',
+                title: 'Transaction saved',
+                text: 'Do you want to print via Bluetooth?',
+                showCancelButton: true,
+                confirmButtonText: 'Print via Bluetooth',
+                cancelButtonText: 'No, Just Save',
+                confirmButtonColor: '#0d6efd',
+            });
+            shouldPrint = !!result.isConfirmed;
+        } else {
+            shouldPrint = window.confirm('Transaction saved. Print via Bluetooth?');
+        }
+        if (!shouldPrint) return { printed: false };
+        if (typeof window.mpgWriteEscposBluetooth !== 'function') {
+            throw new Error('Bluetooth thermal printing is not available on this device/browser.');
+        }
+        await window.mpgWriteEscposBluetooth(buildKioskEscposBytes(payload));
+        return { printed: true };
+    };
+
+    const submitKioskOrder = async () => {
+        if (!form || isSubmittingOrder) return;
+        isSubmittingOrder = true;
+        try {
+            const formData = new FormData(form);
+            const body = new URLSearchParams();
+            formData.forEach((value, key) => {
+                body.append(key, String(value));
+            });
+            const res = await fetch(form.action, {
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    Accept: 'application/json',
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                credentials: 'same-origin',
+                body,
+            });
+            const { data } = await parseJsonBody(res);
+            if (!res.ok || data.success !== true) {
+                const message = typeof data.message === 'string' && data.message.trim()
+                    ? data.message
+                    : 'Could not save transaction.';
+                throw new Error(message);
+            }
+            const totals = getCurrentTotals();
+            const isFreeOrReward = serviceMode.value === 'free' || serviceMode.value === 'reward';
+            const paymentLabel = isFreeOrReward ? 'Paid' : ((paymentTiming?.value || 'pay_later') === 'pay_now' ? 'Paid' : 'Unpaid');
+            const printPayload = {
+                referenceCode: String(data.reference_code || kioskReferenceCode || '').trim(),
+                customerName: selectedCustomerLabel || 'No customer selected',
+                orderType: selectedOrderLabel || 'Order',
+                modeLabel: (serviceMode.value || 'regular').toUpperCase(),
+                paymentLabel,
+                isFreeOrReward,
+                totalPrice: totals.totalPrice,
+                savedAt: String(data.saved_at || '').trim(),
+            };
+            let printResult = { printed: false };
+            try {
+                printResult = await askPrintAfterSave(printPayload);
+            } catch (printError) {
+                const m = printError instanceof Error ? printError.message : 'Bluetooth print failed.';
+                if (typeof Swal !== 'undefined') {
+                    await Swal.fire({ icon: 'warning', title: 'Saved but not printed', text: m, confirmButtonColor: '#dc3545' });
+                } else {
+                    showWarn(`Saved but not printed: ${m}`);
+                }
+            }
+            if (typeof Swal !== 'undefined') {
+                await Swal.fire({
+                    icon: 'success',
+                    title: printResult?.printed ? 'Saved and printed' : 'Saved successfully',
+                    text: printResult?.printed
+                        ? 'Transaction was saved and receipt was printed.'
+                        : 'Transaction was saved.',
+                    confirmButtonColor: '#198754',
+                });
+            } else {
+                window.mpgAlert(
+                    printResult?.printed ? 'Transaction was saved and receipt was printed.' : 'Transaction was saved.',
+                    { title: printResult?.printed ? 'Saved and printed' : 'Saved successfully', icon: 'success' }
+                );
+            }
+            window.location.reload();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Could not save transaction.';
+            showWarn(message);
+        } finally {
+            isSubmittingOrder = false;
+        }
+    };
+
     const updateSummary = () => {
         syncInventorySelectionAvailability();
         addonDetId.value = addonDetId.value || '';
@@ -612,27 +1014,67 @@ $stockQtyLabel = static function (float $qty): string {
         const addonDetBtn = document.querySelector(`.kiosk-addon-det-btn[data-id="${addonDetId.value}"]`);
         const addonFabBtn = document.querySelector(`.kiosk-addon-fab-btn[data-id="${addonFabId.value}"]`);
         const addonBleachBtn = document.querySelector(`.kiosk-addon-bleach-btn[data-id="${addonBleachId.value}"]`);
-        if (serviceMode.value !== 'free' && serviceMode.value !== 'reward' && parseFloat(addonDetQty.value) > 0 && addonDetId.value) {
+        if (selectedShowAddonSupplies && serviceMode.value !== 'free' && serviceMode.value !== 'reward' && parseFloat(addonDetQty.value) > 0 && addonDetId.value) {
             addonParts.push(`Detergent: ${addonDetQty.value}x ${addonDetBtn?.getAttribute('data-name') || ''}`.trim());
         }
-        if (serviceMode.value !== 'free' && serviceMode.value !== 'reward' && parseFloat(addonFabQty.value) > 0 && addonFabId.value) {
+        if (selectedShowAddonSupplies && serviceMode.value !== 'free' && serviceMode.value !== 'reward' && parseFloat(addonFabQty.value) > 0 && addonFabId.value) {
             addonParts.push(`Fabcon: ${addonFabQty.value}x ${addonFabBtn?.getAttribute('data-name') || ''}`.trim());
         }
-        if (serviceMode.value !== 'free' && serviceMode.value !== 'reward' && parseFloat(addonBleachQty.value) > 0 && addonBleachId.value) {
+        if (selectedShowAddonSupplies && serviceMode.value !== 'free' && serviceMode.value !== 'reward' && parseFloat(addonBleachQty.value) > 0 && addonBleachId.value) {
             addonParts.push(`Bleach: ${addonBleachQty.value}x ${addonBleachBtn?.getAttribute('data-name') || ''}`.trim());
         }
         const summaryMode = rewardRedemption?.value === '1' ? 'REWARD (FREE)' : (serviceMode.value || 'regular').toUpperCase();
+        const paymentLabel = (serviceMode.value === 'free' || serviceMode.value === 'reward')
+            ? 'Paid'
+            : (paymentTiming?.value === 'pay_now' ? 'Pay Now (Paid)' : 'Pay Later (Unpaid)');
+        const loadsLabel = Math.max(1, parseInt(numberOfLoadsInput?.value || '1', 10) || 1);
+        const weightValue = Math.max(0, parseFloat(serviceWeightInput?.value || '0') || 0);
+        if (serviceWeightHidden) {
+            serviceWeightHidden.value = selectedRequiredWeight && weightValue > 0 ? String(weightValue) : '';
+        }
+        const addOnTotal = (serviceMode.value === 'free' || serviceMode.value === 'reward' || !selectedShowAddonSupplies)
+            ? 0
+            : (
+                (parseFloat(addonDetQty.value || '0') || 0) * (parseFloat(addonDetBtn?.getAttribute('data-unit-cost') || '0') || 0)
+                + (parseFloat(addonFabQty.value || '0') || 0) * (parseFloat(addonFabBtn?.getAttribute('data-unit-cost') || '0') || 0)
+                + (parseFloat(addonBleachQty.value || '0') || 0) * (parseFloat(addonBleachBtn?.getAttribute('data-unit-cost') || '0') || 0)
+            );
+        const baseSubtotal = (serviceMode.value === 'free' || serviceMode.value === 'reward')
+            ? 0
+            : (selectedRequiredWeight ? (weightValue * selectedPricePerLoad) : (loadsLabel * selectedPricePerLoad));
+        const totalPrice = baseSubtotal + addOnTotal;
+        if (estimatedTotalAmount) {
+            estimatedTotalAmount.textContent = `₱${totalPrice.toFixed(2)}`;
+        }
         summary.innerHTML = `
             <div class="kiosk-summary-receipt">
                 <div class="line"><span class="label">Order Type</span><span class="value">${esc(selectedOrderLabel || 'No order type')}</span></div>
                 <div class="line"><span class="label">Mode</span><span class="value">${esc(summaryMode)}</span></div>
+                <div class="line"><span class="label">Loads</span><span class="value">${esc(loadsLabel)}</span></div>
+                ${selectedRequiredWeight ? `<div class="line"><span class="label">Weight</span><span class="value">${esc(weightValue.toFixed(2))}</span></div>` : ''}
+                <div class="line"><span class="label">Payment</span><span class="value">${esc(paymentLabel)}</span></div>
+                <div class="line"><span class="label">Base Subtotal</span><span class="value">₱${esc(baseSubtotal.toFixed(2))}</span></div>
+                <div class="line"><span class="label">Add-ons Total</span><span class="value">₱${esc(addOnTotal.toFixed(2))}</span></div>
+                <div class="line"><span class="label">Total Price</span><span class="value">₱${esc(totalPrice.toFixed(2))}</span></div>
                 <div class="line"><span class="label">Reference No.</span><span class="value">${esc(kioskReferenceCode || '-')}</span></div>
-                <div class="line"><span class="label">Customer</span><span class="value">${esc(selectedCustomerLabel || 'Walk-in customer')}</span></div>
+                <div class="line"><span class="label">Customer</span><span class="value">${esc(selectedCustomerLabel || 'No customer selected')}</span></div>
                 <div class="line"><span class="label">Service Supplies</span><span class="value">${listHtml(supplyLabelParts)}</span></div>
                 <div class="line"><span class="label">Add-ons</span><span class="value">${listHtml(addonParts)}</span></div>
                 <div class="line"><span class="label">Include Fold Service</span><span class="value">${foldService.value === '1' ? 'Yes' : 'No'}</span></div>
             </div>
         `;
+        updatePayNowAmountsUI();
+    };
+    const syncSubmitButtonsByMode = () => {
+        const isFreeOrReward = serviceMode.value === 'free' || serviceMode.value === 'reward';
+        regularSubmitWrap?.classList.toggle('d-none', isFreeOrReward);
+        freeRewardSubmitWrap?.classList.toggle('d-none', !isFreeOrReward);
+        if (isFreeOrReward && paymentTiming) {
+            paymentTiming.value = 'pay_later';
+        }
+        if (isFreeOrReward && paymentMethod) {
+            paymentMethod.value = 'pending';
+        }
     };
 
     const computeSupplyStep = () => {
@@ -666,52 +1108,26 @@ $stockQtyLabel = static function (float $qty): string {
     };
 
     const renderStep = () => {
-        steps.forEach((el) => {
-            const s = Number(el.getAttribute('data-step') || '0');
-            const showThisStep = (s === currentStep) && visibleSteps.includes(s);
-            el.classList.toggle('d-none', !showThisStep);
-        });
-        const idx = Math.max(0, visibleSteps.indexOf(currentStep));
-        const total = visibleSteps.length;
-        if (stepLabel) stepLabel.textContent = `Step ${idx + 1} of ${total}`;
-        if (stepContext) {
-            if (idx <= 0) {
-                stepContext.classList.add('d-none');
-                stepContext.textContent = '';
-            } else {
-                const parts = [];
-                parts.push(`Order: ${selectedOrderLabel || '—'}`);
-                parts.push(`Customer: ${selectedCustomerLabel || 'Walk-in customer'}`);
-                if (inclusionDet.value || inclusionFab.value || inclusionBleach.value) {
-                    const sup = [];
-                    const detBtn = document.querySelector(`.kiosk-supply-det-btn[data-id="${inclusionDet.value}"]`);
-                    const fabBtn = document.querySelector(`.kiosk-supply-fab-btn[data-id="${inclusionFab.value}"]`);
-                    const blBtn = document.querySelector(`.kiosk-supply-bleach-btn[data-id="${inclusionBleach.value}"]`);
-                    if (inclusionDet.value) sup.push(`Detergent: ${detBtn?.getAttribute('data-name') || ''}`);
-                    if (inclusionFab.value) sup.push(`Fabcon: ${fabBtn?.getAttribute('data-name') || ''}`);
-                    if (inclusionBleach.value) sup.push(`Bleach: ${blBtn?.getAttribute('data-name') || ''}`);
-                    if (sup.length) parts.push(`Supplies: ${sup.join(' | ')}`);
-                }
-                if (foldService.value === '1') {
-                    parts.push('Fold: Yes');
-                }
-                stepContext.textContent = parts.join('   •   ');
-                stepContext.classList.remove('d-none');
-            }
-        }
-        if (prevBtn) prevBtn.disabled = idx <= 0;
-        if (nextBtn) nextBtn.classList.toggle('d-none', idx >= total - 1);
+        recomputeVisibleSteps();
         updateSummary();
     };
 
     const validateStep = (step) => {
         if (step === 1 && !orderTypeCode.value) {
-            showWarn('Please select an order type.');
+            warnAndFocus(
+                'Please select an order type.',
+                document.querySelector('.kiosk-order-type-btn'),
+                document.getElementById('kioskOrderTypeCards')
+            );
             return false;
         }
         if (step === 2) {
             if ((selectedSupplyBlock === 'full_service' || selectedSupplyBlock === 'wash_supplies') && (!inclusionDet.value || !inclusionFab.value)) {
-                showWarn('Please select detergent and fabcon.');
+                warnAndFocus(
+                    'Please select detergent and fabcon.',
+                    document.querySelector('.kiosk-supply-det-btn') || document.querySelector('.kiosk-supply-fab-btn'),
+                    document.getElementById('kioskSuppliesWrap')
+                );
                 return false;
             }
         }
@@ -721,12 +1137,36 @@ $stockQtyLabel = static function (float $qty): string {
     const validateBeforeSubmit = () => {
         updateSummary();
         if (!orderTypeCode.value) {
-            showWarn('Please select an order type.');
+            warnAndFocus(
+                'Please select an order type.',
+                document.querySelector('.kiosk-order-type-btn'),
+                document.getElementById('kioskOrderTypeCards')
+            );
+            return false;
+        }
+        const customerMode = (customerSelection?.value || '').trim();
+        if (customerMode !== 'saved' && customerMode !== 'walk_in') {
+            warnCustomerRequired();
             return false;
         }
         if ((selectedSupplyBlock === 'full_service' || selectedSupplyBlock === 'wash_supplies') && (!inclusionDet.value || !inclusionFab.value)) {
-            showWarn('Please select detergent and fabcon before saving.');
+            warnAndFocus(
+                'Please select detergent and fabcon before saving.',
+                document.querySelector('.kiosk-supply-det-btn') || document.querySelector('.kiosk-supply-fab-btn'),
+                document.getElementById('kioskSuppliesWrap')
+            );
             return false;
+        }
+        if (selectedRequiredWeight) {
+            const w = Math.max(0, parseFloat(serviceWeightInput?.value || '0') || 0);
+            if (w <= 0) {
+                warnAndFocus(
+                    'Weight is required for this service.',
+                    serviceWeightInput,
+                    weightWrap || serviceWeightInput
+                );
+                return false;
+            }
         }
         return true;
     };
@@ -785,8 +1225,20 @@ $stockQtyLabel = static function (float $qty): string {
             orderTypeCode.value = btn.dataset.code || '';
             selectedOrderLabel = btn.textContent?.trim() || '';
             selectedServiceKind = btn.dataset.serviceKind || 'full_service';
-            selectedSupplyBlock = btn.dataset.supplyBlock || 'none';
-            selectedShowAddonSupplies = (btn.dataset.showAddonSupplies || '0') === '1';
+            selectedSupplyBlock = btn.dataset.supplyBlock || defaultSupplyBlockForKind(selectedServiceKind);
+            if (selectedSupplyBlock === 'none' && (selectedServiceKind === 'full_service' || selectedServiceKind === 'wash_only' || selectedServiceKind === 'rinse_only')) {
+                selectedSupplyBlock = defaultSupplyBlockForKind(selectedServiceKind);
+            }
+            const addonRaw = (btn.dataset.showAddonSupplies || '').trim();
+            selectedShowAddonSupplies = addonRaw === '1'
+                || (addonRaw !== '0' && defaultShowAddonForKind(selectedServiceKind));
+            selectedRequiredWeight = (btn.dataset.requiredWeight || '0') === '1' || selectedServiceKind === 'dry_cleaning';
+            selectedPricePerLoad = parseFloat(btn.dataset.pricePerLoad || '0') || 0;
+            if (weightWrap) weightWrap.classList.toggle('d-none', !selectedRequiredWeight);
+            if (serviceWeightInput) {
+                serviceWeightInput.required = selectedRequiredWeight;
+                if (!selectedRequiredWeight) serviceWeightInput.value = '';
+            }
             setButtonState('.kiosk-order-type-btn', btn);
             computeMachineNeed();
             computeSupplyStep();
@@ -803,6 +1255,9 @@ $stockQtyLabel = static function (float $qty): string {
                 setButtonState('.kiosk-service-mode-btn', modeRegularBtn, 'btn-primary', 'btn-outline-secondary');
             }
             customerId.value = btn.dataset.id || '';
+            if (customerSelection) {
+                customerSelection.value = customerId.value ? 'saved' : 'walk_in';
+            }
             selectedCustomerLabel = btn.textContent?.trim() || 'Walk-in customer';
             setButtonState('.kiosk-customer-btn', btn, 'btn-primary', 'btn-outline-secondary');
             syncRewardMode();
@@ -814,6 +1269,10 @@ $stockQtyLabel = static function (float $qty): string {
     document.querySelectorAll('.kiosk-service-mode-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
             if (btn.disabled) return;
+            if (!hasExplicitCustomerSelection()) {
+                warnCustomerRequired();
+                return;
+            }
             const pickedMode = btn.dataset.mode || 'regular';
             if (pickedMode === 'reward') {
                 applyRewardRedemption();
@@ -823,6 +1282,7 @@ $stockQtyLabel = static function (float $qty): string {
             serviceMode.value = pickedMode;
             setButtonState('.kiosk-service-mode-btn', btn, 'btn-primary', 'btn-outline-secondary');
             syncRewardMode();
+            syncSubmitButtonsByMode();
             computeSupplyStep();
             renderStep();
         });
@@ -854,6 +1314,33 @@ $stockQtyLabel = static function (float $qty): string {
     [addonDetQtyInput, addonFabQtyInput, addonBleachQtyInput].forEach((el) => {
         el?.addEventListener('change', updateSummary);
         el?.addEventListener('input', updateSummary);
+    });
+    numberOfLoadsInput?.addEventListener('focus', () => {
+        if (!hasExplicitCustomerSelection()) {
+            warnCustomerRequired();
+        }
+    });
+    numberOfLoadsInput?.addEventListener('change', updateSummary);
+    numberOfLoadsInput?.addEventListener('input', updateSummary);
+    serviceWeightInput?.addEventListener('change', updateSummary);
+    serviceWeightInput?.addEventListener('input', updateSummary);
+    document.querySelectorAll('.kiosk-payment-timing-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            if (!hasExplicitCustomerSelection()) {
+                warnCustomerRequired();
+                return;
+            }
+            if (!paymentTiming) return;
+            paymentTiming.value = btn.getAttribute('data-timing') || 'pay_later';
+            document.querySelectorAll('.kiosk-payment-timing-btn').forEach((x) => {
+                const isNow = (x.getAttribute('data-timing') || '') === 'pay_now';
+                x.classList.remove('btn-primary', 'btn-outline-success', 'btn-outline-secondary');
+                x.classList.add(isNow ? 'btn-outline-success' : 'btn-outline-secondary');
+            });
+            btn.classList.remove('btn-outline-success', 'btn-outline-secondary');
+            btn.classList.add('btn-primary');
+            updateSummary();
+        });
     });
 
     const bindCardChoice = (selector, onPick, activeCls = 'btn-primary', inactiveCls = 'btn-outline-primary', allowToggleOff = false) => {
@@ -901,29 +1388,104 @@ $stockQtyLabel = static function (float $qty): string {
         }
     }, 'btn-primary', 'btn-outline-primary', true);
 
-    prevBtn?.addEventListener('click', () => {
-        const idx = visibleSteps.indexOf(currentStep);
-        if (idx > 0) {
-            currentStep = visibleSteps[idx - 1];
-        }
-        renderStep();
-    });
-    nextBtn?.addEventListener('click', () => {
-        if (!validateStep(currentStep)) return;
-        const idx = visibleSteps.indexOf(currentStep);
-        if (idx >= 0 && idx < visibleSteps.length - 1) {
-            currentStep = visibleSteps[idx + 1];
-        }
-        renderStep();
-    });
-
     form?.addEventListener('submit', (e) => {
         if (!validateBeforeSubmit()) {
             e.preventDefault();
+            return;
         }
+        if (serviceMode.value === 'free' || serviceMode.value === 'reward') {
+            e.preventDefault();
+            if (paymentMethod) paymentMethod.value = 'pending';
+            if (paymentTiming) paymentTiming.value = 'pay_later';
+            if (amountTenderedHidden) amountTenderedHidden.value = '';
+            if (changeAmountHidden) changeAmountHidden.value = '';
+            resetSplitPaymentValues();
+            submitKioskOrder();
+            return;
+        }
+        if ((paymentTiming?.value || 'pay_later') === 'pay_now') {
+            e.preventDefault();
+            if (amountPaidInput) {
+                amountPaidInput.value = getPaymentDue().toFixed(2);
+            }
+            updatePayNowAmountsUI();
+            paymentMethodModal?.show();
+            return;
+        }
+        e.preventDefault();
+        if (paymentMethod) paymentMethod.value = 'pending';
+        if (amountTenderedHidden) amountTenderedHidden.value = '';
+        if (changeAmountHidden) changeAmountHidden.value = '';
+        resetSplitPaymentValues();
+        submitKioskOrder();
+    });
+    document.querySelectorAll('.kiosk-pay-method-option').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            selectedPayNowMethod = btn.getAttribute('data-method') || 'cash';
+            document.querySelectorAll('.kiosk-pay-method-option').forEach((x) => {
+                x.classList.remove('btn-primary');
+                x.classList.add('btn-outline-secondary');
+            });
+            btn.classList.remove('btn-outline-secondary');
+            btn.classList.add('btn-primary');
+            const isSplit = selectedPayNowMethod === 'split_payment';
+            splitFieldsWrap?.classList.toggle('d-none', !isSplit);
+            if (!isSplit) {
+                resetSplitPaymentValues();
+            }
+            updatePayNowAmountsUI();
+        });
+    });
+    amountPaidInput?.addEventListener('input', updatePayNowAmountsUI);
+    splitCashAmountInput?.addEventListener('input', updatePayNowAmountsUI);
+    splitOnlineAmountInput?.addEventListener('input', updatePayNowAmountsUI);
+    paymentMethodConfirmBtn?.addEventListener('click', () => {
+        if (!form || !paymentMethod) return;
+        const dueAmount = getPaymentDue();
+        if (selectedPayNowMethod === 'split_payment') {
+            const cashAmount = Math.max(0, parseFloat(splitCashAmountInput?.value || '0') || 0);
+            const onlineAmount = Math.max(0, parseFloat(splitOnlineAmountInput?.value || '0') || 0);
+            const onlineMethod = String(splitOnlineMethodSelect?.value || '').trim();
+            const totals = getCurrentTotals();
+            const expectedTotal = Math.max(0, Number(totals.totalPrice || 0));
+            if (cashAmount <= 0 || onlineAmount <= 0) {
+                showWarn('For Split Payment, enter both Cash amount and Online amount.');
+                return;
+            }
+            if (!onlineMethod) {
+                showWarn('Select an online payment method for Split Payment.');
+                return;
+            }
+            if (Math.abs((cashAmount + onlineAmount) - expectedTotal) > 0.009) {
+                showWarn(`Split total must equal the transaction total (₱${expectedTotal.toFixed(2)}).`);
+                return;
+            }
+            if (splitCashAmountHidden) splitCashAmountHidden.value = cashAmount.toFixed(2);
+            if (splitOnlineAmountHidden) splitOnlineAmountHidden.value = onlineAmount.toFixed(2);
+            if (splitOnlineMethodHidden) splitOnlineMethodHidden.value = onlineMethod;
+            if (amountTenderedHidden) amountTenderedHidden.value = (cashAmount + onlineAmount).toFixed(2);
+            if (changeAmountHidden) changeAmountHidden.value = Math.max(0, (cashAmount + onlineAmount) - dueAmount).toFixed(2);
+        } else {
+            const paidAmount = Math.max(0, parseFloat(amountPaidInput?.value || '0') || 0);
+            if (paidAmount + 1e-9 < dueAmount) {
+                showWarn(`Amount paid must be at least the total amount (₱${dueAmount.toFixed(2)}).`);
+                return;
+            }
+            if (amountTenderedHidden) amountTenderedHidden.value = paidAmount.toFixed(2);
+            if (changeAmountHidden) changeAmountHidden.value = Math.max(0, paidAmount - dueAmount).toFixed(2);
+            resetSplitPaymentValues();
+        }
+        paymentMethod.value = selectedPayNowMethod || 'cash';
+        paymentMethodModal?.hide();
+        submitKioskOrder();
+    });
+    paymentMethodModalEl?.addEventListener('hidden.bs.modal', () => {
+        splitFieldsWrap?.classList.add('d-none');
+        updatePayNowAmountsUI();
     });
     foldNoBtn?.click();
     syncRewardMode();
+    syncSubmitButtonsByMode();
     computeSupplyStep();
     computeMachineNeed();
     renderStep();
