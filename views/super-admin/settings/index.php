@@ -1,10 +1,12 @@
 <?php
 /** @var array<string, string> $settings */
+/** @var bool $can_run_storage_migrations */
 $s = $settings ?? [];
 $appNameVal = (string) ($s['app_name'] ?? '');
 $maintOn = ($s['maintenance_mode'] ?? '0') === '1';
 $msg = (string) ($s['maintenance_message'] ?? '');
 $warnDays = (int) ($s['subscription_warning_days'] ?? 7);
+$canRunStorageMigrations = ! empty($can_run_storage_migrations);
 ?>
 <div class="card border-0 shadow-sm">
     <div class="card-body p-3 p-md-4">
@@ -36,5 +38,29 @@ $warnDays = (int) ($s['subscription_warning_days'] ?? 7);
                 <button type="submit" class="btn btn-primary px-4 py-2">Save settings</button>
             </div>
         </form>
+        <?php if ($canRunStorageMigrations): ?>
+            <hr class="my-4">
+            <div class="rounded-3 border p-3 p-md-4 bg-body-tertiary bg-opacity-25">
+                <h6 class="mb-2">Database migrations</h6>
+                <p class="small text-muted mb-3">Run SQL files from <code>storage/migrations</code> directly from this page. Use this after pulling new updates that include migration scripts.</p>
+                <form method="POST" action="<?= e(route('super-admin.settings.run-storage-migrations')) ?>" onsubmit="return confirm('Run storage migrations now? This can modify database structure and data.');">
+                    <?= csrf_field() ?>
+                    <div class="mb-2">
+                        <label class="form-label small mb-1" for="migrationConfirmationInput">Type <strong>RUN MIGRATIONS</strong> to confirm</label>
+                        <input
+                            type="text"
+                            class="form-control form-control-sm"
+                            id="migrationConfirmationInput"
+                            name="migration_confirmation"
+                            placeholder="RUN MIGRATIONS"
+                            required
+                        >
+                    </div>
+                    <button type="submit" class="btn btn-outline-primary">
+                        <i class="fa-solid fa-database me-1" aria-hidden="true"></i>Run storage migrations
+                    </button>
+                </form>
+            </div>
+        <?php endif; ?>
     </div>
 </div>

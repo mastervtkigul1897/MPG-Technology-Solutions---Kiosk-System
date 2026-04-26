@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Core\App;
+use App\Core\LaundrySchema;
 use PDO;
 use RuntimeException;
 
@@ -263,6 +264,7 @@ final class BranchService
                 $newExpiresAt,
             ]);
             $newTenantId = (int) $this->pdo->lastInsertId();
+            LaundrySchema::ensureDefaultInventoryForTenant($this->pdo, $newTenantId);
 
             if ($sourceTenantId > 0) {
                 $this->cloneSelectedData($sourceTenantId, $newTenantId, $cloneOptions);

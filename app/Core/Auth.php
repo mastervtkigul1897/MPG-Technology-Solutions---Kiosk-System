@@ -570,6 +570,26 @@ final class Auth
         }
     }
 
+    /**
+     * Attendance module is Premium-only after free 7-day premium trial.
+     * Allowed when tenant is not in restricted Free mode.
+     */
+    public static function canUseAttendanceFeature(?array $user): bool
+    {
+        if (! $user) {
+            return false;
+        }
+        $role = $user['role'] ?? '';
+        if ($role === 'super_admin') {
+            return true;
+        }
+        if ($role !== 'tenant_admin' && $role !== 'cashier') {
+            return false;
+        }
+
+        return ! self::isTenantFreePlanRestricted($user);
+    }
+
     private static function resolveActiveTenantId(int $baseTenantId): int
     {
         $pdo = App::db();

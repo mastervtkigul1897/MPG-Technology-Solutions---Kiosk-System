@@ -7,6 +7,7 @@ namespace App\Controllers;
 use App\Core\ActivityLogger;
 use App\Core\App;
 use App\Core\Auth;
+use App\Core\LaundrySchema;
 use App\Core\Request;
 use App\Core\Response;
 use App\Services\EmailVerificationService;
@@ -250,6 +251,16 @@ final class AuthController
         $st->execute([$email]);
         $user = $st->fetch(PDO::FETCH_ASSOC);
         if (! $user || ! password_verify($password, (string) $user['password'])) {
+            ActivityLogger::log(
+                null,
+                0,
+                'guest',
+                'auth',
+                'login_failed',
+                $request,
+                'Failed login attempt.',
+                ['email' => $email !== '' ? $email : null]
+            );
             session_flash('errors', ['Invalid credentials.']);
 
             return redirect(url('/login'));
@@ -396,6 +407,7 @@ final class AuthController
             $st->execute([$storeName, $slug, self::FREE_PLAN_CODE, $now, $trialEnd]);
             $tenantId = (int) $pdo->lastInsertId();
             self::updateTenantBranchDefaults($pdo, $tenantId);
+            LaundrySchema::ensureDefaultInventoryForTenant($pdo, $tenantId);
 
             $st = $pdo->prepare('INSERT INTO users (name, email, password, role, tenant_id, email_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NOW(), NOW())');
             $st->execute([$name, $email, $pwHash, 'tenant_admin', $tenantId]);

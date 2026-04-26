@@ -7,10 +7,34 @@ if (! empty($is_super)): ?>
         </div>
     </div>
 <?php else: ?>
+    <style>
+        .dashboard-content-no-x {
+            overflow-x: hidden;
+        }
+        .dashboard-figures-card {
+            position: relative;
+            z-index: 0;
+            overflow: hidden;
+        }
+        .dashboard-figures-chart-wrap {
+            position: relative;
+            height: 320px;
+            max-height: 320px;
+            overflow: hidden;
+        }
+        .dashboard-figures-chart-wrap canvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+            max-height: 100%;
+        }
+    </style>
+    <div class="dashboard-content-no-x">
     <?php
     $dashUser = auth_user();
     $isTimeOnlyCashierDashboard = (($dashUser['role'] ?? '') === 'cashier')
         && in_array(strtolower(trim((string) ($dashUser['staff_type'] ?? 'full_time'))), ['utility', 'driver'], true);
+    $attendanceFeatureEnabled = ! empty($can_use_attendance);
     ?>
     <div class="card mb-3">
         <div class="card-body">
@@ -18,24 +42,34 @@ if (! empty($is_super)): ?>
                 <div>
                     <h6 class="mb-1">Time attendance (today)</h6>
                     <div class="small text-muted">
-                        <?= $isTimeOnlyCashierDashboard ? 'Time in/time out only access for this account.' : 'Staff and store owner can time in/out here.' ?>
+                        <?php if (! $attendanceFeatureEnabled): ?>
+                            Attendance is locked. Upgrade to Premium or activate premium trial to use time in/time out.
+                        <?php else: ?>
+                            <?= $isTimeOnlyCashierDashboard ? 'Time in/time out only access for this account.' : 'Staff and store owner can time in/out here.' ?>
+                        <?php endif; ?>
                     </div>
                 </div>
                 <div class="d-flex gap-2">
-                    <?php if (empty($clock_open)): ?>
-                        <form method="POST" action="<?= e(route('dashboard.time-in')) ?>" class="m-0 js-attendance-photo-form" data-kind="in">
-                            <?= csrf_field() ?>
-                            <input type="hidden" name="photo_data" value="">
-                            <button class="btn btn-success <?= $isTimeOnlyCashierDashboard ? 'btn-lg px-4 py-2' : 'btn-sm' ?> js-attendance-photo-trigger" type="button"><i class="fa-solid fa-right-to-bracket me-1"></i>Time in</button>
-                            <button type="submit" class="d-none js-attendance-hidden-submit" aria-hidden="true"></button>
-                        </form>
+                    <?php if (! $attendanceFeatureEnabled): ?>
+                        <a href="<?= e(route('tenant.plans')) ?>" class="btn btn-outline-warning btn-sm">
+                            <i class="fa-solid fa-crown me-1"></i>Premium required
+                        </a>
                     <?php else: ?>
-                        <form method="POST" action="<?= e(route('dashboard.time-out')) ?>" class="m-0 js-attendance-photo-form" data-kind="out">
-                            <?= csrf_field() ?>
-                            <input type="hidden" name="photo_data" value="">
-                            <button class="btn btn-danger <?= $isTimeOnlyCashierDashboard ? 'btn-lg px-4 py-2' : 'btn-sm' ?> js-attendance-photo-trigger" type="button"><i class="fa-solid fa-right-from-bracket me-1"></i>Time out</button>
-                            <button type="submit" class="d-none js-attendance-hidden-submit" aria-hidden="true"></button>
-                        </form>
+                        <?php if (empty($clock_open)): ?>
+                            <form method="POST" action="<?= e(route('dashboard.time-in')) ?>" class="m-0 js-attendance-photo-form" data-kind="in">
+                                <?= csrf_field() ?>
+                                <input type="hidden" name="photo_data" value="">
+                                <button class="btn btn-success <?= $isTimeOnlyCashierDashboard ? 'btn-lg px-4 py-2' : 'btn-sm' ?> js-attendance-photo-trigger" type="button"><i class="fa-solid fa-right-to-bracket me-1"></i>Time in</button>
+                                <button type="submit" class="d-none js-attendance-hidden-submit" aria-hidden="true"></button>
+                            </form>
+                        <?php else: ?>
+                            <form method="POST" action="<?= e(route('dashboard.time-out')) ?>" class="m-0 js-attendance-photo-form" data-kind="out">
+                                <?= csrf_field() ?>
+                                <input type="hidden" name="photo_data" value="">
+                                <button class="btn btn-danger <?= $isTimeOnlyCashierDashboard ? 'btn-lg px-4 py-2' : 'btn-sm' ?> js-attendance-photo-trigger" type="button"><i class="fa-solid fa-right-from-bracket me-1"></i>Time out</button>
+                                <button type="submit" class="d-none js-attendance-hidden-submit" aria-hidden="true"></button>
+                            </form>
+                        <?php endif; ?>
                     <?php endif; ?>
                 </div>
             </div>
@@ -110,7 +144,8 @@ if (! empty($is_super)): ?>
     $foldServiceAmount = (float) ($stats['fold_service_amount'] ?? 0);
     $showFoldAmount = $foldServiceAmount > 0;
     $foldAmount = (float) ($stats['fold_amount_today'] ?? 0);
-    $foldTarget = (string) ($stats['fold_commission_target'] ?? 'staff');
+    $foldTarget = (string) ($stats['fold_commission_target'] ?? 'branch');
+    $orderTypeTotalsToday = (array) ($order_type_totals_today ?? []);
     $grossSales = (float) ($stats['sales_today'] ?? 0) + $foldAmount;
     $refunds = (float) ($stats['refunds_today'] ?? 0);
     $discounts = (float) ($stats['discounts_today'] ?? 0);
@@ -181,12 +216,47 @@ if (! empty($is_super)): ?>
             </div>
         </div>
     </div>
-
+    <?php
+    $paymentBreakdown = (array) ($payment_breakdown ?? []);
+    $paymentCards = [
+        ['key' => 'cash', 'label' => 'Cash today'],
+        ['key' => 'card', 'label' => 'Card today'],
+        ['key' => 'gcash', 'label' => 'GCash today'],
+        ['key' => 'paymaya', 'label' => 'PayMaya today'],
+        ['key' => 'online_banking', 'label' => 'Online banking today'],
+        ['key' => 'qr_payment', 'label' => 'QR payment today'],
+    ];
+    ?>
     <div class="row g-3 mb-3">
+        <?php foreach ($paymentCards as $pc): ?>
+            <div class="col-6 col-md-4 col-lg">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <small class="text-muted"><?= e($pc['label']) ?></small>
+                        <h4 class="mb-0"><?= e(format_money((float) ($paymentBreakdown[$pc['key']] ?? 0))) ?></h4>
+                    </div>
+                </div>
+            </div>
+        <?php endforeach; ?>
+    </div>
+
+    <div class="card mt-3 dashboard-figures-card">
+        <div class="card-body">
+            <h6 class="card-title">Today dashboard figures<?= $freeDashboardLimited ? $premiumBadge : '' ?></h6>
+            <?php if ($freeDashboardLimited): ?>
+                <p class="small text-muted mb-0">Graphs are available on Premium.</p>
+            <?php else: ?>
+                <div class="dashboard-figures-chart-wrap">
+                    <canvas id="salesTrendChart" aria-label="Today dashboard figures chart" role="img"></canvas>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+    <div class="row g-3 mt-3">
         <div class="col-lg-6">
             <div class="card h-100">
                 <div class="card-body">
-                    <h6 class="card-title">Load status</h6>
+                    <h6 class="card-title"><?= ! empty($laundry_status_tracking_enabled) ? 'Load status' : 'Payment status' ?></h6>
                     <div class="table-responsive">
                         <table class="table table-sm align-middle mb-0">
                             <thead>
@@ -213,40 +283,34 @@ if (! empty($is_super)): ?>
         <div class="col-lg-6">
             <div class="card h-100">
                 <div class="card-body">
-                    <h6 class="card-title">Items out by service mode (Today)</h6>
-                    <div class="table-responsive">
-                        <table class="table table-sm align-middle mb-0">
-                            <thead>
-                            <tr>
-                                <th>Service mode</th>
-                                <th class="text-end">Count</th>
-                                <th>Inventory items out</th>
-                                <th>Machines used</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            <?php foreach (($service_mode_summary ?? []) as $mode): ?>
-                                <?php
-                                $items = array_values((array) ($mode['items'] ?? []));
-                                $machines = array_values((array) ($mode['machines'] ?? []));
-                                ?>
-                                <tr>
-                                    <td><?= e((string) ($mode['label'] ?? '')) ?></td>
-                                    <td class="text-end"><?= (int) ($mode['count'] ?? 0) ?></td>
-                                    <td class="small"><?= e($items !== [] ? implode(', ', $items) : '—') ?></td>
-                                    <td class="small"><?= e($machines !== [] ? implode(', ', $machines) : '—') ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="card-title mb-0">Machine credits</h6>
+                        <form method="GET" action="<?= e(url('/dashboard')) ?>" class="d-flex flex-wrap align-items-end gap-2">
+                            <div>
+                                <label class="form-label form-label-sm small mb-1" for="machineCreditFrom">Start</label>
+                                <input
+                                    type="date"
+                                    class="form-control form-control-sm"
+                                    id="machineCreditFrom"
+                                    name="machine_from"
+                                    value="<?= e((string) ($machine_credit_from ?? date('Y-m-d'))) ?>"
+                                >
+                            </div>
+                            <div>
+                                <label class="form-label form-label-sm small mb-1" for="machineCreditTo">End</label>
+                                <input
+                                    type="date"
+                                    class="form-control form-control-sm"
+                                    id="machineCreditTo"
+                                    name="machine_to"
+                                    value="<?= e((string) ($machine_credit_to ?? date('Y-m-d'))) ?>"
+                                >
+                            </div>
+                            <div>
+                                <button type="submit" class="btn btn-sm btn-outline-primary">Apply</button>
+                            </div>
+                        </form>
                     </div>
-                </div>
-            </div>
-        </div>
-        <div class="col-lg-6">
-            <div class="card h-100">
-                <div class="card-body">
-                    <h6 class="card-title">Machine credits</h6>
                     <?php if (($machine_credit_balances ?? []) === []): ?>
                         <p class="small text-muted mb-0">No machines registered.</p>
                     <?php else: ?>
@@ -255,7 +319,10 @@ if (! empty($is_super)): ?>
                                 <thead>
                                 <tr>
                                     <th>Machine</th>
-                                    <th class="text-end">Credit</th>
+                                    <th class="text-end">Opening</th>
+                                    <th class="text-end">Restock</th>
+                                    <th class="text-end">Usage (Out)</th>
+                                    <th class="text-end">Closing</th>
                                 </tr>
                                 </thead>
                                 <tbody>
@@ -265,9 +332,10 @@ if (! empty($is_super)): ?>
                                             <?= e((string) ($machine['machine_label'] ?? '')) ?>
                                             <span class="small text-muted">(<?= e((string) ($machine['machine_code'] ?? '')) ?>)</span>
                                         </td>
-                                        <td class="text-end">
-                                            <?= ! empty($machine['credit_required']) ? e(rtrim(rtrim(number_format((float) ($machine['credit_balance'] ?? 0), 4, '.', ''), '0'), '.')) : '—' ?>
-                                        </td>
+                                        <td class="text-end"><?= ! empty($machine['credit_required']) ? e(format_stock((float) ($machine['opening'] ?? 0))) : '—' ?></td>
+                                        <td class="text-end"><?= ! empty($machine['credit_required']) ? e(format_stock((float) ($machine['restock'] ?? 0))) : '—' ?></td>
+                                        <td class="text-end"><?= ! empty($machine['credit_required']) ? e(format_stock((float) ($machine['usage'] ?? 0))) : '—' ?></td>
+                                        <td class="text-end"><?= ! empty($machine['credit_required']) ? e(format_stock((float) ($machine['closing'] ?? 0))) : '—' ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                                 </tbody>
@@ -278,22 +346,56 @@ if (! empty($is_super)): ?>
             </div>
         </div>
     </div>
-
-    <div class="row g-3">
-        <div class="col-lg-12">
+    <div class="row g-3 mt-1">
+        <div class="col-lg-6">
             <div class="card h-100">
                 <div class="card-body">
-                    <h6 class="card-title">Today dashboard figures<?= $freeDashboardLimited ? $premiumBadge : '' ?></h6>
-                    <?php if ($freeDashboardLimited): ?>
-                        <p class="small text-muted mb-0">Graphs are available on Premium.</p>
+                    <h6 class="card-title">Order type totals (Today)</h6>
+                    <?php if ($orderTypeTotalsToday === []): ?>
+                        <p class="small text-muted mb-0">No order type data today.</p>
                     <?php else: ?>
-                        <canvas id="salesTrendChart" height="90"></canvas>
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead>
+                                <tr>
+                                    <th>Order type</th>
+                                    <th class="text-end">Total ordered</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <?php foreach ($orderTypeTotalsToday as $row): ?>
+                                    <tr>
+                                        <td><?= e((string) ($row['label'] ?? $row['code'] ?? 'Order type')) ?></td>
+                                        <td class="text-end"><?= e(format_stock((float) ($row['qty'] ?? 0))) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     <?php endif; ?>
                 </div>
             </div>
         </div>
         <div class="col-lg-6">
             <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Birthdays today<?= $freeDashboardLimited ? $premiumBadge : '' ?></h6>
+                    <?php if ($freeDashboardLimited): ?>
+                        <p class="small text-muted mb-0">Birthday reminders are available on Premium.</p>
+                    <?php elseif (($birthdays_today ?? []) === []): ?>
+                        <p class="small text-muted mb-0">No birthday today.</p>
+                    <?php else: ?>
+                        <ul class="mb-0">
+                            <?php foreach (($birthdays_today ?? []) as $row): ?>
+                                <li><?= e((string) ($row['name'] ?? '')) ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card">
                 <div class="card-body">
                     <h6 class="card-title">Low stock alerts<?= $freeDashboardLimited ? $premiumBadge : '' ?></h6>
                     <?php if ($freeDashboardLimited): ?>
@@ -315,6 +417,8 @@ if (! empty($is_super)): ?>
                 </div>
             </div>
         </div>
+    </div>
+    <div class="row g-3 mt-1">
         <div class="col-lg-6">
             <div class="card h-100">
                 <div class="card-body">
@@ -348,28 +452,42 @@ if (! empty($is_super)): ?>
                 </div>
             </div>
         </div>
-    </div>
-    <div class="row g-3 mt-1">
-        <div class="col-lg-12">
-            <div class="card h-100">
+        <div class="col-lg-6">
+            <div class="card">
                 <div class="card-body">
-                    <h6 class="card-title">Birthdays today<?= $freeDashboardLimited ? $premiumBadge : '' ?></h6>
-                    <?php if ($freeDashboardLimited): ?>
-                        <p class="small text-muted mb-0">Birthday reminders are available on Premium.</p>
-                    <?php elseif (($birthdays_today ?? []) === []): ?>
-                        <p class="small text-muted mb-0">No birthday today.</p>
-                    <?php else: ?>
-                        <ul class="mb-0">
-                            <?php foreach (($birthdays_today ?? []) as $row): ?>
-                                <li><?= e((string) ($row['name'] ?? '')) ?></li>
+                    <h6 class="card-title">Items out by service mode (Today)</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead>
+                            <tr>
+                                <th>Service mode</th>
+                                <th class="text-end">Count</th>
+                                <th>Inventory items out</th>
+                                <th>Machines used</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <?php foreach (($service_mode_summary ?? []) as $mode): ?>
+                                <?php
+                                $items = array_values((array) ($mode['items'] ?? []));
+                                $machines = array_values((array) ($mode['machines'] ?? []));
+                                ?>
+                                <tr>
+                                    <td><?= e((string) ($mode['label'] ?? '')) ?></td>
+                                    <td class="text-end"><?= (int) ($mode['count'] ?? 0) ?></td>
+                                    <td class="small"><?= e($items !== [] ? implode(', ', $items) : '—') ?></td>
+                                    <td class="small"><?= e($machines !== [] ? implode(', ', $machines) : '—') ?></td>
+                                </tr>
                             <?php endforeach; ?>
-                        </ul>
-                    <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
     <?php endif; ?>
+    </div>
 
     <div class="modal fade" id="attendancePhotoModal" tabindex="-1" aria-labelledby="attendancePhotoModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
@@ -453,6 +571,7 @@ if (! empty($is_super)): ?>
                 },
                 options: {
                     responsive: true,
+                    maintainAspectRatio: false,
                     plugins: { legend: { position: 'top' } },
                     scales: { y: { beginAtZero: true } },
                 },

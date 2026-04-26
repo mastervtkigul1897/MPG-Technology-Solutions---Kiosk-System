@@ -1,5 +1,5 @@
 <?php
-$foldTarget = (string) ($fold_commission_target ?? 'staff');
+$foldTarget = (string) ($fold_commission_target ?? 'per_order_type');
 $foldRate = (float) ($fold_service_amount ?? 0);
 $payrollLocked = ! empty($payroll_locked) || ! empty($premium_trial_browse_lock);
 $cutoffStartText = (string) ($cutoff_start ?? '');
@@ -214,8 +214,13 @@ $otActive = ! empty($activate_ot_incentives);
             (<?= (int) ($cutoff_days ?? 15) ?> days), Required hours/day: <strong><?= e((string) number_format((float) ($hours_per_day ?? 8), 2)) ?></strong>.
         </p>
         <div class="d-flex flex-wrap gap-3">
-            <div class="small text-muted">Fold amount per load: <strong><?= e(format_money($foldRate)) ?></strong></div>
-            <div class="small text-muted">Fold commission target: <strong><?= e(ucfirst($foldTarget)) ?></strong></div>
+            <?php if ($foldTarget === 'per_order_type'): ?>
+                <div class="small text-muted">Fold amount per load: <strong>Per order type</strong></div>
+                <div class="small text-muted">Fold commission target: <strong>Per order type</strong></div>
+            <?php else: ?>
+                <div class="small text-muted">Fold amount per load: <strong><?= e(format_money($foldRate)) ?></strong></div>
+                <div class="small text-muted">Fold commission target: <strong><?= e(ucfirst($foldTarget)) ?></strong></div>
+            <?php endif; ?>
             <div class="small text-muted">OT incentives: <strong><?= $otActive ? 'Active' : 'Off' ?></strong></div>
             <?php if ($commissionActive): ?>
                 <div class="small text-muted">Commission pool: <strong><?= e(format_money((float) ($branch_commission_pool ?? 0))) ?></strong></div>
@@ -383,7 +388,7 @@ $otActive = ! empty($activate_ot_incentives);
                         <?php if ($foldCommissionAmount > 0): ?>
                             <tr>
                                 <td>Fold commission</td>
-                                <td><?= $loadsFolded ?> fold sales at <?= e(format_money($foldRate)) ?> per load</td>
+                                <td><?= $loadsFolded ?> fold qty within cutoff</td>
                                 <td><?= e(format_money($foldCommissionAmount)) ?></td>
                             </tr>
                         <?php endif; ?>

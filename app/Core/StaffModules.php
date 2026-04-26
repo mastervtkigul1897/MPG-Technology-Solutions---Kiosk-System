@@ -15,7 +15,7 @@ final class StaffModules
         'pos' => 'Loads Status',
         'transactions' => 'Customer Profile',
         'activity_logs' => 'Activity log',
-        'ingredients' => 'Inventory Management',
+        'ingredients' => 'Inventory Stocks',
         'expenses' => 'Expenses',
         'damaged_items' => 'Damaged items',
     ];

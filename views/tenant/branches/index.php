@@ -6,8 +6,6 @@
 /** @var array<int,string> $clone_defaults */
 /** @var bool $machine_assignment_enabled */
 /** @var bool $laundry_status_tracking_enabled */
-/** @var float|int|string $fold_service_amount */
-/** @var string $fold_commission_target */
 /** @var bool $is_main_branch_context */
 /** @var int $payroll_cutoff_days */
 /** @var float|int|string $payroll_hours_per_day */
@@ -15,6 +13,7 @@
 /** @var int $daily_load_quota */
 /** @var float|int|string $commission_rate_per_load */
 /** @var bool $activate_ot_incentives */
+/** @var bool $enable_bluetooth_print */
 $rootTenant = $root_tenant ?? [];
 $rows = $branches ?? [];
 $currentTenantId = (int) ($current_tenant_id ?? 0);
@@ -22,15 +21,15 @@ $limit = (int) ($branch_limit ?? 1);
 $defaults = $clone_defaults ?? ['categories', 'ingredients', 'requirements'];
 $machineAssignmentEnabled = (bool) ($machine_assignment_enabled ?? true);
 $laundryStatusTrackingEnabled = (bool) ($laundry_status_tracking_enabled ?? true);
-$foldServiceAmount = max(0.0, (float) ($fold_service_amount ?? 0));
-$foldCommissionTarget = strtolower(trim((string) ($fold_commission_target ?? 'staff')));
 $payrollCutoffDays = max(1, (int) ($payroll_cutoff_days ?? 15));
 $payrollHoursPerDay = max(1.0, (float) ($payroll_hours_per_day ?? 8));
 $activateCommission = (bool) ($activate_commission ?? false);
 $dailyLoadQuota = max(0, (int) ($daily_load_quota ?? 0));
 $commissionRatePerLoad = max(0.0, (float) ($commission_rate_per_load ?? 0));
 $activateOtIncentives = (bool) ($activate_ot_incentives ?? false);
+$enableBluetoothPrint = (bool) ($enable_bluetooth_print ?? false);
 $canManageBranches = (bool) ($is_main_branch_context ?? false);
+$premiumTrialBrowseLock = ! empty($premium_trial_browse_lock);
 ?>
 
 <?php require dirname(__DIR__, 2).'/partials/premium_trial_page_banner.php'; ?>
@@ -45,97 +44,6 @@ $canManageBranches = (bool) ($is_main_branch_context ?? false);
                 <i class="fa-solid fa-plus me-1"></i>Add New Branch
             </button>
         <?php endif; ?>
-    </div>
-</div>
-
-<div class="card border-0 shadow-sm mb-3">
-    <div class="card-body p-3 p-md-4">
-        <h6 class="mb-2">Laundry branch config</h6>
-        <p class="small text-muted mb-3">Set once per branch. Machine assignment and fold service amount are managed here (branch-level).</p>
-        <form method="POST" action="<?= e(route('tenant.branches.laundry-config.update')) ?>" class="row g-3 align-items-end">
-            <?= csrf_field() ?>
-            <div class="col-12">
-                <div class="rounded-3 border bg-body-secondary bg-opacity-10 p-3">
-                    <div class="small fw-semibold text-secondary text-uppercase mb-2">Feature Toggles</div>
-                    <div class="d-flex flex-wrap gap-3">
-                        <div class="form-check mb-0">
-                            <input
-                                class="form-check-input"
-                                type="checkbox"
-                                name="machine_assignment_enabled"
-                                id="machineAssignmentEnabled"
-                                value="1"
-                                <?= $machineAssignmentEnabled ? 'checked' : '' ?>
-                            >
-                            <label class="form-check-label" for="machineAssignmentEnabled">
-                                Enable machine assignment (auto by order type)
-                            </label>
-                        </div>
-                        <div class="form-check mb-0">
-                            <input
-                                class="form-check-input"
-                                type="checkbox"
-                                name="laundry_status_tracking_enabled"
-                                id="laundryStatusTrackingEnabled"
-                                value="1"
-                                <?= $laundryStatusTrackingEnabled ? 'checked' : '' ?>
-                            >
-                            <label class="form-check-label" for="laundryStatusTrackingEnabled">
-                                Enable laundry status workflow (Pending/Washing/Drying/Finished)
-                            </label>
-                        </div>
-                        <div class="form-check mb-0">
-                            <input class="form-check-input" type="checkbox" name="activate_ot_incentives" id="activateOtIncentives" value="1" <?= $activateOtIncentives ? 'checked' : '' ?>>
-                            <label class="form-check-label" for="activateOtIncentives">Activate OT incentives</label>
-                        </div>
-                        <div class="form-check mb-0">
-                            <input class="form-check-input" type="checkbox" name="activate_commission" id="activateCommission" value="1" <?= $activateCommission ? 'checked' : '' ?>>
-                            <label class="form-check-label" for="activateCommission">Activate Commission</label>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-12 col-md-3">
-                <label class="form-label mb-1" for="foldServiceAmount">Fold service amount (per load)</label>
-                <input
-                    class="form-control"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    id="foldServiceAmount"
-                    name="fold_service_amount"
-                    value="<?= e((string) $foldServiceAmount) ?>"
-                >
-            </div>
-            <div class="col-12 col-md-3">
-                <label class="form-label mb-1" for="foldCommissionTarget">Fold commission goes to</label>
-                <select class="form-select" id="foldCommissionTarget" name="fold_commission_target">
-                    <option value="staff" <?= $foldCommissionTarget === 'staff' ? 'selected' : '' ?>>Staff</option>
-                    <option value="branch" <?= $foldCommissionTarget === 'branch' ? 'selected' : '' ?>>Branch</option>
-                </select>
-            </div>
-            <div class="col-12 col-md-3">
-                <label class="form-label mb-1" for="payrollCutoffDays">Payroll cutoff days</label>
-                <input class="form-control" type="number" min="1" max="31" step="1" id="payrollCutoffDays" name="payroll_cutoff_days" value="<?= e((string) $payrollCutoffDays) ?>">
-            </div>
-            <div class="col-12 col-md-3">
-                <label class="form-label mb-1" for="payrollHoursPerDay">Required hours/day</label>
-                <input class="form-control" type="number" min="1" max="24" step="0.5" id="payrollHoursPerDay" name="payroll_hours_per_day" value="<?= e((string) number_format($payrollHoursPerDay, 2, '.', '')) ?>">
-            </div>
-            <div class="col-12 row g-3 ms-0 px-0" id="commissionConfigFields">
-                <div class="col-12 col-md-3">
-                    <label class="form-label mb-1" for="dailyLoadQuota">Daily load quota</label>
-                    <input class="form-control" type="number" min="0" step="1" id="dailyLoadQuota" name="daily_load_quota" value="<?= e((string) $dailyLoadQuota) ?>">
-                </div>
-                <div class="col-12 col-md-3">
-                    <label class="form-label mb-1" for="commissionRatePerLoad">Commission rate / excess load</label>
-                    <input class="form-control" type="number" min="0" step="0.01" id="commissionRatePerLoad" name="commission_rate_per_load" value="<?= e((string) number_format($commissionRatePerLoad, 2, '.', '')) ?>">
-                </div>
-            </div>
-            <div class="col-12 d-flex justify-content-end">
-                <button class="btn btn-primary">Save laundry config</button>
-            </div>
-        </form>
     </div>
 </div>
 
@@ -254,18 +162,6 @@ $canManageBranches = (bool) ($is_main_branch_context ?? false);
 
 <script>
 (() => {
-    const activateCommission = document.getElementById('activateCommission');
-    const commissionFields = document.getElementById('commissionConfigFields');
-    const syncCommissionFields = () => {
-        if (!activateCommission || !commissionFields) return;
-        commissionFields.classList.toggle('d-none', !activateCommission.checked);
-        commissionFields.querySelectorAll('input').forEach((el) => {
-            el.disabled = !activateCommission.checked;
-        });
-    };
-    activateCommission?.addEventListener('change', syncCommissionFields);
-    syncCommissionFields();
-
     document.querySelectorAll('.js-branch-toggle-form[data-close-confirm="1"]').forEach((form) => {
         form.addEventListener('submit', async (e) => {
             if (form.dataset.mpgConfirmBypass === '1') {

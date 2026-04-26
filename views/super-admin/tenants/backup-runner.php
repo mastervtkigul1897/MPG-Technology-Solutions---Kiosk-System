@@ -81,6 +81,7 @@ foreach ($rows as $r) {
 (() => {
     const scheduleHours = <?= json_embed(array_values(array_map(static fn ($h): int => (int) $h, $scheduleHours))) ?>;
     const checkUrl = <?= json_embed(route('super-admin.backups.runner.check')) ?>;
+    const csrfToken = <?= json_embed(csrf_token()) ?>;
     const forceMode = <?= json_embed($forceMode) ?>;
     const forceCreated = <?= json_embed($created) ?>;
     const forceSkipped = <?= json_embed($skipped) ?>;
@@ -188,7 +189,18 @@ foreach ($rows as $r) {
         heartbeatEl.textContent = 'Checking...';
         heartbeatEl.className = 'fw-semibold text-primary';
         try {
-            const res = await fetch(checkUrl, { headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
+            const payload = new URLSearchParams();
+            payload.set('_token', csrfToken);
+            const res = await fetch(checkUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: payload.toString(),
+            });
             const body = await res.json().catch(() => ({}));
             if (!res.ok || !body.success) {
                 statusEl.textContent = 'Auto-check failed. Will retry...';

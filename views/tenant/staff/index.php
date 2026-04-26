@@ -5,10 +5,18 @@
 /** @var list<string> $required_baseline_labels */
 /** @var bool $module_permissions_available */
 /** @var int|null $free_staff_limit */
+/** @var bool $activate_commission */
+/** @var bool $activate_ot_incentives */
+/** @var int $payroll_cutoff_days */
+/** @var float|int|string $payroll_hours_per_day */
 $module_permissions_available = $module_permissions_available ?? false;
 $optional_module_keys = $optional_module_keys ?? [];
 $required_baseline_labels = $required_baseline_labels ?? [];
 $freeStaffLimit = isset($free_staff_limit) ? (int) $free_staff_limit : 0;
+$activateCommission = ! empty($activate_commission);
+$activateOtIncentives = ! empty($activate_ot_incentives);
+$payrollCutoffDays = max(1, (int) ($payroll_cutoff_days ?? 15));
+$payrollHoursPerDay = max(1.0, (float) ($payroll_hours_per_day ?? 8));
 ?>
 <?php if (! $module_permissions_available): ?>
 <div class="alert alert-warning mb-3">
@@ -26,6 +34,36 @@ $freeStaffLimit = isset($free_staff_limit) ? (int) $free_staff_limit : 0;
 </div>
 <?php endif; ?>
 <div class="row g-3">
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body p-3 p-md-4">
+                <div class="small fw-semibold text-secondary text-uppercase mb-2">Staff Settings</div>
+                <form method="POST" action="<?= e(route('tenant.staff.update-settings')) ?>" class="d-flex flex-wrap gap-3 align-items-center">
+                    <?= csrf_field() ?>
+                    <?= method_field('PATCH') ?>
+                    <input type="hidden" name="activate_ot_incentives" value="0">
+                    <input type="hidden" name="activate_commission" value="0">
+                    <div class="form-check mb-0">
+                        <input class="form-check-input" type="checkbox" name="activate_ot_incentives" id="activateOtIncentives" value="1" <?= $activateOtIncentives ? 'checked' : '' ?>>
+                        <label class="form-check-label" for="activateOtIncentives">Activate OT incentives</label>
+                    </div>
+                    <div class="form-check mb-0">
+                        <input class="form-check-input" type="checkbox" name="activate_commission" id="activateCommission" value="1" <?= $activateCommission ? 'checked' : '' ?>>
+                        <label class="form-check-label" for="activateCommission">Activate Commission</label>
+                    </div>
+                    <div>
+                        <label class="form-label mb-1 small" for="staffPayrollCutoffDays">Payroll cutoff days</label>
+                        <input class="form-control form-control-sm" type="number" min="1" max="31" step="1" id="staffPayrollCutoffDays" name="payroll_cutoff_days" value="<?= e((string) $payrollCutoffDays) ?>">
+                    </div>
+                    <div>
+                        <label class="form-label mb-1 small" for="staffPayrollHoursPerDay">Required hours/day</label>
+                        <input class="form-control form-control-sm" type="number" min="1" max="24" step="0.5" id="staffPayrollHoursPerDay" name="payroll_hours_per_day" value="<?= e((string) number_format($payrollHoursPerDay, 2, '.', '')) ?>">
+                    </div>
+                    <button type="submit" class="btn btn-sm btn-primary">Save staff settings</button>
+                </form>
+            </div>
+        </div>
+    </div>
     <div class="col-12">
         <div class="card border-0 shadow-sm">
             <div class="card-body p-3 p-md-4">

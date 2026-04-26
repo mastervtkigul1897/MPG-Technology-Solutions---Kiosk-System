@@ -336,6 +336,22 @@ final class StaffController
             }
         }
 
+        $activateCommission = false;
+        $activateOtIncentives = false;
+        $payrollCutoffDays = 15;
+        $payrollHoursPerDay = 8.0;
+        try {
+            $activateCommission = $this->getBranchBoolConfig($pdo, $tenantId, 'activate_commission', false);
+            $activateOtIncentives = $this->getBranchBoolConfig($pdo, $tenantId, 'activate_ot_incentives', false);
+            $payrollCutoffDays = $this->getBranchIntConfig($pdo, $tenantId, 'payroll_cutoff_days', 15);
+            $payrollHoursPerDay = $this->getBranchFloatConfig($pdo, $tenantId, 'payroll_hours_per_day', 8.0);
+        } catch (\Throwable) {
+            $activateCommission = false;
+            $activateOtIncentives = false;
+            $payrollCutoffDays = 15;
+            $payrollHoursPerDay = 8.0;
+        }
+
         return view_page('Staff', 'tenant.staff.index', [
             'staff' => $staff,
             'module_labels' => StaffModules::LABELS,
@@ -345,9 +361,44 @@ final class StaffController
                 StaffModules::REQUIRED_BASELINE
             ),
             'module_permissions_available' => $hasModsCol,
+            'activate_commission' => $activateCommission,
+            'activate_ot_incentives' => $activateOtIncentives,
+            'payroll_cutoff_days' => max(1, min(31, $payrollCutoffDays)),
+            'payroll_hours_per_day' => max(1.0, min(24.0, $payrollHoursPerDay)),
             'premium_trial_browse_lock' => false,
             'free_staff_limit' => $freeRestricted ? $freeStaffLimit : null,
         ]);
+    }
+
+    public function updateBranchSettings(Request $request): Response
+    {
+        $user = Auth::user();
+        if (! $user || ($user['role'] ?? '') !== 'tenant_admin') {
+            return new Response('Forbidden', 403);
+        }
+        $tenantId = (int) ($user['tenant_id'] ?? 0);
+        if ($tenantId < 1) {
+            session_flash('errors', ['Invalid tenant.']);
+            return redirect(url('/tenant/staff'));
+        }
+
+        $activateCommission = $request->boolean('activate_commission');
+        $activateOtIncentives = $request->boolean('activate_ot_incentives');
+        $payrollCutoffDays = max(1, min(31, (int) $request->input('payroll_cutoff_days', 15)));
+        $payrollHoursPerDay = max(1.0, min(24.0, (float) $request->input('payroll_hours_per_day', 8)));
+        try {
+            $pdo = App::db();
+            LaundrySchema::ensure($pdo);
+            $this->persistBranchBoolConfig($pdo, $tenantId, 'activate_commission', $activateCommission);
+            $this->persistBranchBoolConfig($pdo, $tenantId, 'activate_ot_incentives', $activateOtIncentives);
+            $this->persistBranchIntConfig($pdo, $tenantId, 'payroll_cutoff_days', $payrollCutoffDays);
+            $this->persistBranchFloatConfig($pdo, $tenantId, 'payroll_hours_per_day', $payrollHoursPerDay);
+            session_flash('success', 'Staff settings updated.');
+        } catch (\Throwable $e) {
+            session_flash('errors', [$e->getMessage()]);
+        }
+
+        return redirect(url('/tenant/staff'));
     }
 
     private function isExpiredDate(mixed $value): bool
@@ -703,6 +754,117 @@ final class StaffController
         session_flash('status', 'Cashier removed.');
 
         return redirect(url('/tenant/staff'));
+    }
+
+    private function getBranchBoolConfig(PDO $pdo, int $tenantId, string $column, bool $default): bool
+    {
+        if ($tenantId < 1 || ! preg_match('/^[a-z_]+$/', $column) || ! $this->hasBranchConfigColumn($pdo, $column)) {
+            return $default;
+        }
+        try {
+            $st = $pdo->prepare('SELECT `'.$column.'` FROM laundry_branch_configs WHERE tenant_id = ? LIMIT 1');
+            $st->execute([$tenantId]);
+            $value = $st->fetchColumn();
+            if ($value === false) {
+                return $default;
+            }
+            return (int) $value === 1;
+        } catch (\Throwable) {
+            return $default;
+        }
+    }
+
+    private function persistBranchBoolConfig(PDO $pdo, int $tenantId, string $column, bool $enabled): void
+    {
+        if ($tenantId < 1 || ! preg_match('/^[a-z_]+$/', $column) || ! $this->hasBranchConfigColumn($pdo, $column)) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, `'.$column.'`, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE `'.$column.'` = VALUES(`'.$column.'`), updated_at = NOW()'
+        )->execute([$tenantId, $enabled ? 1 : 0]);
+    }
+
+    private function getBranchIntConfig(PDO $pdo, int $tenantId, string $column, int $default): int
+    {
+        if ($tenantId < 1 || ! preg_match('/^[a-z_]+$/', $column) || ! $this->hasBranchConfigColumn($pdo, $column)) {
+            return $default;
+        }
+        try {
+            $st = $pdo->prepare('SELECT `'.$column.'` FROM laundry_branch_configs WHERE tenant_id = ? LIMIT 1');
+            $st->execute([$tenantId]);
+            $value = $st->fetchColumn();
+            if ($value === false) {
+                return $default;
+            }
+            return (int) $value;
+        } catch (\Throwable) {
+            return $default;
+        }
+    }
+
+    private function getBranchFloatConfig(PDO $pdo, int $tenantId, string $column, float $default): float
+    {
+        if ($tenantId < 1 || ! preg_match('/^[a-z_]+$/', $column) || ! $this->hasBranchConfigColumn($pdo, $column)) {
+            return $default;
+        }
+        try {
+            $st = $pdo->prepare('SELECT `'.$column.'` FROM laundry_branch_configs WHERE tenant_id = ? LIMIT 1');
+            $st->execute([$tenantId]);
+            $value = $st->fetchColumn();
+            if ($value === false) {
+                return $default;
+            }
+            return (float) $value;
+        } catch (\Throwable) {
+            return $default;
+        }
+    }
+
+    private function persistBranchIntConfig(PDO $pdo, int $tenantId, string $column, int $value): void
+    {
+        if ($tenantId < 1 || ! preg_match('/^[a-z_]+$/', $column) || ! $this->hasBranchConfigColumn($pdo, $column)) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, `'.$column.'`, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE `'.$column.'` = VALUES(`'.$column.'`), updated_at = NOW()'
+        )->execute([$tenantId, $value]);
+    }
+
+    private function persistBranchFloatConfig(PDO $pdo, int $tenantId, string $column, float $value): void
+    {
+        if ($tenantId < 1 || ! preg_match('/^[a-z_]+$/', $column) || ! $this->hasBranchConfigColumn($pdo, $column)) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, `'.$column.'`, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE `'.$column.'` = VALUES(`'.$column.'`), updated_at = NOW()'
+        )->execute([$tenantId, $value]);
+    }
+
+    private function hasBranchConfigColumn(PDO $pdo, string $column): bool
+    {
+        if (! preg_match('/^[a-z_]+$/', $column)) {
+            return false;
+        }
+        try {
+            $st = $pdo->prepare(
+                'SELECT 1
+                 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = "laundry_branch_configs"
+                   AND COLUMN_NAME = ?
+                 LIMIT 1'
+            );
+            $st->execute([$column]);
+            return $st->fetchColumn() !== false;
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private function normalizeStaffType(string $raw): string

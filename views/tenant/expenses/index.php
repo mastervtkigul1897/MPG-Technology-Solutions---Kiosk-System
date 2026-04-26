@@ -141,10 +141,12 @@
                 method: 'POST',
                 headers: {
                     'X-CSRF-TOKEN': csrf,
+                    'X-Requested-With': 'XMLHttpRequest',
                     'Accept': 'application/json',
                     'Content-Type': 'application/x-www-form-urlencoded',
                 },
-                body: encodeBody({ _method: 'DELETE' }),
+                body: encodeBody({ _method: 'DELETE', _token: csrf }),
+                credentials: 'same-origin',
             });
             const body = await res.json().catch(() => ({}));
             if (!res.ok) return showValidationErrors(body);

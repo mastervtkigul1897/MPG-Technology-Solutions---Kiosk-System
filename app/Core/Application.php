@@ -11,6 +11,11 @@ final class Application
         SecurityHeaders::apply();
 
         $req = App::request();
+        $maxRequestBytes = (int) (App::config('security')['max_request_bytes'] ?? (2 * 1024 * 1024));
+        $contentLength = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
+        if ($maxRequestBytes > 0 && $contentLength > $maxRequestBytes) {
+            (new Response('Payload Too Large', 413))->send();
+        }
 
         $general = App::config('security')['rate_limit_general'] ?? [120, 60];
         if (! RateLimiter::hit('ip:'.$req->ip(), $general[0], $general[1])) {
@@ -35,6 +40,16 @@ final class Application
         $loginRl = App::config('security')['rate_limit_login'] ?? [10, 60];
         if ($req->path === '/login' && $req->method === 'POST') {
             if (! RateLimiter::hit('login:'.$req->ip(), $loginRl[0], $loginRl[1])) {
+                (new Response('Too Many Requests', 429))->send();
+            }
+        }
+        if ($req->path === '/forgot-password' && $req->method === 'POST') {
+            if (! RateLimiter::hit('password-reset:'.$req->ip(), 6, 60)) {
+                (new Response('Too Many Requests', 429))->send();
+            }
+        }
+        if ($req->path === '/email/verification-notification' && $req->method === 'POST') {
+            if (! RateLimiter::hit('verification-resend:'.$req->ip(), 6, 60)) {
                 (new Response('Too Many Requests', 429))->send();
             }
         }

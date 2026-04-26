@@ -226,6 +226,9 @@ final class TenantBackupController
 
     public function runnerCheck(Request $request): Response
     {
+        if (strtoupper((string) ($request->method ?? 'GET')) !== 'POST') {
+            return json_response(['success' => false, 'message' => 'Method not allowed.'], 405);
+        }
         $service = new TenantBackupService();
         $actor = Auth::user();
         $actorId = isset($actor['id']) ? (int) $actor['id'] : null;

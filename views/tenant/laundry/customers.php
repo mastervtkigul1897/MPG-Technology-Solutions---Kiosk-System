@@ -1,7 +1,7 @@
 <?php require dirname(__DIR__, 2).'/partials/premium_trial_page_banner.php'; ?>
 <?php if (! empty($reward_system_active)): ?>
 <div class="alert alert-light border small mb-3 mb-md-0">
-    Reward load on each customer increases only from <strong>paid</strong> sales whose order type has <strong>Include to Reward System</strong> turned on (see <a href="<?= e(route('tenant.laundry-order-pricing.index')) ?>">Order Pricing</a>). Turn off <strong>Activate Reward System</strong> on the Rewards page to stop counting entirely.
+    Reward load only increases from paid sales with <strong>Eligible for Reward</strong> enabled. To stop counting, turn off <strong>Activate Reward System</strong>.
 </div>
 <?php endif; ?>
 <div class="card mb-3">
@@ -33,6 +33,7 @@
 
 <div class="card">
     <div class="card-body table-responsive">
+        <div class="small text-muted mb-2">Tip: Click a customer row to show existing transactions for this customer.</div>
         <table class="table table-striped mb-0">
             <thead>
             <tr>
@@ -49,7 +50,7 @@
             <tbody>
             <?php foreach (($customers ?? []) as $customer): ?>
                 <?php $cid = (int) ($customer['id'] ?? 0); ?>
-                <tr>
+                <tr class="js-customer-row" data-customer-id="<?= $cid ?>" data-customer-name="<?= e((string) ($customer['name'] ?? '')) ?>" role="button" tabindex="0" title="View customer transactions">
                     <td><?= e((string) ($customer['name'] ?? '')) ?></td>
                     <td><?= e((string) ($customer['contact'] ?? '-')) ?></td>
                     <td><?= e((string) ($customer['email'] ?? '-')) ?></td>
@@ -61,7 +62,7 @@
                         <div class="d-inline-flex gap-1">
                             <button
                                 type="button"
-                                class="btn btn-sm btn-outline-primary js-edit-customer"
+                                class="btn btn-sm btn-outline-primary js-edit-customer js-no-row-open"
                                 data-id="<?= $cid ?>"
                                 data-name="<?= e((string) ($customer['name'] ?? '')) ?>"
                                 data-contact="<?= e((string) ($customer['contact'] ?? '')) ?>"
@@ -73,7 +74,7 @@
                             </button>
                             <button
                                 type="button"
-                                class="btn btn-sm btn-outline-warning js-adjust-rewards"
+                                class="btn btn-sm btn-outline-warning js-adjust-rewards js-no-row-open"
                                 data-id="<?= $cid ?>"
                                 data-name="<?= e((string) ($customer['name'] ?? '')) ?>"
                                 data-balance="<?= e(number_format((float) ($customer['rewards_balance'] ?? 0), 2, '.', '')) ?>"
@@ -81,7 +82,7 @@
                             >
                                 <span class="fw-bold">+/-</span>
                             </button>
-                            <form method="POST" action="<?= e(route('tenant.customers.destroy', ['id' => $cid])) ?>" onsubmit="return confirm('Delete this customer?');">
+                            <form method="POST" class="js-no-row-open" action="<?= e(route('tenant.customers.destroy', ['id' => $cid])) ?>" onsubmit="return confirm('Delete this customer?');">
                                 <?= csrf_field() ?>
                                 <?= method_field('DELETE') ?>
                             <button class="btn btn-sm btn-outline-danger" type="submit" title="Delete customer">
@@ -94,6 +95,20 @@
             <?php endforeach; ?>
             </tbody>
         </table>
+    </div>
+</div>
+<div class="modal fade" id="customerTransactionsModal" tabindex="-1" aria-labelledby="customerTransactionsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title" id="customerTransactionsModalLabel">Customer transactions</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="small text-muted mb-2" id="customerTransactionsSummary">Loading...</div>
+                <div id="customerTransactionsList"></div>
+            </div>
+        </div>
     </div>
 </div>
 <div class="modal fade" id="customerEditModal" tabindex="-1" aria-labelledby="customerEditModalLabel" aria-hidden="true">
@@ -186,6 +201,108 @@
     const editContact = document.getElementById('customer_edit_contact');
     const editEmail = document.getElementById('customer_edit_email');
     const editBirthday = document.getElementById('customer_edit_birthday');
+    const customerRows = document.querySelectorAll('.js-customer-row');
+    const txModalEl = document.getElementById('customerTransactionsModal');
+    const txModal = txModalEl ? new bootstrap.Modal(txModalEl) : null;
+    const txSummary = document.getElementById('customerTransactionsSummary');
+    const txList = document.getElementById('customerTransactionsList');
+    const fmtMoney = (value) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(Number(value || 0));
+    const esc = (value) => String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    const formatDateTime = (raw) => {
+        const d = new Date(raw);
+        if (Number.isNaN(d.getTime())) return raw || '-';
+        return d.toLocaleString('en-PH', {
+            year: 'numeric',
+            month: 'short',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    };
+    const paymentLabel = (tx) => {
+        const method = String(tx.payment_method || '').trim();
+        if (method === 'split_payment') {
+            const onlineMethod = String(tx.split_online_method || '').trim();
+            return `Split (Cash + ${onlineMethod || 'Online'})`;
+        }
+        return method !== '' ? method.replace(/_/g, ' ') : '-';
+    };
+    const renderTransactions = (customerName, transactions) => {
+        if (!txSummary || !txList) return;
+        txSummary.textContent = `${customerName} • ${transactions.length} transaction(s)`;
+        if (!Array.isArray(transactions) || transactions.length === 0) {
+            txList.innerHTML = '<div class="alert alert-light border mb-0">No transaction found for this customer.</div>';
+            return;
+        }
+        txList.innerHTML = transactions.map((tx) => {
+            const addOns = Array.isArray(tx.add_ons) ? tx.add_ons : [];
+            const addOnHtml = addOns.length > 0
+                ? `<ul class="mb-0">${addOns.map((a) => `<li>${esc(a.item_name || '-')}: ${esc(a.quantity || 0)} x ${esc(fmtMoney(a.unit_price || 0))} = ${esc(fmtMoney(a.total_price || 0))}</li>`).join('')}</ul>`
+                : '<span class="text-muted">None</span>';
+            const reference = tx.reference_code ? `#${esc(tx.reference_code)}` : `#${esc(tx.id)}`;
+            return `
+                <div class="border rounded p-3 mb-2">
+                    <div class="d-flex flex-wrap justify-content-between gap-2">
+                        <div><strong>${reference}</strong> <span class="text-muted">(${esc(formatDateTime(tx.created_at || ''))})</span></div>
+                        <div class="fw-semibold">${esc(fmtMoney(tx.total_amount || 0))}</div>
+                    </div>
+                    <div class="row g-2 mt-1 small">
+                        <div class="col-md-3"><strong>Order type:</strong> ${esc(tx.order_type || '-')}</div>
+                        <div class="col-md-3"><strong>Load status:</strong> ${esc(tx.status || '-')}</div>
+                        <div class="col-md-3"><strong>Payment status:</strong> ${esc(tx.payment_status || '-')}</div>
+                        <div class="col-md-3"><strong>Payment method:</strong> ${esc(paymentLabel(tx))}</div>
+                        <div class="col-md-3"><strong>Loads:</strong> ${esc(tx.wash_qty || 0)}</div>
+                        <div class="col-md-3"><strong>Dry minutes:</strong> ${esc(tx.dry_minutes || 0)}</div>
+                        <div class="col-md-3"><strong>Machine type:</strong> ${esc(tx.machine_type || '-')}</div>
+                        <div class="col-md-3"><strong>Fold service:</strong> ${tx.include_fold_service ? 'Yes' : 'No'}</div>
+                        <div class="col-md-3"><strong>Subtotal:</strong> ${esc(fmtMoney(tx.subtotal || 0))}</div>
+                        <div class="col-md-3"><strong>Add-on total:</strong> ${esc(fmtMoney(tx.add_on_total || 0))}</div>
+                        <div class="col-md-3"><strong>Discount:</strong> ${esc(tx.discount_percentage || 0)}% (${esc(fmtMoney(tx.discount_amount || 0))})</div>
+                        <div class="col-md-3"><strong>Excess fee:</strong> ${esc(fmtMoney(tx.excess_weight_fee_amount || 0))}</div>
+                        <div class="col-md-3"><strong>Service weight:</strong> ${esc(tx.service_weight || 0)} kg</div>
+                        <div class="col-md-3"><strong>Actual weight:</strong> ${esc(tx.actual_weight_kg || 0)} kg</div>
+                        <div class="col-md-3"><strong>Excess weight:</strong> ${esc(tx.excess_weight_kg || 0)} kg</div>
+                        <div class="col-md-3"><strong>Machine IDs:</strong> W:${esc(tx.washer_machine_id || 0)} D:${esc(tx.dryer_machine_id || 0)}</div>
+                        <div class="col-md-3"><strong>Free mode:</strong> ${tx.is_free ? 'Yes' : 'No'}</div>
+                        <div class="col-md-3"><strong>Reward mode:</strong> ${tx.is_reward ? 'Yes' : 'No'}</div>
+                        <div class="col-md-3"><strong>Split cash:</strong> ${esc(fmtMoney(tx.split_cash_amount || 0))}</div>
+                        <div class="col-md-3"><strong>Split online:</strong> ${esc(fmtMoney(tx.split_online_amount || 0))}</div>
+                        <div class="col-md-12"><strong>Add-ons:</strong> ${addOnHtml}</div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    };
+    const fetchCustomerTransactions = async (customerId, customerName) => {
+        if (!txSummary || !txList) return;
+        txSummary.textContent = `${customerName} • Loading transactions...`;
+        txList.innerHTML = '<div class="small text-muted">Please wait...</div>';
+        txModal?.show();
+        try {
+            const res = await fetch(`${baseUrl}/${customerId}/transactions`, {
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                credentials: 'same-origin',
+            });
+            const data = await res.json();
+            if (!res.ok || data.success !== true) {
+                txSummary.textContent = `${customerName}`;
+                txList.innerHTML = `<div class="alert alert-warning mb-0">${esc(data.message || 'Could not load transactions.')}</div>`;
+                return;
+            }
+            renderTransactions(customerName, data.transactions || []);
+        } catch (_) {
+            txSummary.textContent = `${customerName}`;
+            txList.innerHTML = '<div class="alert alert-warning mb-0">Could not load transactions. Please try again.</div>';
+        }
+    };
 
     document.querySelectorAll('.js-edit-customer').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -209,6 +326,24 @@
             if (adjustCount) adjustCount.value = '';
             if (adjustTypeAdd) adjustTypeAdd.checked = true;
             adjustModal?.show();
+        });
+    });
+    customerRows.forEach((row) => {
+        const open = () => {
+            const customerId = row.getAttribute('data-customer-id');
+            const customerName = row.getAttribute('data-customer-name') || 'Customer';
+            if (!customerId) return;
+            fetchCustomerTransactions(customerId, customerName);
+        };
+        row.addEventListener('click', (e) => {
+            const target = e.target;
+            if (target instanceof Element && target.closest('.js-no-row-open')) return;
+            open();
+        });
+        row.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            open();
         });
     });
 })();

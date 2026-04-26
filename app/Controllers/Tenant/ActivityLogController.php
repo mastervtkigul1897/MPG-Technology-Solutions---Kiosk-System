@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers\Tenant;
 
+use App\Core\ActivityLogger;
 use App\Core\App;
 use App\Core\Auth;
 use App\Core\Request;
@@ -118,7 +119,21 @@ final class ActivityLogController
         }
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
-        $pdo->prepare('DELETE FROM activity_logs WHERE id = ? AND tenant_id = ?')->execute([(int) $id, $tenantId]);
+        $logId = (int) $id;
+        $del = $pdo->prepare('DELETE FROM activity_logs WHERE id = ? AND tenant_id = ?');
+        $del->execute([$logId, $tenantId]);
+        if ($del->rowCount() > 0) {
+            ActivityLogger::log(
+                $tenantId,
+                (int) ($user['id'] ?? 0),
+                (string) ($user['role'] ?? 'tenant_admin'),
+                'activity_logs',
+                'destroy',
+                $request,
+                'Deleted one activity log entry.',
+                ['deleted_log_id' => $logId]
+            );
+        }
 
         session_flash('success', 'Activity log entry deleted.');
 
@@ -133,7 +148,20 @@ final class ActivityLogController
         }
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        $countSt = $pdo->prepare('SELECT COUNT(*) FROM activity_logs WHERE tenant_id = ?');
+        $countSt->execute([$tenantId]);
+        $total = (int) $countSt->fetchColumn();
         $pdo->prepare('DELETE FROM activity_logs WHERE tenant_id = ?')->execute([$tenantId]);
+        ActivityLogger::log(
+            $tenantId,
+            (int) ($user['id'] ?? 0),
+            (string) ($user['role'] ?? 'tenant_admin'),
+            'activity_logs',
+            'clear',
+            $request,
+            'Cleared tenant activity logs.',
+            ['deleted_count' => $total]
+        );
 
         session_flash('success', 'All activity logs for this store have been deleted.');
 

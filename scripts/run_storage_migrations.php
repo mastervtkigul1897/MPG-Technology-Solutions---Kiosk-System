@@ -6,13 +6,17 @@ declare(strict_types=1);
  * Local DB: run all SQL files in storage/migrations/ in sorted order.
  *
  * Usage (from project root):
- *   php scripts/run_storage_migrations.php
+ *   php scripts/run_storage_migrations.php --confirm=RUN_MIGRATIONS
  *
  * Uses DB_* from .env via config/app.php. Safe to run repeatedly: common
  * "already applied" errors are reported as SKIP and do not stop the run.
  */
 if (php_sapi_name() !== 'cli') {
-    fwrite(STDERR, "CLI only. Run: php scripts/run_storage_migrations.php\n");
+    file_put_contents('php://stderr', "CLI only. Run: php scripts/run_storage_migrations.php\n");
+    exit(1);
+}
+if (($argc ?? 0) < 2 || ! in_array('--confirm=RUN_MIGRATIONS', $argv ?? [], true)) {
+    file_put_contents('php://stderr', "Refusing to run without explicit confirmation.\nUse: php scripts/run_storage_migrations.php --confirm=RUN_MIGRATIONS\n");
     exit(1);
 }
 
@@ -38,7 +42,7 @@ try {
     $tz = (string) ($db['timezone'] ?? '+08:00');
     $pdo->prepare('SET time_zone = ?')->execute([$tz]);
 } catch (PDOException $e) {
-    fwrite(STDERR, 'Database connection failed: '.$e->getMessage()."\n");
+    file_put_contents('php://stderr', 'Database connection failed: '.$e->getMessage()."\n");
     exit(1);
 }
 
@@ -73,7 +77,7 @@ foreach ($files as $file) {
             ++$nSkip;
             continue;
         }
-        fwrite(STDERR, "FAIL  {$rel}\n".$e->getMessage()."\n");
+        file_put_contents('php://stderr', "FAIL  {$rel}\n".$e->getMessage()."\n");
         exit(1);
     }
 }

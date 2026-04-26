@@ -31,9 +31,9 @@ final class DamagedItemController
                 $params[] = $like;
             }
 
-            $total = (int) $pdo->query(
-                "SELECT COUNT(*) FROM damaged_items d WHERE d.tenant_id = {$tenantId}"
-            )->fetchColumn();
+            $stTotal = $pdo->prepare('SELECT COUNT(*) FROM damaged_items d WHERE d.tenant_id = ?');
+            $stTotal->execute([$tenantId]);
+            $total = (int) $stTotal->fetchColumn();
 
             $st = $pdo->prepare(
                 "SELECT COUNT(*)

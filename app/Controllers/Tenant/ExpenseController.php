@@ -29,9 +29,9 @@ final class ExpenseController
                 $params[] = $like;
             }
 
-            $total = (int) $pdo->query(
-                "SELECT COUNT(*) FROM expenses WHERE tenant_id = $tenantId AND type = 'manual'"
-            )->fetchColumn();
+            $stTotal = $pdo->prepare('SELECT COUNT(*) FROM expenses WHERE tenant_id = ? AND type = ?');
+            $stTotal->execute([$tenantId, 'manual']);
+            $total = (int) $stTotal->fetchColumn();
             $st = $pdo->prepare("SELECT COUNT(*) FROM expenses WHERE $where");
             $st->execute($params);
             $filtered = (int) $st->fetchColumn();

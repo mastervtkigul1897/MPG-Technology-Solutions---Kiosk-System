@@ -95,7 +95,67 @@ final class ReportController
         $grossSalesTotal = $salesTotal + $discountsTotal + $foldAmountTotal;
         $refundsTotal = 0.0;
         $st = $pdo->prepare(
-            "SELECT LOWER(TRIM(COALESCE(payment_method,''))) AS pm, COALESCE(SUM(total_amount),0) AS total
+            "SELECT
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'cash' THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split') THEN COALESCE(split_cash_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS cash_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'card' THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                             AND LOWER(TRIM(COALESCE(split_online_method, ''))) = 'card' THEN COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS card_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'gcash' THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                             AND LOWER(TRIM(COALESCE(split_online_method, ''))) = 'gcash' THEN COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS gcash_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'paymaya' THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                             AND LOWER(TRIM(COALESCE(split_online_method, ''))) = 'paymaya' THEN COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS paymaya_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('online_banking', 'online banking') THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                             AND LOWER(TRIM(COALESCE(split_online_method, ''))) = 'online_banking' THEN COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS online_banking_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'qr_payment' THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                             AND LOWER(TRIM(COALESCE(split_online_method, ''))) = 'qr_payment' THEN COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS qr_payment_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                            THEN COALESCE(split_cash_amount, 0) + COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS split_payment_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'free' THEN total_amount
+                        ELSE 0
+                    END
+                ), 0) AS free_total
              FROM laundry_orders
              WHERE tenant_id = ?
                AND created_at BETWEEN ? AND ?
@@ -104,8 +164,7 @@ final class ReportController
                AND (
                    status = 'paid'
                    OR (status = 'completed' AND payment_status = 'paid')
-               )
-             GROUP BY pm"
+               )"
         );
         $st->execute([$tenantId, $rangeStart, $rangeEnd]);
         $paymentsByMethod = [
@@ -115,17 +174,19 @@ final class ReportController
             'paymaya' => 0.0,
             'online_banking' => 0.0,
             'qr_payment' => 0.0,
-            'split' => 0.0,
+            'split_payment' => 0.0,
             'free' => 0.0,
         ];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $pm = (string) ($row['pm'] ?? '');
-            if ($pm === '') {
-                $pm = 'cash';
-            }
-            if (array_key_exists($pm, $paymentsByMethod)) {
-                $paymentsByMethod[$pm] += (float) ($row['total'] ?? 0);
-            }
+        $paymentRow = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+        if ($paymentRow !== []) {
+            $paymentsByMethod['cash'] = (float) ($paymentRow['cash_total'] ?? 0);
+            $paymentsByMethod['card'] = (float) ($paymentRow['card_total'] ?? 0);
+            $paymentsByMethod['gcash'] = (float) ($paymentRow['gcash_total'] ?? 0);
+            $paymentsByMethod['paymaya'] = (float) ($paymentRow['paymaya_total'] ?? 0);
+            $paymentsByMethod['online_banking'] = (float) ($paymentRow['online_banking_total'] ?? 0);
+            $paymentsByMethod['qr_payment'] = (float) ($paymentRow['qr_payment_total'] ?? 0);
+            $paymentsByMethod['split_payment'] = (float) ($paymentRow['split_payment_total'] ?? 0);
+            $paymentsByMethod['free'] = (float) ($paymentRow['free_total'] ?? 0);
         }
         $manualExpensesTotal = $this->scalarSum(
             $pdo,
@@ -138,6 +199,10 @@ final class ReportController
         $cashAvailable = $netSalesTotal;
         $grossProfit = $netSalesTotal;
         $serviceModeSummary = $this->fetchServiceModeSummary($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $orderTypeTotals = $this->fetchOrderTypeTotals($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $inventoryOutTotals = $this->fetchInventoryOutTotals($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $inventoryLedgerRows = $this->fetchInventoryLedgerRows($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $machineCreditLedgerRows = $this->fetchMachineCreditLedgerRows($pdo, $tenantId, $rangeStart, $rangeEnd);
 
         $stTop = $pdo->prepare(
             'SELECT c.name, COUNT(o.id) AS frequency, COALESCE(SUM(o.total_amount),0) AS total_spending
@@ -244,6 +309,12 @@ final class ReportController
                 'range_to' => $to,
                 'chart_preset' => $chartPreset,
                 'service_mode_summary' => $serviceModeSummary,
+                'order_type_totals' => $orderTypeTotals,
+                'inclusion_items_out_total' => (float) ($inventoryOutTotals['inclusion_qty'] ?? 0.0),
+                'addon_items_out_total' => (float) ($inventoryOutTotals['addon_qty'] ?? 0.0),
+                'total_items_out_total' => (float) ($inventoryOutTotals['total_qty'] ?? 0.0),
+                'inventory_ledger_rows' => $inventoryLedgerRows,
+                'machine_credit_ledger_rows' => $machineCreditLedgerRows,
             ],
             'chart' => $chartSeries,
             'top_customers' => $topCustomers,
@@ -324,6 +395,8 @@ final class ReportController
         }
 
         $inventoryOutMap = [];
+        $inclusionOutMap = [];
+        $addonOutMap = [];
         $addInventoryOut = static function (array &$map, string $name, float $qty, float $amount): void {
             $label = trim($name);
             if ($label === '') {
@@ -363,11 +436,20 @@ final class ReportController
             );
             $q->execute([(string) $cfg['fallback'], $tenantId, $rangeStart, $rangeEnd]);
             foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $itemName = (string) ($row['item_name'] ?? '');
+                $qtyOut = (float) ($row['qty_out'] ?? 0);
+                $amountOut = (float) ($row['amount_out'] ?? 0);
                 $addInventoryOut(
                     $inventoryOutMap,
-                    (string) ($row['item_name'] ?? ''),
-                    (float) ($row['qty_out'] ?? 0),
-                    (float) ($row['amount_out'] ?? 0)
+                    $itemName,
+                    $qtyOut,
+                    $amountOut
+                );
+                $addInventoryOut(
+                    $inclusionOutMap,
+                    $itemName,
+                    $qtyOut,
+                    $amountOut
                 );
             }
         }
@@ -390,16 +472,41 @@ final class ReportController
         );
         $addonSt->execute([$tenantId, $rangeStart, $rangeEnd]);
         foreach ($addonSt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $itemName = (string) ($row['item_name'] ?? '');
+            $qtyOut = (float) ($row['qty_out'] ?? 0);
+            $amountOut = (float) ($row['amount_out'] ?? 0);
             $addInventoryOut(
                 $inventoryOutMap,
-                (string) ($row['item_name'] ?? ''),
-                (float) ($row['qty_out'] ?? 0),
-                (float) ($row['amount_out'] ?? 0)
+                $itemName,
+                $qtyOut,
+                $amountOut
+            );
+            $addInventoryOut(
+                $addonOutMap,
+                $itemName,
+                $qtyOut,
+                $amountOut
             );
         }
 
         $inventoryOutRows = array_values($inventoryOutMap);
+        $inclusionOutRows = array_values($inclusionOutMap);
+        $addonOutRows = array_values($addonOutMap);
         usort($inventoryOutRows, static function (array $a, array $b): int {
+            $qtyCmp = (float) ($b['qty_out'] ?? 0) <=> (float) ($a['qty_out'] ?? 0);
+            if ($qtyCmp !== 0) {
+                return $qtyCmp;
+            }
+            return strcmp((string) ($a['item_name'] ?? ''), (string) ($b['item_name'] ?? ''));
+        });
+        usort($inclusionOutRows, static function (array $a, array $b): int {
+            $qtyCmp = (float) ($b['qty_out'] ?? 0) <=> (float) ($a['qty_out'] ?? 0);
+            if ($qtyCmp !== 0) {
+                return $qtyCmp;
+            }
+            return strcmp((string) ($a['item_name'] ?? ''), (string) ($b['item_name'] ?? ''));
+        });
+        usort($addonOutRows, static function (array $a, array $b): int {
             $qtyCmp = (float) ($b['qty_out'] ?? 0) <=> (float) ($a['qty_out'] ?? 0);
             if ($qtyCmp !== 0) {
                 return $qtyCmp;
@@ -413,6 +520,8 @@ final class ReportController
             'to' => $to,
             'data' => $rows,
             'inventory_out' => $inventoryOutRows,
+            'inventory_out_inclusion' => $inclusionOutRows,
+            'inventory_out_addon' => $addonOutRows,
         ]);
     }
 
@@ -422,6 +531,394 @@ final class ReportController
         $st->execute($params);
 
         return (float) ($st->fetchColumn() ?: 0.0);
+    }
+
+    /**
+     * @return array{inclusion_qty:float,addon_qty:float,total_qty:float}
+     */
+    private function fetchInventoryOutTotals(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
+    {
+        $addonQty = $this->scalarSum(
+            $pdo,
+            'SELECT COALESCE(SUM(ao.quantity), 0)
+             FROM laundry_order_add_ons ao
+             INNER JOIN laundry_orders o ON o.id = ao.order_id AND o.tenant_id = ao.tenant_id
+             WHERE ao.tenant_id = ?
+               AND o.created_at BETWEEN ? AND ?
+               AND COALESCE(o.is_void, 0) = 0
+               AND o.status <> "void"
+               AND (
+                   o.status = "paid"
+                   OR (o.status = "completed" AND o.payment_status = "paid")
+               )',
+            [$tenantId, $rangeStart, $rangeEnd]
+        );
+
+        $totalQty = 0.0;
+        if ($this->hasTable($pdo, 'laundry_order_inventory_movements')) {
+            $totalQty = $this->scalarSum(
+                $pdo,
+                'SELECT COALESCE(SUM(m.quantity), 0)
+                 FROM laundry_order_inventory_movements m
+                 INNER JOIN laundry_orders o ON o.id = m.order_id AND o.tenant_id = m.tenant_id
+                 WHERE m.tenant_id = ?
+                   AND m.direction = "deduct"
+                   AND o.created_at BETWEEN ? AND ?
+                   AND COALESCE(o.is_void, 0) = 0
+                   AND o.status <> "void"
+                   AND (
+                       o.status = "paid"
+                       OR (o.status = "completed" AND o.payment_status = "paid")
+                   )',
+                [$tenantId, $rangeStart, $rangeEnd]
+            );
+        } else {
+            $inclusionFallback = $this->scalarSum(
+                $pdo,
+                'SELECT COALESCE(SUM(
+                    (CASE WHEN COALESCE(o.inclusion_detergent_item_id, 0) > 0 THEN 1 ELSE 0 END)
+                  + (CASE WHEN COALESCE(o.inclusion_fabcon_item_id, 0) > 0 THEN 1 ELSE 0 END)
+                  + (CASE WHEN COALESCE(o.inclusion_bleach_item_id, 0) > 0 THEN 1 ELSE 0 END)
+                ), 0)
+                 FROM laundry_orders o
+                 WHERE o.tenant_id = ?
+                   AND o.created_at BETWEEN ? AND ?
+                   AND COALESCE(o.is_void, 0) = 0
+                   AND o.status <> "void"
+                   AND (
+                       o.status = "paid"
+                       OR (o.status = "completed" AND o.payment_status = "paid")
+                   )',
+                [$tenantId, $rangeStart, $rangeEnd]
+            );
+            $totalQty = $inclusionFallback + $addonQty;
+        }
+
+        $inclusionQty = max(0.0, $totalQty - $addonQty);
+
+        return [
+            'inclusion_qty' => $inclusionQty,
+            'addon_qty' => $addonQty,
+            'total_qty' => $inclusionQty + $addonQty,
+        ];
+    }
+
+    /**
+     * @return list<array{code:string,label:string,qty:float}>
+     */
+    private function fetchOrderTypeTotals(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
+    {
+        $rows = [];
+        try {
+            if ($this->hasTable($pdo, 'laundry_order_lines')) {
+                $st = $pdo->prepare(
+                    'SELECT
+                        ot.code,
+                        ot.label,
+                        COALESCE(SUM(
+                            CASE
+                                WHEN o.id IS NOT NULL THEN COALESCE(ol.quantity, 0)
+                                ELSE 0
+                            END
+                        ), 0) AS qty
+                     FROM laundry_order_types ot
+                     LEFT JOIN laundry_order_lines ol
+                       ON ol.tenant_id = ot.tenant_id
+                      AND ol.order_type_code = ot.code
+                     LEFT JOIN laundry_orders o
+                       ON o.id = ol.order_id
+                      AND o.tenant_id = ol.tenant_id
+                      AND o.created_at BETWEEN ? AND ?
+                      AND COALESCE(o.is_void, 0) = 0
+                      AND o.status <> "void"
+                      AND (
+                          o.status = "paid"
+                          OR (o.status = "completed" AND o.payment_status = "paid")
+                      )
+                     WHERE ot.tenant_id = ?
+                     GROUP BY ot.code, ot.label, ot.sort_order
+                     ORDER BY ot.sort_order ASC, ot.label ASC, ot.code ASC'
+                );
+                $st->execute([$rangeStart, $rangeEnd, $tenantId]);
+            } else {
+                $st = $pdo->prepare(
+                    'SELECT
+                        ot.code,
+                        ot.label,
+                        COALESCE(SUM(
+                            CASE
+                                WHEN o.id IS NOT NULL THEN 1
+                                ELSE 0
+                            END
+                        ), 0) AS qty
+                     FROM laundry_order_types ot
+                     LEFT JOIN laundry_orders o
+                       ON o.tenant_id = ot.tenant_id
+                      AND o.order_type = ot.code
+                      AND o.created_at BETWEEN ? AND ?
+                      AND COALESCE(o.is_void, 0) = 0
+                      AND o.status <> "void"
+                      AND (
+                          o.status = "paid"
+                          OR (o.status = "completed" AND o.payment_status = "paid")
+                      )
+                     WHERE ot.tenant_id = ?
+                     GROUP BY ot.code, ot.label, ot.sort_order
+                     ORDER BY ot.sort_order ASC, ot.label ASC, ot.code ASC'
+                );
+                $st->execute([$rangeStart, $rangeEnd, $tenantId]);
+            }
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $rows[] = [
+                    'code' => (string) ($row['code'] ?? ''),
+                    'label' => (string) ($row['label'] ?? ''),
+                    'qty' => max(0.0, (float) ($row['qty'] ?? 0)),
+                ];
+            }
+        } catch (\Throwable) {
+        }
+        return $rows;
+    }
+
+    private function hasTable(PDO $pdo, string $table): bool
+    {
+        try {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*)
+                 FROM information_schema.TABLES
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = ?'
+            );
+            $st->execute([$table]);
+            return (int) $st->fetchColumn() > 0;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * @return list<array{item_name:string,opening:float,stock_in:float,stock_out:float,closing:float}>
+     */
+    private function fetchInventoryLedgerRows(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
+    {
+        $rows = [];
+        try {
+            $itemsSt = $pdo->prepare(
+                'SELECT id, name, stock_quantity
+                 FROM laundry_inventory_items
+                 WHERE tenant_id = ?
+                 ORDER BY name ASC'
+            );
+            $itemsSt->execute([$tenantId]);
+            $items = $itemsSt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            if ($items === []) {
+                return [];
+            }
+
+            $signedRangeByItem = [];
+            $signedAfterEndByItem = [];
+            $inRangeByItem = [];
+            $outRangeByItem = [];
+
+            $purchaseRange = $pdo->prepare(
+                'SELECT item_id,
+                        COALESCE(SUM(quantity),0) AS signed_qty,
+                        COALESCE(SUM(CASE WHEN quantity > 0 THEN quantity ELSE 0 END),0) AS in_qty,
+                        COALESCE(SUM(CASE WHEN quantity < 0 THEN -quantity ELSE 0 END),0) AS out_qty
+                 FROM laundry_inventory_purchases
+                 WHERE tenant_id = ?
+                   AND purchased_at BETWEEN ? AND ?
+                 GROUP BY item_id'
+            );
+            $purchaseRange->execute([$tenantId, $rangeStart, $rangeEnd]);
+            foreach ($purchaseRange->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $itemId = (int) ($row['item_id'] ?? 0);
+                if ($itemId < 1) {
+                    continue;
+                }
+                $signedRangeByItem[$itemId] = ($signedRangeByItem[$itemId] ?? 0.0) + (float) ($row['signed_qty'] ?? 0);
+                $inRangeByItem[$itemId] = ($inRangeByItem[$itemId] ?? 0.0) + (float) ($row['in_qty'] ?? 0);
+                $outRangeByItem[$itemId] = ($outRangeByItem[$itemId] ?? 0.0) + (float) ($row['out_qty'] ?? 0);
+            }
+
+            $purchaseAfter = $pdo->prepare(
+                'SELECT item_id, COALESCE(SUM(quantity),0) AS signed_qty
+                 FROM laundry_inventory_purchases
+                 WHERE tenant_id = ?
+                   AND purchased_at > ?
+                 GROUP BY item_id'
+            );
+            $purchaseAfter->execute([$tenantId, $rangeEnd]);
+            foreach ($purchaseAfter->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $itemId = (int) ($row['item_id'] ?? 0);
+                if ($itemId < 1) {
+                    continue;
+                }
+                $signedAfterEndByItem[$itemId] = ($signedAfterEndByItem[$itemId] ?? 0.0) + (float) ($row['signed_qty'] ?? 0);
+            }
+
+            if ($this->hasTable($pdo, 'laundry_order_inventory_movements')) {
+                $mvRange = $pdo->prepare(
+                    'SELECT inventory_item_id,
+                            COALESCE(SUM(CASE WHEN direction = "restore" THEN quantity WHEN direction = "deduct" THEN -quantity ELSE 0 END),0) AS signed_qty,
+                            COALESCE(SUM(CASE WHEN direction = "restore" THEN quantity ELSE 0 END),0) AS in_qty,
+                            COALESCE(SUM(CASE WHEN direction = "deduct" THEN quantity ELSE 0 END),0) AS out_qty
+                     FROM laundry_order_inventory_movements
+                     WHERE tenant_id = ?
+                       AND created_at BETWEEN ? AND ?
+                     GROUP BY inventory_item_id'
+                );
+                $mvRange->execute([$tenantId, $rangeStart, $rangeEnd]);
+                foreach ($mvRange->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                    $itemId = (int) ($row['inventory_item_id'] ?? 0);
+                    if ($itemId < 1) {
+                        continue;
+                    }
+                    $signedRangeByItem[$itemId] = ($signedRangeByItem[$itemId] ?? 0.0) + (float) ($row['signed_qty'] ?? 0);
+                    $inRangeByItem[$itemId] = ($inRangeByItem[$itemId] ?? 0.0) + (float) ($row['in_qty'] ?? 0);
+                    $outRangeByItem[$itemId] = ($outRangeByItem[$itemId] ?? 0.0) + (float) ($row['out_qty'] ?? 0);
+                }
+
+                $mvAfter = $pdo->prepare(
+                    'SELECT inventory_item_id,
+                            COALESCE(SUM(CASE WHEN direction = "restore" THEN quantity WHEN direction = "deduct" THEN -quantity ELSE 0 END),0) AS signed_qty
+                     FROM laundry_order_inventory_movements
+                     WHERE tenant_id = ?
+                       AND created_at > ?
+                     GROUP BY inventory_item_id'
+                );
+                $mvAfter->execute([$tenantId, $rangeEnd]);
+                foreach ($mvAfter->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                    $itemId = (int) ($row['inventory_item_id'] ?? 0);
+                    if ($itemId < 1) {
+                        continue;
+                    }
+                    $signedAfterEndByItem[$itemId] = ($signedAfterEndByItem[$itemId] ?? 0.0) + (float) ($row['signed_qty'] ?? 0);
+                }
+            }
+
+            foreach ($items as $item) {
+                $itemId = (int) ($item['id'] ?? 0);
+                $current = max(0.0, (float) ($item['stock_quantity'] ?? 0));
+                $rangeDelta = (float) ($signedRangeByItem[$itemId] ?? 0.0);
+                $afterEndDelta = (float) ($signedAfterEndByItem[$itemId] ?? 0.0);
+                $closing = max(0.0, $current - $afterEndDelta);
+                $opening = max(0.0, $closing - $rangeDelta);
+                $stockIn = max(0.0, (float) ($inRangeByItem[$itemId] ?? 0.0));
+                $stockOut = max(0.0, (float) ($outRangeByItem[$itemId] ?? 0.0));
+                $rows[] = [
+                    'item_name' => (string) ($item['name'] ?? 'Item'),
+                    'opening' => $opening,
+                    'stock_in' => $stockIn,
+                    'stock_out' => $stockOut,
+                    'closing' => $closing,
+                ];
+            }
+        } catch (\Throwable) {
+            return [];
+        }
+        return $rows;
+    }
+
+    /**
+     * @return list<array{machine_label:string,machine_code:string,credit_required:int,opening:float,restock:float,usage:float,closing:float}>
+     */
+    private function fetchMachineCreditLedgerRows(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
+    {
+        $rows = [];
+        try {
+            $st = $pdo->prepare(
+                'SELECT id, machine_label, machine_code, credit_required, credit_balance
+                 FROM laundry_machines
+                 WHERE tenant_id = ?
+                 ORDER BY machine_kind ASC, machine_label ASC, machine_code ASC, id ASC'
+            );
+            $st->execute([$tenantId]);
+            $machines = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            if ($machines === []) {
+                return [];
+            }
+            if (! $this->hasTable($pdo, 'laundry_machine_credit_movements')) {
+                foreach ($machines as $machine) {
+                    $current = max(0.0, (float) ($machine['credit_balance'] ?? 0));
+                    $rows[] = [
+                        'machine_label' => (string) ($machine['machine_label'] ?? ''),
+                        'machine_code' => (string) ($machine['machine_code'] ?? ''),
+                        'credit_required' => (int) ($machine['credit_required'] ?? 0),
+                        'opening' => $current,
+                        'restock' => 0.0,
+                        'usage' => 0.0,
+                        'closing' => $current,
+                    ];
+                }
+                return $rows;
+            }
+
+            $signedRangeByMachine = [];
+            $restockByMachine = [];
+            $usageByMachine = [];
+            $signedAfterByMachine = [];
+
+            $mvRange = $pdo->prepare(
+                'SELECT machine_id,
+                        COALESCE(SUM(CASE WHEN direction = "restock" THEN amount WHEN direction = "deduct" THEN -amount ELSE 0 END),0) AS signed_amount,
+                        COALESCE(SUM(CASE WHEN direction = "restock" THEN amount ELSE 0 END),0) AS restock_amount,
+                        COALESCE(SUM(CASE WHEN direction = "deduct" THEN amount ELSE 0 END),0) AS usage_amount
+                 FROM laundry_machine_credit_movements
+                 WHERE tenant_id = ?
+                   AND created_at BETWEEN ? AND ?
+                 GROUP BY machine_id'
+            );
+            $mvRange->execute([$tenantId, $rangeStart, $rangeEnd]);
+            foreach ($mvRange->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $machineId = (int) ($row['machine_id'] ?? 0);
+                if ($machineId < 1) {
+                    continue;
+                }
+                $signedRangeByMachine[$machineId] = (float) ($row['signed_amount'] ?? 0);
+                $restockByMachine[$machineId] = max(0.0, (float) ($row['restock_amount'] ?? 0));
+                $usageByMachine[$machineId] = max(0.0, (float) ($row['usage_amount'] ?? 0));
+            }
+
+            $mvAfter = $pdo->prepare(
+                'SELECT machine_id,
+                        COALESCE(SUM(CASE WHEN direction = "restock" THEN amount WHEN direction = "deduct" THEN -amount ELSE 0 END),0) AS signed_amount
+                 FROM laundry_machine_credit_movements
+                 WHERE tenant_id = ?
+                   AND created_at > ?
+                 GROUP BY machine_id'
+            );
+            $mvAfter->execute([$tenantId, $rangeEnd]);
+            foreach ($mvAfter->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $machineId = (int) ($row['machine_id'] ?? 0);
+                if ($machineId < 1) {
+                    continue;
+                }
+                $signedAfterByMachine[$machineId] = (float) ($row['signed_amount'] ?? 0);
+            }
+
+            foreach ($machines as $machine) {
+                $machineId = (int) ($machine['id'] ?? 0);
+                $current = max(0.0, (float) ($machine['credit_balance'] ?? 0));
+                $rangeDelta = (float) ($signedRangeByMachine[$machineId] ?? 0.0);
+                $afterDelta = (float) ($signedAfterByMachine[$machineId] ?? 0.0);
+                $closing = max(0.0, $current - $afterDelta);
+                $opening = max(0.0, $closing - $rangeDelta);
+                $rows[] = [
+                    'machine_label' => (string) ($machine['machine_label'] ?? ''),
+                    'machine_code' => (string) ($machine['machine_code'] ?? ''),
+                    'credit_required' => (int) ($machine['credit_required'] ?? 0),
+                    'opening' => $opening,
+                    'restock' => max(0.0, (float) ($restockByMachine[$machineId] ?? 0.0)),
+                    'usage' => max(0.0, (float) ($usageByMachine[$machineId] ?? 0.0)),
+                    'closing' => $closing,
+                ];
+            }
+        } catch (\Throwable) {
+            return [];
+        }
+
+        return $rows;
     }
 
     private function hasLaundryOrdersDiscountAmount(PDO $pdo): bool
@@ -466,7 +963,7 @@ final class ReportController
     private function getBranchFoldCommissionTarget(PDO $pdo, int $tenantId): string
     {
         if ($tenantId < 1) {
-            return 'staff';
+            return 'branch';
         }
         try {
             $st = $pdo->prepare(
@@ -477,11 +974,11 @@ final class ReportController
             );
             $st->execute([$tenantId]);
             $row = $st->fetch(PDO::FETCH_ASSOC);
-            $v = strtolower(trim((string) ($row['fold_commission_target'] ?? 'staff')));
+            $v = strtolower(trim((string) ($row['fold_commission_target'] ?? 'branch')));
 
-            return in_array($v, ['staff', 'branch'], true) ? $v : 'staff';
+            return in_array($v, ['staff', 'branch'], true) ? $v : 'branch';
         } catch (\Throwable) {
-            return 'staff';
+            return 'branch';
         }
     }
 
@@ -534,7 +1031,9 @@ final class ReportController
                 $params[] = $like;
             }
 
-            $total = (int) $pdo->query('SELECT COUNT(*) FROM transactions WHERE tenant_id = '.$tenantId)->fetchColumn();
+            $stTotal = $pdo->prepare('SELECT COUNT(*) FROM transactions WHERE tenant_id = ?');
+            $stTotal->execute([$tenantId]);
+            $total = (int) $stTotal->fetchColumn();
             $st = $pdo->prepare("SELECT COUNT(*) FROM transactions t WHERE $where");
             $st->execute($params);
             $filtered = (int) $st->fetchColumn();

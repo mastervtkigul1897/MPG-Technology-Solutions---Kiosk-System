@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Controllers\SuperAdmin;
 
+use App\Core\ActivityLogger;
 use App\Core\App;
 use App\Core\Auth;
+use App\Core\LaundrySchema;
 use App\Core\Request;
 use App\Core\Response;
 use PDO;
@@ -282,6 +284,7 @@ final class TenantController
                 $deleteForm = '<form method="POST" action="'.e($deleteUrl).'" class="d-inline js-delete-tenant-form" data-tenant-name="'.e((string) ($t['name'] ?? 'Store')).'">'
                     .csrf_field()
                     .method_field('DELETE')
+                    .'<input type="hidden" name="delete_confirmation" value="">'
                     .'<button type="submit" class="btn btn-sm btn-outline-danger px-2" title="Delete store" aria-label="Delete store"><i class="fa-solid fa-trash"></i></button>'
                     .'</form>';
 
@@ -423,6 +426,7 @@ final class TenantController
             $tenantId = (int) $pdo->lastInsertId();
             $pdo->prepare('UPDATE tenants SET parent_tenant_id = ?, branch_group_id = ? WHERE id = ?')
                 ->execute([$tenantId, $tenantId, $tenantId]);
+            LaundrySchema::ensureDefaultInventoryForTenant($pdo, $tenantId);
             if (Auth::hasModulePermissionsColumn()) {
                 $pdo->prepare(
                     'INSERT INTO users (name, email, password, role, tenant_id, module_permissions, email_verified_at, created_at, updated_at)
@@ -450,6 +454,8 @@ final class TenantController
     public function toggleActive(Request $request, string $id): Response
     {
         $tid = (int) $id;
+        $actor = Auth::user();
+        $actorId = (int) ($actor['id'] ?? 0);
         $pdo = App::db();
         $st = $pdo->prepare('SELECT is_active FROM tenants WHERE id = ? LIMIT 1');
         $st->execute([$tid]);
@@ -461,6 +467,16 @@ final class TenantController
         }
         $new = ! (bool) $row['is_active'];
         $pdo->prepare('UPDATE tenants SET is_active = ?, updated_at = NOW() WHERE id = ?')->execute([$new ? 1 : 0, $tid]);
+        ActivityLogger::log(
+            null,
+            $actorId,
+            (string) ($actor['role'] ?? 'super_admin'),
+            'tenants',
+            'toggle_active',
+            $request,
+            'Toggled store active status.',
+            ['tenant_id' => $tid, 'is_active' => $new ? 1 : 0]
+        );
         session_flash('status', $new ? 'Store activated.' : 'Store deactivated.');
 
         return redirect(url('/super-admin/tenants'));
@@ -494,13 +510,16 @@ final class TenantController
         }
 
         $pdo = App::db();
-        $st = $pdo->prepare('SELECT id FROM tenants WHERE id = ? LIMIT 1');
+        $st = $pdo->prepare('SELECT id, license_expires_at FROM tenants WHERE id = ? LIMIT 1');
         $st->execute([$tid]);
-        if (! $st->fetch()) {
+        $tenantRow = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+        if (! $tenantRow) {
             session_flash('errors', ['Store not found.']);
 
             return redirect(url('/super-admin/tenants'));
         }
+        $existingExpiresRaw = trim((string) ($tenantRow['license_expires_at'] ?? ''));
+        $manualEndDateOverride = ($expires !== '' && $expires !== $originalExpires);
 
         if ($planInput === self::FREE_ACCESS_PLAN_CODE) {
             try {
@@ -510,33 +529,32 @@ final class TenantController
 
                 return redirect(url('/super-admin/tenants'));
             }
+            $effectiveExpires = $manualEndDateOverride
+                ? ($expires.' 23:59:59')
+                : $window['expires_at'];
             $pdo->prepare(
                 'UPDATE tenants
                  SET name = COALESCE(?, name),
                      plan = ?,
-                     license_starts_at = ?,
                      license_expires_at = ?,
                      updated_at = NOW()
                  WHERE id = ?'
             )->execute([
                 $name !== '' ? $name : null,
                 self::FREE_ACCESS_PLAN_CODE,
-                $window['starts_at'],
-                $window['expires_at'],
+                $effectiveExpires,
                 $tid,
             ]);
             session_flash('status', 'Store details updated.');
         } elseif ($months !== null) {
             $window = self::computeSubscriptionWindow($months);
             $effectiveExpires = $window['expires_at'];
-            // Treat as manual override only when user actually changed the date in modal.
-            if ($expires !== '' && $expires !== $originalExpires) {
+            if ($manualEndDateOverride) {
                 $effectiveExpires = $expires.' 23:59:59';
             }
             $params = [
                 $name !== '' ? $name : null,
                 self::planCodeFromMonths($months),
-                $window['starts_at'],
                 $effectiveExpires,
                 $tid,
             ];
@@ -544,7 +562,6 @@ final class TenantController
                 'UPDATE tenants
                  SET name = COALESCE(?, name),
                      plan = ?,
-                     license_starts_at = ?,
                      license_expires_at = ?,
                      updated_at = NOW()
                  WHERE id = ?'
@@ -554,12 +571,12 @@ final class TenantController
             $pdo->prepare(
                 'UPDATE tenants
                  SET name = COALESCE(?, name),
-                     license_expires_at = ?,
+                     license_expires_at = COALESCE(?, license_expires_at),
                      updated_at = NOW()
                  WHERE id = ?'
             )->execute([
                 $name !== '' ? $name : null,
-                $expires !== '' ? $expires : null,
+                $expires !== '' ? ($expires.' 23:59:59') : ($existingExpiresRaw !== '' ? $existingExpiresRaw : null),
                 $tid,
             ]);
             session_flash('status', 'Subscription end date updated.');
@@ -571,6 +588,8 @@ final class TenantController
     public function destroy(Request $request, string $id): Response
     {
         $tid = (int) $id;
+        $actor = Auth::user();
+        $actorId = (int) ($actor['id'] ?? 0);
         $pdo = App::db();
         self::ensureBranchColumns($pdo);
         $st = $pdo->prepare('SELECT id, branch_group_id, is_main_branch FROM tenants WHERE id = ? LIMIT 1');
@@ -578,6 +597,15 @@ final class TenantController
         $tenant = $st->fetch(PDO::FETCH_ASSOC);
         if (! $tenant) {
             session_flash('errors', ['Store not found.']);
+            return redirect(url('/super-admin/tenants'));
+        }
+        $stName = $pdo->prepare('SELECT name FROM tenants WHERE id = ? LIMIT 1');
+        $stName->execute([$tid]);
+        $tenantName = trim((string) ($stName->fetchColumn() ?: 'STORE'));
+        $requiredPhrase = 'DELETE '.strtoupper($tenantName);
+        $typedConfirmation = strtoupper(trim((string) $request->input('delete_confirmation', '')));
+        if ($typedConfirmation !== $requiredPhrase) {
+            session_flash('errors', ["Type {$requiredPhrase} to confirm permanent store deletion."]);
             return redirect(url('/super-admin/tenants'));
         }
         $groupId = (int) ($tenant['branch_group_id'] ?? 0);
@@ -591,9 +619,28 @@ final class TenantController
             }
         }
         try {
+            $pdo->beginTransaction();
+            // Users use ON DELETE SET NULL on tenant FK, so remove tenant users explicitly for clean deletion.
+            $usersSt = $pdo->prepare('DELETE FROM users WHERE tenant_id = ?');
+            $usersSt->execute([$tid]);
+            $deletedUsers = (int) $usersSt->rowCount();
             $pdo->prepare('DELETE FROM tenants WHERE id = ?')->execute([$tid]);
-            session_flash('status', 'Store deleted.');
+            $pdo->commit();
+            ActivityLogger::log(
+                null,
+                $actorId,
+                (string) ($actor['role'] ?? 'super_admin'),
+                'tenants',
+                'destroy',
+                $request,
+                'Store deleted permanently by super admin.',
+                ['tenant_id' => $tid, 'deleted_users' => $deletedUsers]
+            );
+            session_flash('status', sprintf('Store deleted permanently. Removed %d associated user account(s).', $deletedUsers));
         } catch (\Throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             session_flash('errors', ['Could not delete store. Remove related records first.']);
         }
 
@@ -603,6 +650,8 @@ final class TenantController
     public function resetOwnerPassword(Request $request, string $id): Response
     {
         $tid = (int) $id;
+        $actor = Auth::user();
+        $actorId = (int) ($actor['id'] ?? 0);
         $pass = (string) $request->input('password');
         $confirm = (string) $request->input('password_confirmation');
 
@@ -632,6 +681,16 @@ final class TenantController
 
         $hash = password_hash($pass, PASSWORD_BCRYPT);
         $pdo->prepare('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?')->execute([$hash, (int) $owner['id']]);
+        ActivityLogger::log(
+            null,
+            $actorId,
+            (string) ($actor['role'] ?? 'super_admin'),
+            'tenants',
+            'reset_owner_password',
+            $request,
+            'Store owner password reset.',
+            ['tenant_id' => $tid, 'owner_user_id' => (int) $owner['id']]
+        );
 
         session_flash('status', 'Store owner password has been reset. Share the new password with them securely; they can change it under Profile after login.');
 

@@ -82,6 +82,24 @@ final class Router
     private function applyMiddleware(Request $request, array $mw): ?Response
     {
         $user = Auth::user();
+        if ($user && ($user['role'] ?? '') === 'cashier' && str_starts_with($request->path, '/tenant/')) {
+            $hasTenantAccessRule = false;
+            $hasTenantAdminRoleRule = false;
+            foreach ($mw as $rule) {
+                if (str_starts_with($rule, 'tenant.access:')) {
+                    $hasTenantAccessRule = true;
+                }
+                if ($rule === 'role:tenant_admin') {
+                    $hasTenantAdminRoleRule = true;
+                }
+            }
+            $cashierAlwaysAllowedTenantPaths = [
+                '/tenant/plans',
+            ];
+            if (! $hasTenantAccessRule && ! $hasTenantAdminRoleRule && ! in_array($request->path, $cashierAlwaysAllowedTenantPaths, true)) {
+                return new Response('Forbidden.', 403);
+            }
+        }
         foreach ($mw as $rule) {
             if ($rule === 'guest' && $user) {
                 if (($user['role'] ?? '') !== 'super_admin' && empty($user['email_verified_at'])) {
@@ -155,6 +173,12 @@ final class Router
                 // Free Mode restrictions are applied inside each module so Premium-tagged
                 // pages remain visible and browseable.
                 continue;
+            }
+            if ($rule === 'tenant.attendance.available') {
+                if (! $user || ! Auth::canUseAttendanceFeature($user)) {
+                    session_flash('errors', ['Attendance is available only during 7-day premium trial or active premium subscription.']);
+                    return redirect(url('/tenant/plans'));
+                }
             }
             if ($rule === 'auth' && $user && ($user['role'] ?? '') === 'cashier') {
                 if (! Auth::isCashierWithinFreeLimit($user)) {
@@ -267,6 +291,7 @@ final class Router
 
         $r(['GET'], '#^/super-admin/settings$#', SettingsController::class.'::edit', 'super-admin.settings.edit', ['auth', 'role:super_admin']);
         $r(['POST'], '#^/super-admin/settings$#', SettingsController::class.'::update', 'super-admin.settings.update', ['auth', 'role:super_admin']);
+        $r(['POST'], '#^/super-admin/settings/run-storage-migrations$#', SettingsController::class.'::runStorageMigrations', 'super-admin.settings.run-storage-migrations', ['auth', 'role:super_admin']);
 
         $r(['GET'], '#^/super-admin/tenants$#', TenantController::class.'::index', 'super-admin.tenants.index', ['auth', 'role:super_admin']);
         $r(['POST'], '#^/super-admin/tenants$#', TenantController::class.'::store', 'super-admin.tenants.store', ['auth', 'role:super_admin']);
@@ -284,7 +309,7 @@ final class Router
         $r(['POST'], '#^/super-admin/tenants/(\d+)/backups/(\d+)/restore$#', TenantBackupController::class.'::restore', 'super-admin.tenants.backups.restore', ['auth', 'role:super_admin']);
         $r(['GET'], '#^/super-admin/backups/runner$#', TenantBackupController::class.'::runner', 'super-admin.backups.runner', ['auth', 'role:super_admin']);
         $r(['POST'], '#^/super-admin/backups/runner/force$#', TenantBackupController::class.'::runnerForce', 'super-admin.backups.runner.force', ['auth', 'role:super_admin']);
-        $r(['GET'], '#^/super-admin/backups/runner/check$#', TenantBackupController::class.'::runnerCheck', 'super-admin.backups.runner.check', ['auth', 'role:super_admin']);
+        $r(['POST'], '#^/super-admin/backups/runner/check$#', TenantBackupController::class.'::runnerCheck', 'super-admin.backups.runner.check', ['auth', 'role:super_admin']);
 
         $ta = ['auth', 'tenant.active', 'tenant.subscription', 'tenant.free.restricted', 'tenant.clock_in'];
         $tenantAdmin = ['auth', 'tenant.active', 'tenant.subscription', 'tenant.free.restricted', 'role:tenant_admin', 'tenant.clock_in'];
@@ -306,6 +331,7 @@ final class Router
         $r(['DELETE'], '#^/tenant/activity-logs$#', ActivityLogController::class.'::clear', 'tenant.activity-logs.clear', $tenantAdmin);
         $r(['GET'], '#^/tenant/staff$#', StaffController::class.'::index', 'tenant.staff.index', $tenantAdmin);
         $r(['POST'], '#^/tenant/staff$#', StaffController::class.'::store', 'tenant.staff.store', $tenantAdmin);
+        $r(['PATCH'], '#^/tenant/staff/settings$#', StaffController::class.'::updateBranchSettings', 'tenant.staff.update-settings', $tenantAdmin);
         $r(['PATCH'], '#^/tenant/staff/(\d+)/modules$#', StaffController::class.'::updateModules', 'tenant.staff.update-modules', $tenantAdmin);
         $r(['PATCH'], '#^/tenant/staff/(\d+)/day-rate$#', StaffController::class.'::updateDayRate', 'tenant.staff.update-day-rate', $tenantAdmin);
         $r(['DELETE'], '#^/tenant/staff/(\d+)$#', StaffController::class.'::destroy', 'tenant.staff.destroy', $tenantAdmin);
@@ -336,6 +362,8 @@ final class Router
         $r(['GET'], '#^/tenant/laundry-sales$#', LaundryController::class.'::salesIndex', 'tenant.laundry-sales.index', array_merge($ta, ['tenant.access:pos']));
         $r(['GET'], '#^/tenant/staff-portal$#', LaundryController::class.'::staffPortalIndex', 'tenant.staff-portal.index', ['auth', 'tenant.active', 'tenant.subscription', 'tenant.access:pos']);
         $r(['POST'], '#^/tenant/laundry-sales$#', LaundryController::class.'::salesStore', 'tenant.laundry-sales.store', array_merge($ta, ['tenant.access:pos']));
+        $r(['POST'], '#^/tenant/laundry-sales/bluetooth-printing$#', LaundryController::class.'::updateBluetoothPrintPreference', 'tenant.laundry-sales.bluetooth-printing', array_merge($ta, ['tenant.access:pos']));
+        $r(['POST'], '#^/tenant/laundry-sales/customers$#', LaundryController::class.'::customersStoreFromKiosk', 'tenant.laundry-sales.customers.store', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/laundry-sales/(\d+)/advance$#', LaundryController::class.'::advanceTransactionStatus', 'tenant.laundry-sales.advance', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/laundry-sales/(\d+)/complete$#', LaundryController::class.'::completeTransaction', 'tenant.laundry-sales.complete', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/laundry-sales/(\d+)/pay$#', LaundryController::class.'::payTransaction', 'tenant.laundry-sales.pay', array_merge($ta, ['tenant.access:pos']));
@@ -355,6 +383,7 @@ final class Router
         $r(['POST'], '#^/tenant/laundry-order-pricing/types/(\d+)/update$#', LaundryController::class.'::orderTypeUpdate', 'tenant.laundry-order-pricing.types.update', $tenantAdmin);
         $r(['POST'], '#^/tenant/laundry-order-pricing/types/(\d+)/delete$#', LaundryController::class.'::orderTypeDestroy', 'tenant.laundry-order-pricing.types.destroy', $tenantAdmin);
         $r(['GET'], '#^/tenant/customers$#', LaundryController::class.'::customersIndex', 'tenant.customers.index', array_merge($ta, ['tenant.access:transactions']));
+        $r(['GET'], '#^/tenant/customers/(\d+)/transactions$#', LaundryController::class.'::customersTransactions', 'tenant.customers.transactions', array_merge($ta, ['tenant.access:transactions']));
         $r(['POST'], '#^/tenant/customers$#', LaundryController::class.'::customersStore', 'tenant.customers.store', array_merge($ta, ['tenant.access:transactions']));
         $r(['PUT'], '#^/tenant/customers/(\d+)$#', LaundryController::class.'::customersUpdate', 'tenant.customers.update', array_merge($ta, ['tenant.access:transactions']));
         $r(['DELETE'], '#^/tenant/customers/(\d+)$#', LaundryController::class.'::customersDestroy', 'tenant.customers.destroy', array_merge($ta, ['tenant.access:transactions']));
@@ -362,9 +391,10 @@ final class Router
         $r(['GET'], '#^/tenant/redeem-rewards-config$#', LaundryController::class.'::redeemConfigIndex', 'tenant.redeem-config.index', $tenantAdmin);
         $r(['POST'], '#^/tenant/redeem-rewards-config$#', LaundryController::class.'::redeemConfigUpdate', 'tenant.redeem-config.update', $tenantAdmin);
         $r(['POST'], '#^/tenant/redeem-rewards-config/redeem$#', LaundryController::class.'::redeemGift', 'tenant.redeem-config.redeem', $tenantAdmin);
+        $attendanceAdmin = array_merge($tenantAdmin, ['tenant.attendance.available']);
         $r(['GET'], '#^/tenant/attendance$#', LaundryController::class.'::attendanceIndex', 'tenant.attendance.index', $tenantAdmin);
-        $r(['POST'], '#^/tenant/attendance/(\d+)$#', LaundryController::class.'::attendanceUpdate', 'tenant.attendance.update', $tenantAdmin);
-        $r(['POST'], '#^/tenant/attendance/(\d+)/approve-ot$#', LaundryController::class.'::attendanceApproveOt', 'tenant.attendance.approve-ot', $tenantAdmin);
+        $r(['POST'], '#^/tenant/attendance/(\d+)$#', LaundryController::class.'::attendanceUpdate', 'tenant.attendance.update', $attendanceAdmin);
+        $r(['POST'], '#^/tenant/attendance/(\d+)/approve-ot$#', LaundryController::class.'::attendanceApproveOt', 'tenant.attendance.approve-ot', $attendanceAdmin);
         $r(['GET'], '#^/tenant/payroll$#', LaundryController::class.'::payrollIndex', 'tenant.payroll.index', $tenantAdmin);
         $r(['POST'], '#^/tenant/payroll$#', LaundryController::class.'::payrollStore', 'tenant.payroll.store', $tenantAdmin);
 

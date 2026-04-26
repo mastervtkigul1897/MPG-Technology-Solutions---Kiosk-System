@@ -154,13 +154,13 @@
                             <option value="6">6 months</option>
                             <option value="12">12 months</option>
                         </select>
-                        <div class="form-text">Saving plan duration resets subscription start to today and recalculates expiry.</div>
+                        <div class="form-text">Selecting a duration recalculates subscription end date from today. Subscription start date remains unchanged.</div>
                     </div>
                     <div class="mt-3">
                         <label class="form-label" for="edit_license_expires_at">Subscription end date</label>
                         <input type="date" class="form-control" id="edit_license_expires_at" name="license_expires_at">
                         <input type="hidden" id="edit_original_license_expires_at" name="original_license_expires_at" value="">
-                        <div class="form-text">You can still manually override the end date here.</div>
+                        <div class="form-text">You can manually override the end date for both Free 7-day trial and Paid plans.</div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -289,15 +289,12 @@
         }
         e.preventDefault();
         const tenantName = form.getAttribute('data-tenant-name') || 'this store';
+        const requiredPhrase = `DELETE ${String(tenantName).trim().toUpperCase()}`;
+        const confirmationInput = form.querySelector('input[name="delete_confirmation"]');
         if (typeof Swal === 'undefined') {
-            const ok = await window.mpgConfirm(`Delete ${tenantName}?`, {
-                title: 'Delete store?',
-                text: 'This action cannot be undone.',
-                confirmButtonText: 'Yes, delete store',
-                cancelButtonText: 'Cancel',
-                confirmButtonColor: '#dc3545',
-            });
-            if (ok) {
+            const typed = window.prompt(`Type ${requiredPhrase} to permanently delete ${tenantName} and all associated data (including users).`);
+            if (String(typed || '').trim().toUpperCase() === requiredPhrase) {
+                if (confirmationInput) confirmationInput.value = requiredPhrase;
                 form.dataset.mpgConfirmBypass = '1';
                 if (typeof form.requestSubmit === 'function') form.requestSubmit();
                 else form.submit();
@@ -307,13 +304,24 @@
         const res = await Swal.fire({
             icon: 'warning',
             title: 'Delete store?',
-            text: `You are about to permanently delete ${tenantName}.`,
+            html: `You are about to permanently delete <strong>${tenantName}</strong>.<br>This removes all associated data, including users.`,
+            input: 'text',
+            inputLabel: `Type ${requiredPhrase} to confirm`,
+            inputPlaceholder: requiredPhrase,
             showCancelButton: true,
-            confirmButtonText: 'Yes, delete store',
+            confirmButtonText: 'Delete permanently',
             cancelButtonText: 'Cancel',
             confirmButtonColor: '#dc3545',
+            preConfirm: (value) => {
+                if (String(value || '').trim().toUpperCase() !== requiredPhrase) {
+                    Swal.showValidationMessage(`Type ${requiredPhrase} exactly to continue.`);
+                    return false;
+                }
+                return requiredPhrase;
+            },
         });
         if (res.isConfirmed) {
+            if (confirmationInput) confirmationInput.value = requiredPhrase;
             form.dataset.mpgConfirmBypass = '1';
             if (typeof form.requestSubmit === 'function') form.requestSubmit();
             else form.submit();

@@ -34,7 +34,9 @@ final class IngredientController
                 array_push($params, $like, $like, $like, $like);
             }
 
-            $total = (int) $pdo->query('SELECT COUNT(*) FROM ingredients WHERE tenant_id = '.$tenantId)->fetchColumn();
+            $stTotal = $pdo->prepare('SELECT COUNT(*) FROM ingredients WHERE tenant_id = ?');
+            $stTotal->execute([$tenantId]);
+            $total = (int) $stTotal->fetchColumn();
             $st = $pdo->prepare("SELECT COUNT(*) FROM ingredients WHERE $where");
             $st->execute($params);
             $filtered = (int) $st->fetchColumn();

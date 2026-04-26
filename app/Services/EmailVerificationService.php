@@ -66,6 +66,8 @@ final class EmailVerificationService
                  updated_at = NOW()
              WHERE LOWER(email) = LOWER(?)
                AND email_verification_token_hash = ?
+               AND email_verification_sent_at IS NOT NULL
+               AND email_verification_sent_at >= DATE_SUB(NOW(), INTERVAL 60 MINUTE)
              LIMIT 1'
         );
         $st->execute([$email, $hash]);

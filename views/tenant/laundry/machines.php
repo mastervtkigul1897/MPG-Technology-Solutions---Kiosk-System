@@ -2,6 +2,7 @@
 $freeMachineLimitWashers = isset($free_machine_limit_washers) ? (int) $free_machine_limit_washers : 0;
 $freeMachineLimitDryers = isset($free_machine_limit_dryers) ? (int) $free_machine_limit_dryers : 0;
 $freeMachineLimited = $freeMachineLimitWashers > 0 || $freeMachineLimitDryers > 0;
+$machineAssignmentEnabled = ! empty($machine_assignment_enabled);
 ?>
 <?php if ($freeMachineLimited): ?>
 <div class="alert alert-info mb-3 border-0 shadow-sm">
@@ -15,6 +16,30 @@ $freeMachineLimited = $freeMachineLimitWashers > 0 || $freeMachineLimitDryers > 
         <p class="small text-muted mb-0">Register washers and dryers separately. Same list is used on Daily Sales when selecting machines.</p>
     </div>
 </div>
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="small fw-semibold text-secondary text-uppercase mb-2">Feature Toggles</div>
+        <form method="POST" action="<?= e(route('tenant.machines.store')) ?>" class="d-flex flex-wrap gap-3 align-items-center">
+            <?= csrf_field() ?>
+            <input type="hidden" name="update_machine_assignment" value="1">
+            <input type="hidden" name="machine_assignment_enabled" value="0">
+            <div class="form-check mb-0">
+                <input
+                    class="form-check-input"
+                    type="checkbox"
+                    name="machine_assignment_enabled"
+                    id="machineAssignmentEnabled"
+                    value="1"
+                    <?= $machineAssignmentEnabled ? 'checked' : '' ?>
+                    onchange="this.form.submit()"
+                >
+                <label class="form-check-label" for="machineAssignmentEnabled">
+                    Enable machine assignment (auto by order type)
+                </label>
+            </div>
+        </form>
+    </div>
+</div>
 
 <div class="row g-3 align-items-stretch">
     <div class="col-lg-6">
@@ -24,11 +49,8 @@ $freeMachineLimited = $freeMachineLimitWashers > 0 || $freeMachineLimitDryers > 
                 <form method="POST" action="<?= e(route('tenant.machines.store')) ?>" class="row g-2 mb-3">
                     <?= csrf_field() ?>
                     <input type="hidden" name="machine_kind" value="washer">
-                    <div class="col-md-5">
-                        <label class="form-label mb-1">Machine code</label>
-                        <input class="form-control" name="machine_code" placeholder="W-01" required>
-                    </div>
-                    <div class="col-md-7">
+                    <input type="hidden" name="machine_code" value="">
+                    <div class="col-md-12">
                         <label class="form-label mb-1">Machine label</label>
                         <input class="form-control" name="machine_label" placeholder="Washer #1" required>
                     </div>
@@ -50,7 +72,6 @@ $freeMachineLimited = $freeMachineLimitWashers > 0 || $freeMachineLimitDryers > 
                     <table class="table table-sm table-striped mb-0">
                         <thead>
                         <tr>
-                            <th>Code</th>
                             <th>Label</th>
                             <th class="text-end">Credit</th>
                             <th>Status</th>
@@ -61,7 +82,6 @@ $freeMachineLimited = $freeMachineLimitWashers > 0 || $freeMachineLimitDryers > 
                         <?php foreach (($machines_washer ?? []) as $machine): ?>
                             <?php $isRunning = (string) ($machine['status'] ?? '') === 'running'; ?>
                             <tr>
-                                <td><?= e((string) ($machine['machine_code'] ?? '')) ?></td>
                                 <td>
                                     <?= e((string) ($machine['machine_label'] ?? '')) ?>
                                     <?php if ($freeMachineLimited): ?>
@@ -111,11 +131,8 @@ $freeMachineLimited = $freeMachineLimitWashers > 0 || $freeMachineLimitDryers > 
                 <form method="POST" action="<?= e(route('tenant.machines.store')) ?>" class="row g-2 mb-3">
                     <?= csrf_field() ?>
                     <input type="hidden" name="machine_kind" value="dryer">
-                    <div class="col-md-5">
-                        <label class="form-label mb-1">Machine code</label>
-                        <input class="form-control" name="machine_code" placeholder="D-01" required>
-                    </div>
-                    <div class="col-md-7">
+                    <input type="hidden" name="machine_code" value="">
+                    <div class="col-md-12">
                         <label class="form-label mb-1">Machine label</label>
                         <input class="form-control" name="machine_label" placeholder="Dryer #1" required>
                     </div>
@@ -137,7 +154,6 @@ $freeMachineLimited = $freeMachineLimitWashers > 0 || $freeMachineLimitDryers > 
                     <table class="table table-sm table-striped mb-0">
                         <thead>
                         <tr>
-                            <th>Code</th>
                             <th>Label</th>
                             <th class="text-end">Credit</th>
                             <th>Status</th>
@@ -148,7 +164,6 @@ $freeMachineLimited = $freeMachineLimitWashers > 0 || $freeMachineLimitDryers > 
                         <?php foreach (($machines_dryer ?? []) as $machine): ?>
                             <?php $isRunning = (string) ($machine['status'] ?? '') === 'running'; ?>
                             <tr>
-                                <td><?= e((string) ($machine['machine_code'] ?? '')) ?></td>
                                 <td>
                                     <?= e((string) ($machine['machine_label'] ?? '')) ?>
                                     <?php if ($freeMachineLimited): ?>
@@ -199,15 +214,12 @@ $freeMachineLimited = $freeMachineLimitWashers > 0 || $freeMachineLimitDryers > 
                 <?= csrf_field() ?>
                 <?= method_field('PUT') ?>
                 <input type="hidden" name="machine_kind" id="machineEditKind" value="washer">
+                <input type="hidden" name="machine_code" id="machineEditCode" value="">
                 <div class="modal-header">
                     <h6 class="modal-title" id="machineEditModalLabel">Edit machine</h6>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label mb-1" for="machineEditCode">Machine code</label>
-                        <input class="form-control" id="machineEditCode" name="machine_code" required>
-                    </div>
                     <div>
                         <label class="form-label mb-1" for="machineEditLabel">Machine label</label>
                         <input class="form-control" id="machineEditLabel" name="machine_label" required>

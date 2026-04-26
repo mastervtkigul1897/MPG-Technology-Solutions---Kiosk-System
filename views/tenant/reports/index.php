@@ -56,7 +56,7 @@ $premiumBadge = '<span class="badge text-bg-warning text-dark ms-2">Premium</spa
     </button>
 </div>
 
-<div class="reports-print-scope">
+<div class="reports-print-scope" style="overflow-x: hidden;">
 <p class="d-none d-print-block small text-muted mb-2"><strong>Report period:</strong> <?= e($rangeFrom) ?> → <?= e($rangeTo) ?> (<?= e($presetOptions[$chartPreset] ?? $chartPreset) ?>)</p>
 <div class="card mb-3 d-print-none">
     <div class="card-body">
@@ -122,7 +122,13 @@ $discounts = (float) ($stats['discounts_total'] ?? 0);
 $foldServiceAmount = (float) ($stats['fold_service_amount'] ?? 0);
 $showFoldAmount = $foldServiceAmount > 0;
 $foldAmount = (float) ($stats['fold_amount_total'] ?? 0);
-$foldTarget = (string) ($stats['fold_commission_target'] ?? 'staff');
+$foldTarget = (string) ($stats['fold_commission_target'] ?? 'branch');
+$orderTypeTotals = (array) ($stats['order_type_totals'] ?? []);
+$inclusionItemsOut = (float) ($stats['inclusion_items_out_total'] ?? 0);
+$addonItemsOut = (float) ($stats['addon_items_out_total'] ?? 0);
+$totalItemsOut = (float) ($stats['total_items_out_total'] ?? ($inclusionItemsOut + $addonItemsOut));
+$inventoryLedgerRows = (array) ($stats['inventory_ledger_rows'] ?? []);
+$machineCreditLedgerRows = (array) ($stats['machine_credit_ledger_rows'] ?? []);
 $expenses = (float) ($stats['expenses_total'] ?? 0);
 $netSales = (float) ($stats['net_sales'] ?? 0);
 $grossProfit = (float) ($stats['gross_profit'] ?? ($netSales - $expenses));
@@ -192,33 +198,6 @@ $serviceModeSummary = (array) ($stats['service_mode_summary'] ?? []);
         </div>
     </div>
 </div>
-<div class="row g-3 mb-3">
-    <div class="col-lg-12">
-        <div class="card h-100">
-            <div class="card-body">
-                <h6 class="card-title">Items out by service mode<?= $isTodayOnly ? ' (today)' : ' (selected range)' ?></h6>
-                <div class="table-responsive">
-                    <table class="table table-sm align-middle mb-0">
-                        <thead>
-                        <tr>
-                            <th>Service mode</th>
-                            <th class="text-end">Count</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <?php foreach ($serviceModeSummary as $mode): ?>
-                            <tr>
-                                <td><?= e((string) ($mode['label'] ?? '')) ?></td>
-                                <td class="text-end"><?= (int) ($mode['count'] ?? 0) ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
 <?php
 $pm = (array) ($stats['payments_by_method'] ?? []);
 $suffix = $isTodayOnly ? 'today' : '(selected range)';
@@ -246,7 +225,36 @@ $payCards = [
 
 <?php if (! $freeReportsLimited): ?>
     <div class="row g-3 mb-3">
-        <div class="col-lg-12">
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Order type totals<?= $isTodayOnly ? ' (today)' : ' (selected range)' ?></h6>
+                    <?php if ($orderTypeTotals === []): ?>
+                        <p class="small text-muted mb-0">No order type data for this period.</p>
+                    <?php else: ?>
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead>
+                                <tr>
+                                    <th>Order type</th>
+                                    <th class="text-end">Total ordered</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <?php foreach ($orderTypeTotals as $row): ?>
+                                    <tr>
+                                        <td><?= e((string) ($row['label'] ?? $row['code'] ?? 'Order type')) ?></td>
+                                        <td class="text-end"><?= e(format_stock((float) ($row['qty'] ?? 0))) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
             <div class="card h-100">
                 <div class="card-body">
                     <h6 class="card-title">Top customers (selected range)</h6>
@@ -271,10 +279,7 @@ $payCards = [
                 </div>
             </div>
         </div>
-    </div>
-
-    <div class="row g-3 mb-3">
-        <div class="col-lg-12">
+        <div class="col-lg-6">
             <div class="card h-100">
                 <div class="card-body">
                     <h6 class="card-title">Birthdays in selected range</h6>
@@ -455,45 +460,100 @@ $dailyNet = array_values((array) ($chart['profit'] ?? []));
 $nDaily = count($dailyDates);
 ?>
 <?php if (! $freeReportsLimited): ?>
-    <div class="card mb-3">
-        <div class="card-body">
-            <h6 class="card-title mb-2">Daily sales</h6>
-            <p class="small text-muted mb-3">One row per calendar day in the selected period (e.g. Last 30 days = 30 rows), oldest to newest.</p>
-            <div class="table-responsive">
-                <?php if ($nDaily < 1): ?>
-                    <p class="text-muted mb-0">No days in this range.</p>
-                <?php else: ?>
-                    <table class="table table-striped table-sm mb-0">
-                        <thead>
-                        <tr>
-                            <th scope="col">Date</th>
-                            <th scope="col" class="text-end">Sales</th>
-                            <th scope="col" class="text-end">Expenses</th>
-                            <th scope="col" class="text-end">Net</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <?php for ($i = 0; $i < $nDaily; $i++): ?>
-                            <?php
-                            $rowDate = (string) ($dailyDates[$i] ?? '');
-                            $rowSales = (float) ($dailySales[$i] ?? 0);
-                            $rowExp = (float) ($dailyExpenses[$i] ?? 0);
-                            $rowNet = (float) ($dailyNet[$i] ?? 0);
-                            $dateLabel = $rowDate !== '' && strtotime($rowDate) !== false
-                                ? date('D, M j, Y', strtotime($rowDate))
-                                : $rowDate;
-                            $netClass = $rowNet < 0 ? 'text-danger' : '';
-                            ?>
+    <div class="row g-3 mb-3">
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Inventory items out (Selected range)</h6>
+                    <p class="small text-muted mb-2"><?= e(date('M j, Y', strtotime($rangeFrom))) ?> to <?= e(date('M j, Y', strtotime($rangeTo))) ?></p>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                            <tbody>
                             <tr>
-                                <td><?= e($dateLabel) ?></td>
-                                <td class="text-end font-monospace"><?= e(format_money($rowSales)) ?></td>
-                                <td class="text-end font-monospace"><?= e(format_money($rowExp)) ?></td>
-                                <td class="text-end font-monospace <?= $netClass ?>"><?= e(format_money($rowNet)) ?></td>
+                                <th class="text-muted fw-normal">Inclusion items out</th>
+                                <td class="text-end fw-semibold"><?= e(format_stock($inclusionItemsOut)) ?></td>
                             </tr>
-                        <?php endfor; ?>
-                        </tbody>
-                    </table>
-                <?php endif; ?>
+                            <tr>
+                                <th class="text-muted fw-normal">Add-on items out</th>
+                                <td class="text-end fw-semibold"><?= e(format_stock($addonItemsOut)) ?></td>
+                            </tr>
+                            <tr>
+                                <th>Total items out</th>
+                                <td class="text-end fw-bold"><?= e(format_stock($totalItemsOut)) ?></td>
+                            </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="mb-1">Services sold</h6>
+                    <p class="small text-muted mb-3">Same <strong>Period</strong> as the selector above (change period there, then Apply or pick a preset to refresh this page).</p>
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0">
+                            <thead>
+                            <tr>
+                                <th>Service type</th>
+                                <th class="text-end" style="width: 100px;">Qty sold</th>
+                                <th class="text-end" style="width: 120px;">Amount (₱)</th>
+                            </tr>
+                            </thead>
+                            <tbody id="dailyOutsTbody">
+                            <tr><td colspan="3" class="text-muted text-center py-3">Loading…</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="small text-muted mt-2">Based on completed transactions for <strong><?= e($rangeFrom) ?></strong><?= $rangeFrom !== $rangeTo ? ' – <strong>'.e($rangeTo).'</strong>' : '' ?>.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="row g-3 mb-3">
+        <div class="col-12">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title mb-2">Daily sales</h6>
+                    <p class="small text-muted mb-3">One row per calendar day in the selected period (e.g. Last 30 days = 30 rows), oldest to newest.</p>
+                    <div class="table-responsive">
+                        <?php if ($nDaily < 1): ?>
+                            <p class="text-muted mb-0">No days in this range.</p>
+                        <?php else: ?>
+                            <table class="table table-striped table-sm mb-0">
+                                <thead>
+                                <tr>
+                                    <th scope="col">Date</th>
+                                    <th scope="col" class="text-end">Sales</th>
+                                    <th scope="col" class="text-end">Expenses</th>
+                                    <th scope="col" class="text-end">Net</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <?php for ($i = 0; $i < $nDaily; $i++): ?>
+                                    <?php
+                                    $rowDate = (string) ($dailyDates[$i] ?? '');
+                                    $rowSales = (float) ($dailySales[$i] ?? 0);
+                                    $rowExp = (float) ($dailyExpenses[$i] ?? 0);
+                                    $rowNet = (float) ($dailyNet[$i] ?? 0);
+                                    $dateLabel = $rowDate !== '' && strtotime($rowDate) !== false
+                                        ? date('D, M j, Y', strtotime($rowDate))
+                                        : $rowDate;
+                                    $netClass = $rowNet < 0 ? 'text-danger' : '';
+                                    ?>
+                                    <tr>
+                                        <td><?= e($dateLabel) ?></td>
+                                        <td class="text-end font-monospace"><?= e(format_money($rowSales)) ?></td>
+                                        <td class="text-end font-monospace"><?= e(format_money($rowExp)) ?></td>
+                                        <td class="text-end font-monospace <?= $netClass ?>"><?= e(format_money($rowNet)) ?></td>
+                                    </tr>
+                                <?php endfor; ?>
+                                </tbody>
+                            </table>
+                        <?php endif; ?>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -507,44 +567,176 @@ $nDaily = count($dailyDates);
 <?php endif; ?>
 
 <?php if (! $freeReportsLimited): ?>
-<div class="card mt-3">
-    <div class="card-body">
-        <h6 class="mb-1">Services sold</h6>
-        <p class="small text-muted mb-3">Same <strong>Period</strong> as the selector above (change period there, then Apply or pick a preset to refresh this page).</p>
-        <div class="table-responsive">
-            <table class="table table-sm mb-0">
-                <thead>
-                <tr>
-                    <th>Service type</th>
-                    <th class="text-end" style="width: 100px;">Qty sold</th>
-                    <th class="text-end" style="width: 120px;">Amount (₱)</th>
-                </tr>
-                </thead>
-                <tbody id="dailyOutsTbody">
-                <tr><td colspan="3" class="text-muted text-center py-3">Loading…</td></tr>
-                </tbody>
-            </table>
+<div class="row g-3 mt-1">
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="mb-1">Inventory items out</h6>
+                <p class="small text-muted mb-3">Transparency view of inventory consumed by paid orders for the same selected period.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                        <tr>
+                            <th>Item name</th>
+                            <th class="text-end" style="width: 120px;">Qty out</th>
+                            <th class="text-end" style="width: 140px;">Amount (₱)</th>
+                        </tr>
+                        </thead>
+                        <tbody id="inventoryOutsTbody">
+                        <tr><td colspan="3" class="text-muted text-center py-3">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
-        <div class="small text-muted mt-2">Based on completed transactions for <strong><?= e($rangeFrom) ?></strong><?= $rangeFrom !== $rangeTo ? ' – <strong>'.e($rangeTo).'</strong>' : '' ?>.</div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="mb-1">Items out by service mode<?= $isTodayOnly ? ' (today)' : ' (selected range)' ?></h6>
+                <p class="small text-muted mb-3">Uses the same selected period as Inventory items out and Services sold.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th>Service mode</th>
+                            <th class="text-end">Count</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($serviceModeSummary as $mode): ?>
+                            <tr>
+                                <td><?= e((string) ($mode['label'] ?? '')) ?></td>
+                                <td class="text-end"><?= (int) ($mode['count'] ?? 0) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
-<div class="card mt-3">
-    <div class="card-body">
-        <h6 class="mb-1">Inventory items out</h6>
-        <p class="small text-muted mb-3">Transparency view of inventory consumed by paid orders for the same selected period.</p>
-        <div class="table-responsive">
-            <table class="table table-sm mb-0">
-                <thead>
-                <tr>
-                    <th>Item name</th>
-                    <th class="text-end" style="width: 120px;">Qty out</th>
-                    <th class="text-end" style="width: 140px;">Amount (₱)</th>
-                </tr>
-                </thead>
-                <tbody id="inventoryOutsTbody">
-                <tr><td colspan="3" class="text-muted text-center py-3">Loading…</td></tr>
-                </tbody>
-            </table>
+<div class="row g-3 mt-1">
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="mb-1">Inclusion items out details</h6>
+                <p class="small text-muted mb-3">Per-item out count for inclusion consumptions.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                        <tr>
+                            <th>Item name</th>
+                            <th class="text-end" style="width: 120px;">Qty out</th>
+                        </tr>
+                        </thead>
+                        <tbody id="inventoryOutsInclusionTbody">
+                        <tr><td colspan="2" class="text-muted text-center py-3">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="mb-1">Add-on items out details</h6>
+                <p class="small text-muted mb-3">Per-item out count for paid add-ons.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                        <tr>
+                            <th>Item name</th>
+                            <th class="text-end" style="width: 120px;">Qty out</th>
+                        </tr>
+                        </thead>
+                        <tbody id="inventoryOutsAddonTbody">
+                        <tr><td colspan="2" class="text-muted text-center py-3">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="row g-3 mt-1">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="mb-1">Inventory stock ledger (Selected range)</h6>
+                <p class="small text-muted mb-3">Opening + In - Out = Closing per item for the selected date range.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th class="text-end">Opening</th>
+                            <th class="text-end">Stock In</th>
+                            <th class="text-end">Stock Out</th>
+                            <th class="text-end">Closing</th>
+                            <th class="text-end">Stocks left</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php if ($inventoryLedgerRows === []): ?>
+                            <tr><td colspan="6" class="text-muted text-center py-3">No inventory ledger rows for this period.</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($inventoryLedgerRows as $row): ?>
+                                <tr>
+                                    <td><?= e((string) ($row['item_name'] ?? 'Item')) ?></td>
+                                    <td class="text-end"><?= e(format_stock((float) ($row['opening'] ?? 0))) ?></td>
+                                    <td class="text-end text-success"><?= e(format_stock((float) ($row['stock_in'] ?? 0))) ?></td>
+                                    <td class="text-end text-danger"><?= e(format_stock((float) ($row['stock_out'] ?? 0))) ?></td>
+                                    <td class="text-end fw-semibold"><?= e(format_stock((float) ($row['closing'] ?? 0))) ?></td>
+                                    <td class="text-end fw-bold"><?= e(format_stock((float) ($row['closing'] ?? 0))) ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="mb-1">Machine credits ledger (Selected range)</h6>
+                <p class="small text-muted mb-3">Opening + Restock - Usage = Closing per machine for the selected date range.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th>Machine</th>
+                            <th class="text-end">Opening</th>
+                            <th class="text-end">Restock</th>
+                            <th class="text-end">Usage (Out)</th>
+                            <th class="text-end">Closing</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php if ($machineCreditLedgerRows === []): ?>
+                            <tr><td colspan="5" class="text-muted text-center py-3">No machine credit rows for this period.</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($machineCreditLedgerRows as $row): ?>
+                                <tr>
+                                    <td>
+                                        <?= e((string) ($row['machine_label'] ?? 'Machine')) ?>
+                                        <span class="small text-muted">(<?= e((string) ($row['machine_code'] ?? '')) ?>)</span>
+                                    </td>
+                                    <td class="text-end"><?= ! empty($row['credit_required']) ? e(format_stock((float) ($row['opening'] ?? 0))) : '—' ?></td>
+                                    <td class="text-end text-success"><?= ! empty($row['credit_required']) ? e(format_stock((float) ($row['restock'] ?? 0))) : '—' ?></td>
+                                    <td class="text-end text-danger"><?= ! empty($row['credit_required']) ? e(format_stock((float) ($row['usage'] ?? 0))) : '—' ?></td>
+                                    <td class="text-end fw-semibold"><?= ! empty($row['credit_required']) ? e(format_stock((float) ($row['closing'] ?? 0))) : '—' ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -556,6 +748,8 @@ $nDaily = count($dailyDates);
     const rangeTo = <?= json_encode($rangeTo) ?>;
     const tb = document.getElementById('dailyOutsTbody');
     const invTb = document.getElementById('inventoryOutsTbody');
+    const inclusionTb = document.getElementById('inventoryOutsInclusionTbody');
+    const addonTb = document.getElementById('inventoryOutsAddonTbody');
     const esc = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const fmtQty = (q) => {
         const n = Number(q);
@@ -575,6 +769,12 @@ $nDaily = count($dailyDates);
         if (invTb) {
             invTb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">Loading…</td></tr>';
         }
+        if (inclusionTb) {
+            inclusionTb.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">Loading…</td></tr>';
+        }
+        if (addonTb) {
+            addonTb.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">Loading…</td></tr>';
+        }
         try {
             const u = new URL(urlBase, window.location.origin);
             u.searchParams.set('from', rangeFrom);
@@ -586,17 +786,23 @@ $nDaily = count($dailyDates);
                 if (invTb) {
                     invTb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">Could not load inventory out data.</td></tr>';
                 }
+                if (inclusionTb) {
+                    inclusionTb.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">Could not load inclusion items.</td></tr>';
+                }
+                if (addonTb) {
+                    addonTb.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">Could not load add-on items.</td></tr>';
+                }
                 return;
             }
             const rows = Array.isArray(body.data) ? body.data : [];
             if (!rows.length) {
                 tb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">No sales for this period.</td></tr>';
-                return;
+            } else {
+                tb.innerHTML = rows.map((r) => {
+                    const amt = r.line_amount != null ? fmtMoney(r.line_amount) : fmtMoney(0);
+                    return `<tr><td>${esc(r.product_name)}</td><td class="text-end fw-semibold">${esc(fmtQty(r.qty))}</td><td class="text-end font-monospace">${esc(amt)}</td></tr>`;
+                }).join('');
             }
-            tb.innerHTML = rows.map((r) => {
-                const amt = r.line_amount != null ? fmtMoney(r.line_amount) : fmtMoney(0);
-                return `<tr><td>${esc(r.product_name)}</td><td class="text-end fw-semibold">${esc(fmtQty(r.qty))}</td><td class="text-end font-monospace">${esc(amt)}</td></tr>`;
-            }).join('');
 
             if (invTb) {
                 const invRows = Array.isArray(body.inventory_out) ? body.inventory_out : [];
@@ -609,10 +815,32 @@ $nDaily = count($dailyDates);
                     }).join('');
                 }
             }
+            if (inclusionTb) {
+                const rowsInc = Array.isArray(body.inventory_out_inclusion) ? body.inventory_out_inclusion : [];
+                if (!rowsInc.length) {
+                    inclusionTb.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">No inclusion out records for this period.</td></tr>';
+                } else {
+                    inclusionTb.innerHTML = rowsInc.map((r) => `<tr><td>${esc(r.item_name)}</td><td class="text-end fw-semibold">${esc(fmtQty(r.qty_out))}</td></tr>`).join('');
+                }
+            }
+            if (addonTb) {
+                const rowsAddon = Array.isArray(body.inventory_out_addon) ? body.inventory_out_addon : [];
+                if (!rowsAddon.length) {
+                    addonTb.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">No add-on out records for this period.</td></tr>';
+                } else {
+                    addonTb.innerHTML = rowsAddon.map((r) => `<tr><td>${esc(r.item_name)}</td><td class="text-end fw-semibold">${esc(fmtQty(r.qty_out))}</td></tr>`).join('');
+                }
+            }
         } catch {
             tb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">Could not load products sold.</td></tr>';
             if (invTb) {
                 invTb.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">Could not load inventory out data.</td></tr>';
+            }
+            if (inclusionTb) {
+                inclusionTb.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">Could not load inclusion items.</td></tr>';
+            }
+            if (addonTb) {
+                addonTb.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">Could not load add-on items.</td></tr>';
             }
         }
     };

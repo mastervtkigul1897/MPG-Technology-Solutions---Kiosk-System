@@ -3,7 +3,7 @@
     <div class="card-body">
         <h6 class="mb-1">Rewards mechanics and gift setup</h6>
         <p class="small text-muted mb-0">
-            Mechanics: each <strong>paid</strong> sale using an order type with <strong>Include to Reward System</strong> (Order Pricing) adds 1 toward the customer’s load when rewards are active. The number below is how many such loads are required before they can redeem the <strong>Reward service</strong> you choose. Voiding a paid sale removes its load if it had counted. Customer load is not edited on the profile; it follows paid sales, voids, and redemptions.
+            Mechanics: each <strong>paid</strong> sale using an order type with <strong>Eligible for Reward</strong> (Order Pricing) adds reward load based on the transaction <strong>number of loads</strong> when rewards are active. The number below is how many such loads are required before they can redeem the <strong>Reward service</strong> you choose. Voiding a paid sale removes its load if it had counted. Customer load is not edited on the profile; it follows paid sales, voids, and redemptions.
         </p>
     </div>
 </div>
@@ -40,12 +40,14 @@
                 <label class="form-label mb-1">Reward qty</label>
                 <input type="number" min="1" class="form-control" name="reward_quantity" value="<?= e((string) ($reward_config['reward_quantity'] ?? '1')) ?>" required>
             </div>
-            <div class="col-md-3">
-                <div class="form-check mb-2">
+            <div class="col-md-4">
+                <div class="d-flex flex-wrap align-items-center gap-3">
+                <div class="form-check mb-0">
                     <input type="checkbox" class="form-check-input" id="activateRewardSystem" name="is_active" value="1" <?= (int) ($reward_config['is_active'] ?? 1) === 1 ? 'checked' : '' ?>>
                     <label class="form-check-label" for="activateRewardSystem">Activate Reward System</label>
                 </div>
-                <button class="btn btn-primary w-100" type="submit">Save config</button>
+                <button class="btn btn-primary" type="submit">Save config</button>
+                </div>
             </div>
         </form>
     </div>

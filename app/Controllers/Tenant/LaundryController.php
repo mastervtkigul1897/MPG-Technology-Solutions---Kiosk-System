@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers\Tenant;
 
+use App\Core\ActivityLogger;
 use App\Core\App;
 use App\Core\Auth;
 use App\Core\LaundrySchema;
@@ -21,6 +22,8 @@ final class LaundryController
     private static ?bool $hasLaundryOrdersReferenceCode = null;
     private static ?bool $hasLaundryOrdersDiscountPercentage = null;
     private static ?bool $hasLaundryOrdersDiscountAmount = null;
+    private static ?bool $hasLaundryOrdersAmountTendered = null;
+    private static ?bool $hasLaundryOrdersChangeAmount = null;
     private const FREE_LIMIT_WASHERS = 3;
     private const FREE_LIMIT_DRYERS = 3;
 
@@ -75,6 +78,32 @@ final class LaundryController
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
         $laundryStatusTrackingEnabled = $this->isLaundryStatusTrackingEnabled($pdo, $tenantId);
+        $transactionsScope = strtolower(trim((string) $request->input('tx_scope', 'today')));
+        if (! in_array($transactionsScope, ['today', 'all'], true)) {
+            $transactionsScope = 'today';
+        }
+        $transactionsMode = strtolower(trim((string) $request->input('tx_mode', 'paged')));
+        if (! in_array($transactionsMode, ['paged', 'all'], true)) {
+            $transactionsMode = 'paged';
+        }
+        $transactionsPerPage = 25;
+        $transactionsPage = max(1, (int) $request->input('page', 1));
+        $statusView = strtolower(trim((string) $request->input('tx_status', '')));
+        if ($statusView === '') {
+            // Backward-compatible support for older tx_payment links.
+            $statusView = strtolower(trim((string) $request->input('tx_payment', 'all')));
+        }
+        if (! in_array($statusView, ['all', 'pending', 'washing_drying', 'paid', 'unpaid', 'void'], true)) {
+            $statusView = 'all';
+        }
+        $statusFilterSql = match ($statusView) {
+            'pending' => ' AND COALESCE(o.is_void, 0) = 0 AND o.status = "pending"',
+            'washing_drying' => ' AND COALESCE(o.is_void, 0) = 0 AND o.status IN ("washing_drying", "running")',
+            'paid' => ' AND COALESCE(o.is_void, 0) = 0 AND o.status <> "void" AND o.payment_status = "paid"',
+            'unpaid' => ' AND COALESCE(o.is_void, 0) = 0 AND o.status <> "void" AND o.payment_status <> "paid"',
+            'void' => ' AND (COALESCE(o.is_void, 0) = 1 OR o.status = "void")',
+            default => '',
+        };
 
         $customers = $pdo->prepare(
             'SELECT c.id, c.name, COALESCE(cp.points_balance, 0) AS rewards_balance
@@ -96,16 +125,20 @@ final class LaundryController
         $machinesSt->execute([$tenantId]);
         $machineRows = $this->filterFreeModeMachineRows($machinesSt->fetchAll(PDO::FETCH_ASSOC));
 
+        $showItemInSelect = $this->hasColumn($pdo, 'laundry_inventory_items', 'show_item_in')
+            ? 'COALESCE(show_item_in, "both") AS show_item_in'
+            : '"both" AS show_item_in';
         $invByCategory = $pdo->prepare(
-            'SELECT id, name, category, unit_cost, stock_quantity
+            'SELECT id, name, category, unit_cost, stock_quantity, '.$showItemInSelect.'
              FROM laundry_inventory_items
-             WHERE tenant_id = ? AND category IN ("detergent", "fabcon", "bleach") AND stock_quantity > 0
+             WHERE tenant_id = ? AND category IN ("detergent", "fabcon", "bleach", "other")
              ORDER BY category ASC, name ASC'
         );
         $invByCategory->execute([$tenantId]);
         $detergentItems = [];
         $fabconItems = [];
         $bleachItems = [];
+        $otherItems = [];
         foreach ($invByCategory->fetchAll(PDO::FETCH_ASSOC) as $inv) {
             $cat = (string) ($inv['category'] ?? '');
             if ($cat === 'detergent') {
@@ -114,61 +147,136 @@ final class LaundryController
                 $fabconItems[] = $inv;
             } elseif ($cat === 'bleach') {
                 $bleachItems[] = $inv;
+            } elseif ($cat === 'other') {
+                $otherItems[] = $inv;
             }
         }
 
-        $orders = $pdo->prepare(
-            'SELECT o.*, c.name AS customer_name,
-                    m.machine_label AS legacy_machine_label, m.machine_kind AS legacy_machine_kind,
-                    mw.machine_label AS washer_machine_label, mw.machine_kind AS washer_kind,
-                    md.machine_label AS dryer_machine_label, md.machine_kind AS dryer_kind,
-                    ot.label AS order_type_label, ot.service_kind AS order_type_service_kind
-             FROM laundry_orders o
-             LEFT JOIN laundry_customers c ON c.id = o.customer_id
-             LEFT JOIN laundry_machines m ON m.id = o.machine_id
-             LEFT JOIN laundry_machines mw ON mw.id = o.washer_machine_id
-             LEFT JOIN laundry_machines md ON md.id = o.dryer_machine_id
-             LEFT JOIN laundry_order_types ot ON ot.tenant_id = o.tenant_id AND ot.code = o.order_type
-             WHERE o.tenant_id = ?
-               AND (
-                   (
-                       COALESCE(o.is_void, 0) = 0
-                       AND o.status <> "void"
-                       AND (
-                           o.status IN ("pending", "washing_drying", "open_ticket", "running")
-                           OR (
-                               (o.status = "paid" OR o.status = "completed")
-                               AND DATE(o.created_at) = CURDATE()
+        $ordersRows = [];
+        $transactionsTotal = 0;
+        $transactionsTotalPages = 1;
+        if ($transactionsScope === 'all') {
+            $countSt = $pdo->prepare('SELECT COUNT(*) FROM laundry_orders o WHERE o.tenant_id = ?'.$statusFilterSql);
+            $countSt->execute([$tenantId]);
+            $transactionsTotal = max(0, (int) $countSt->fetchColumn());
+            if ($transactionsMode === 'all') {
+                $orders = $pdo->prepare(
+                    'SELECT o.*, c.name AS customer_name,
+                            m.machine_label AS legacy_machine_label, m.machine_kind AS legacy_machine_kind,
+                            mw.machine_label AS washer_machine_label, mw.machine_kind AS washer_kind,
+                            md.machine_label AS dryer_machine_label, md.machine_kind AS dryer_kind,
+                            ot.label AS order_type_label, ot.service_kind AS order_type_service_kind
+                     FROM laundry_orders o
+                     LEFT JOIN laundry_customers c ON c.id = o.customer_id
+                     LEFT JOIN laundry_machines m ON m.id = o.machine_id
+                     LEFT JOIN laundry_machines mw ON mw.id = o.washer_machine_id
+                     LEFT JOIN laundry_machines md ON md.id = o.dryer_machine_id
+                     LEFT JOIN laundry_order_types ot ON ot.tenant_id = o.tenant_id AND ot.code = o.order_type
+                     WHERE o.tenant_id = ?'.$statusFilterSql.'
+                     ORDER BY o.id DESC'
+                );
+                $orders->execute([$tenantId]);
+                $ordersRows = $orders->fetchAll(PDO::FETCH_ASSOC);
+                $transactionsTotalPages = 1;
+                $transactionsPage = 1;
+            } else {
+                $transactionsTotalPages = max(1, (int) ceil($transactionsTotal / $transactionsPerPage));
+                if ($transactionsPage > $transactionsTotalPages) {
+                    $transactionsPage = $transactionsTotalPages;
+                }
+                $offset = ($transactionsPage - 1) * $transactionsPerPage;
+                $orders = $pdo->prepare(
+                    'SELECT o.*, c.name AS customer_name,
+                            m.machine_label AS legacy_machine_label, m.machine_kind AS legacy_machine_kind,
+                            mw.machine_label AS washer_machine_label, mw.machine_kind AS washer_kind,
+                            md.machine_label AS dryer_machine_label, md.machine_kind AS dryer_kind,
+                            ot.label AS order_type_label, ot.service_kind AS order_type_service_kind
+                     FROM laundry_orders o
+                     LEFT JOIN laundry_customers c ON c.id = o.customer_id
+                     LEFT JOIN laundry_machines m ON m.id = o.machine_id
+                     LEFT JOIN laundry_machines mw ON mw.id = o.washer_machine_id
+                     LEFT JOIN laundry_machines md ON md.id = o.dryer_machine_id
+                     LEFT JOIN laundry_order_types ot ON ot.tenant_id = o.tenant_id AND ot.code = o.order_type
+                     WHERE o.tenant_id = ?'.$statusFilterSql.'
+                     ORDER BY o.id DESC
+                     LIMIT ? OFFSET ?'
+                );
+                $orders->bindValue(1, $tenantId, PDO::PARAM_INT);
+                $orders->bindValue(2, $transactionsPerPage, PDO::PARAM_INT);
+                $orders->bindValue(3, $offset, PDO::PARAM_INT);
+                $orders->execute();
+                $ordersRows = $orders->fetchAll(PDO::FETCH_ASSOC);
+            }
+        } else {
+            $orders = $pdo->prepare(
+                'SELECT o.*, c.name AS customer_name,
+                        m.machine_label AS legacy_machine_label, m.machine_kind AS legacy_machine_kind,
+                        mw.machine_label AS washer_machine_label, mw.machine_kind AS washer_kind,
+                        md.machine_label AS dryer_machine_label, md.machine_kind AS dryer_kind,
+                        ot.label AS order_type_label, ot.service_kind AS order_type_service_kind
+                 FROM laundry_orders o
+                 LEFT JOIN laundry_customers c ON c.id = o.customer_id
+                 LEFT JOIN laundry_machines m ON m.id = o.machine_id
+                 LEFT JOIN laundry_machines mw ON mw.id = o.washer_machine_id
+                 LEFT JOIN laundry_machines md ON md.id = o.dryer_machine_id
+                 LEFT JOIN laundry_order_types ot ON ot.tenant_id = o.tenant_id AND ot.code = o.order_type
+                 WHERE o.tenant_id = ?
+                   AND (
+                       (
+                           COALESCE(o.is_void, 0) = 0
+                           AND o.status <> "void"
+                           AND (
+                               o.status IN ("pending", "washing_drying", "open_ticket", "running")
+                               OR (o.status = "paid" AND DATE(o.created_at) = CURDATE())
                            )
                        )
+                       OR (COALESCE(o.is_void, 0) = 1 AND DATE(o.created_at) = CURDATE())
                    )
-                   OR (COALESCE(o.is_void, 0) = 1 AND DATE(o.created_at) = CURDATE())
-               )
-             ORDER BY o.id DESC
-             LIMIT 200'
-        );
-        $orders->execute([$tenantId]);
-        $ordersRows = $orders->fetchAll(PDO::FETCH_ASSOC);
-        $todayDate = date('Y-m-d');
-        $ordersRows = array_values(array_filter($ordersRows, static function (array $row) use ($todayDate): bool {
-            $status = (string) ($row['status'] ?? '');
-            $isVoid = ! empty($row['is_void']) || $status === 'void';
-            $isTerminal = $status === 'paid' || $status === 'completed';
-            if (! $isVoid && ! $isTerminal) {
-                return true;
-            }
+                 ORDER BY o.id DESC
+                 LIMIT 200'
+            );
+            $orders->execute([$tenantId]);
+            $ordersRows = $orders->fetchAll(PDO::FETCH_ASSOC);
+            $todayDate = date('Y-m-d');
+            $ordersRows = array_values(array_filter($ordersRows, static function (array $row) use ($todayDate, $statusView): bool {
+                $status = (string) ($row['status'] ?? '');
+                $isVoid = ! empty($row['is_void']) || $status === 'void';
+                $isPending = $status === 'pending';
+                $isWashingDrying = in_array($status, ['washing_drying', 'running'], true);
+                $isPaid = (string) ($row['payment_status'] ?? 'unpaid') === 'paid';
+                if ($statusView === 'pending' && ($isVoid || ! $isPending)) {
+                    return false;
+                }
+                if ($statusView === 'washing_drying' && ($isVoid || ! $isWashingDrying)) {
+                    return false;
+                }
+                if ($statusView === 'paid' && ($isVoid || ! $isPaid)) {
+                    return false;
+                }
+                if ($statusView === 'unpaid' && ($isVoid || $isPaid)) {
+                    return false;
+                }
+                if ($statusView === 'void' && ! $isVoid) {
+                    return false;
+                }
+                $isTerminal = $status === 'paid';
+                if (! $isVoid && ! $isTerminal) {
+                    return true;
+                }
 
-            $createdAt = trim((string) ($row['created_at'] ?? ''));
-            if ($createdAt === '') {
-                return false;
-            }
-            $createdTs = strtotime($createdAt);
-            if ($createdTs === false) {
-                return false;
-            }
+                $createdAt = trim((string) ($row['created_at'] ?? ''));
+                if ($createdAt === '') {
+                    return false;
+                }
+                $createdTs = strtotime($createdAt);
+                if ($createdTs === false) {
+                    return false;
+                }
 
-            return date('Y-m-d', $createdTs) === $todayDate;
-        }));
+                return date('Y-m-d', $createdTs) === $todayDate;
+            }));
+            $transactionsTotal = count($ordersRows);
+        }
 
         return view_page('Loads Status', 'tenant.laundry.sales', [
             'customers' => $customerRows,
@@ -176,11 +284,19 @@ final class LaundryController
             'detergent_items' => $detergentItems,
             'fabcon_items' => $fabconItems,
             'bleach_items' => $bleachItems,
+            'other_items' => $otherItems,
             'orders' => $ordersRows,
             'order_types' => $this->fetchActiveOrderTypes($pdo, $tenantId),
             'reward_config' => $this->fetchRewardConfigForRedemption($pdo, $tenantId),
             'machine_assignment_enabled' => $this->isMachineAssignmentEnabled($pdo, $tenantId),
             'laundry_status_tracking_enabled' => $laundryStatusTrackingEnabled,
+            'transactions_scope' => $transactionsScope,
+            'transactions_mode' => $transactionsMode,
+            'transactions_page' => $transactionsPage,
+            'transactions_per_page' => $transactionsPerPage,
+            'transactions_total' => $transactionsTotal,
+            'transactions_total_pages' => $transactionsTotalPages,
+            'transactions_status_filter' => $statusView,
         ]);
     }
 
@@ -214,16 +330,20 @@ final class LaundryController
         $machines = $this->filterFreeModeMachineRows($machinesSt->fetchAll(PDO::FETCH_ASSOC));
 
         $invSelectImage = $this->hasLaundryInventoryImagePath($pdo) ? ', image_path' : '';
+        $showItemInSelect = $this->hasColumn($pdo, 'laundry_inventory_items', 'show_item_in')
+            ? ', COALESCE(show_item_in, "both") AS show_item_in'
+            : ', "both" AS show_item_in';
         $invByCategory = $pdo->prepare(
-            'SELECT id, name, category, stock_quantity, low_stock_threshold'.$invSelectImage.'
+            'SELECT id, name, category, stock_quantity, low_stock_threshold, unit_cost'.$invSelectImage.$showItemInSelect.'
              FROM laundry_inventory_items
-             WHERE tenant_id = ? AND category IN ("detergent", "fabcon", "bleach") AND stock_quantity > 0
+             WHERE tenant_id = ? AND category IN ("detergent", "fabcon", "bleach", "other")
              ORDER BY category ASC, name ASC'
         );
         $invByCategory->execute([$tenantId]);
         $detergentItems = [];
         $fabconItems = [];
         $bleachItems = [];
+        $otherItems = [];
         foreach ($invByCategory->fetchAll(PDO::FETCH_ASSOC) as $inv) {
             $cat = (string) ($inv['category'] ?? '');
             if ($cat === 'detergent') {
@@ -232,6 +352,8 @@ final class LaundryController
                 $fabconItems[] = $inv;
             } elseif ($cat === 'bleach') {
                 $bleachItems[] = $inv;
+            } elseif ($cat === 'other') {
+                $otherItems[] = $inv;
             }
         }
 
@@ -258,9 +380,11 @@ final class LaundryController
             'detergent_items' => $detergentItems,
             'fabcon_items' => $fabconItems,
             'bleach_items' => $bleachItems,
+            'other_items' => $otherItems,
             'is_clocked_in' => $clockOpenSt->fetch(PDO::FETCH_ASSOC) !== false,
             'machine_assignment_enabled' => $this->isMachineAssignmentEnabled($pdo, $tenantId),
             'laundry_status_tracking_enabled' => $this->isLaundryStatusTrackingEnabled($pdo, $tenantId),
+            'enable_bluetooth_print' => $this->isBranchBluetoothPrintEnabled($pdo, $tenantId),
             'next_transaction_id' => $nextOrderId,
             'reference_preview' => $referencePreview,
             'free_customer_locked' => $freeCustomerLocked,
@@ -277,18 +401,49 @@ final class LaundryController
         $redirectRoute = $origin === 'staff_portal'
             ? 'tenant.staff-portal.index'
             : 'tenant.laundry-sales.index';
+        if ((string) $request->input('update_laundry_status_workflow', '') === '1') {
+            $enabled = $request->boolean('laundry_status_tracking_enabled');
+            $this->persistLaundryStatusTrackingConfig($pdo, $tenantId, $enabled);
+            session_flash('success', 'Laundry status workflow setting updated.');
+            return redirect(route('tenant.laundry-sales.index'));
+        }
+        $orderMode = strtolower(trim((string) $request->input('order_mode', 'drop_off')));
+        if (! in_array($orderMode, ['drop_off', 'self_service'], true)) {
+            $orderMode = 'drop_off';
+        }
+        $effectiveOrderLinePrice = static function (array $orderTypeDef): float {
+            $basePrice = max(0.0, (float) ($orderTypeDef['price_per_load'] ?? 0));
+            $foldServiceAmount = max(0.0, (float) ($orderTypeDef['fold_service_amount'] ?? $basePrice));
+            $code = strtolower(trim((string) ($orderTypeDef['code'] ?? '')));
+            if ($code === 'free_fold') {
+                return 0.0;
+            }
+            if ($code === 'fold_with_price') {
+                return $foldServiceAmount;
+            }
+            return $basePrice;
+        };
 
         $serviceMode = strtolower(trim((string) $request->input('service_mode', 'regular')));
         if (! in_array($serviceMode, ['regular', 'free', 'reward'], true)) {
             $serviceMode = 'regular';
         }
+        if ($orderMode === 'self_service') {
+            $serviceMode = 'regular';
+        }
         if ($request->boolean('reward_redemption')) {
             $serviceMode = 'reward';
+        }
+        if ($orderMode === 'self_service') {
+            $serviceMode = 'regular';
         }
         $customerSelection = strtolower(trim((string) $request->input('customer_selection', '')));
         $customerId = (int) $request->input('customer_id', 0);
         $isFreeCustomerLocked = Auth::isTenantFreePlanRestricted(Auth::user());
-        if ($isFreeCustomerLocked) {
+        if ($orderMode === 'self_service') {
+            $customerSelection = 'walk_in';
+            $customerId = 0;
+        } elseif ($isFreeCustomerLocked) {
             $customerSelection = 'walk_in';
             $customerId = 0;
         } elseif (! in_array($customerSelection, ['saved', 'walk_in'], true)) {
@@ -312,6 +467,19 @@ final class LaundryController
         if (! in_array($requestedPaymentMethod, ['cash', 'gcash', 'paymaya', 'online_banking', 'qr_payment', 'card', 'split_payment', 'pending'], true)) {
             $requestedPaymentMethod = '';
         }
+        $amountTendered = max(0.0, (float) $request->input('amount_tendered', 0));
+        $discountPercentage = (float) $request->input('discount_percentage', 0);
+        $discountPercentage = max(0.0, min(100.0, $discountPercentage));
+        $splitCashAmount = round(max(0.0, (float) $request->input('split_cash_amount', 0)), 4);
+        $splitOnlineAmount = round(max(0.0, (float) $request->input('split_online_amount', 0)), 4);
+        $splitOnlineMethod = strtolower(trim((string) $request->input('split_online_method', '')));
+        if (! in_array($splitOnlineMethod, ['gcash', 'paymaya', 'online_banking', 'qr_payment', 'card'], true)) {
+            $splitOnlineMethod = '';
+        }
+        $enableBluetoothPrint = $request->boolean('enable_bluetooth_print');
+        if (Auth::isTenantFreePlanRestricted(Auth::user())) {
+            $enableBluetoothPrint = false;
+        }
         // IMPORTANT: Always use branch config as source of truth.
         // Do not override status workflow mode from request input.
         $trackLaundryStatus = $this->isLaundryStatusTrackingEnabled($pdo, $tenantId);
@@ -332,27 +500,155 @@ final class LaundryController
         } else {
             $orderTypeCodeInput = trim((string) $request->input('order_type', ''));
         }
+        $selfServiceLines = [];
+        $dropOffLines = [];
+        if ($orderMode === 'self_service') {
+            $rawLines = trim((string) $request->input('self_service_lines', ''));
+            if ($rawLines === '') {
+                session_flash('errors', ['Tap at least one order type for Self Service.']);
+
+                return redirect(route($redirectRoute));
+            }
+            try {
+                $decoded = json_decode($rawLines, true, 512, JSON_THROW_ON_ERROR);
+            } catch (\Throwable) {
+                $decoded = null;
+            }
+            if (! is_array($decoded) || $decoded === []) {
+                session_flash('errors', ['Invalid Self Service order lines.']);
+
+                return redirect(route($redirectRoute));
+            }
+            foreach ($decoded as $entry) {
+                if (! is_array($entry)) {
+                    continue;
+                }
+                $code = trim((string) ($entry['code'] ?? ''));
+                $qty = max(0, (int) ($entry['quantity'] ?? 0));
+                if ($code === '' || $qty < 1) {
+                    continue;
+                }
+                $def = $this->fetchOrderTypeByCode($pdo, $tenantId, $code);
+                if ($def === null || ! (bool) ($def['is_active'] ?? true)) {
+                    continue;
+                }
+                if (! $this->isOrderTypeVisibleInMode($def, $orderMode)) {
+                    continue;
+                }
+                $selfServiceLines[] = [
+                    'code' => (string) ($def['code'] ?? $code),
+                    'label' => (string) ($def['label'] ?? $code),
+                    'service_kind' => (string) ($def['service_kind'] ?? 'full_service'),
+                    'quantity' => $qty,
+                    'price_per_load' => $effectiveOrderLinePrice($def),
+                ];
+            }
+            if ($selfServiceLines === []) {
+                session_flash('errors', ['Tap at least one valid order type for Self Service.']);
+
+                return redirect(route($redirectRoute));
+            }
+            $orderTypeCodeInput = (string) ($selfServiceLines[0]['code'] ?? '');
+        } else {
+            $rawLines = trim((string) $request->input('self_service_lines', ''));
+            if ($rawLines !== '') {
+                try {
+                    $decoded = json_decode($rawLines, true, 512, JSON_THROW_ON_ERROR);
+                } catch (\Throwable) {
+                    $decoded = null;
+                }
+                if (is_array($decoded)) {
+                    foreach ($decoded as $entry) {
+                        if (! is_array($entry)) {
+                            continue;
+                        }
+                        $code = trim((string) ($entry['code'] ?? ''));
+                        $qty = max(0, (int) ($entry['quantity'] ?? 0));
+                        if ($code === '' || $qty < 1) {
+                            continue;
+                        }
+                        $def = $this->fetchOrderTypeByCode($pdo, $tenantId, $code);
+                        if ($def === null || ! (bool) ($def['is_active'] ?? true)) {
+                            continue;
+                        }
+                        if (! $this->isOrderTypeVisibleInMode($def, $orderMode)) {
+                            continue;
+                        }
+                        $dropOffLines[] = [
+                            'code' => (string) ($def['code'] ?? $code),
+                            'label' => (string) ($def['label'] ?? $code),
+                            'service_kind' => (string) ($def['service_kind'] ?? 'full_service'),
+                            'quantity' => $qty,
+                            'price_per_load' => $effectiveOrderLinePrice($def),
+                            'show_addon_supplies' => (int) ($def['show_addon_supplies'] ?? 1) === 1,
+                            'detergent_qty' => $this->resolveOrderTypeSupplyQty($def, 'detergent_qty', (string) ($def['service_kind'] ?? 'full_service'), (string) ($def['supply_block'] ?? 'none')),
+                            'fabcon_qty' => $this->resolveOrderTypeSupplyQty($def, 'fabcon_qty', (string) ($def['service_kind'] ?? 'full_service'), (string) ($def['supply_block'] ?? 'none')),
+                            'bleach_qty' => $this->resolveOrderTypeSupplyQty($def, 'bleach_qty', (string) ($def['service_kind'] ?? 'full_service'), (string) ($def['supply_block'] ?? 'none')),
+                        ];
+                    }
+                }
+            }
+        }
         $otDef = $this->fetchOrderTypeByCode($pdo, $tenantId, $orderTypeCodeInput);
         if ($otDef === null || ! (bool) ($otDef['is_active'] ?? true)) {
             session_flash('errors', ['Invalid or inactive order type.']);
 
             return redirect(route($redirectRoute));
         }
+        if (! $this->isOrderTypeVisibleInMode($otDef, $orderMode)) {
+            session_flash('errors', ['Selected order type is not available for this order mode.']);
+            return redirect(route($redirectRoute));
+        }
         $serviceKind = (string) ($otDef['service_kind'] ?? 'full_service');
-        if (! in_array($serviceKind, ['full_service', 'wash_only', 'dry_only', 'rinse_only', 'dry_cleaning', 'other'], true)) {
+        if (! in_array($serviceKind, ['full_service', 'wash_only', 'dry_only', 'rinse_only', 'dry_cleaning', 'fold_only', 'other'], true)) {
             session_flash('errors', ['Order type has an invalid service configuration.']);
 
             return redirect(route($redirectRoute));
         }
         $supplyBlock = (string) ($otDef['supply_block'] ?? 'none');
-        $blockFullWashSupplies = in_array($supplyBlock, ['full_service', 'wash_supplies'], true);
-        $blockRinseSupplies = ($supplyBlock === 'rinse_supplies');
-        $usesCoreSupplies = $blockFullWashSupplies || $blockRinseSupplies;
+        $includedDetergentQty = $this->resolveOrderTypeSupplyQty($otDef, 'detergent_qty', $serviceKind, $supplyBlock);
+        $includedFabconQty = $this->resolveOrderTypeSupplyQty($otDef, 'fabcon_qty', $serviceKind, $supplyBlock);
+        $includedBleachQty = $this->resolveOrderTypeSupplyQty($otDef, 'bleach_qty', $serviceKind, $supplyBlock);
+        $usesCoreSupplies = $includedDetergentQty > 0 || $includedFabconQty > 0 || $includedBleachQty > 0;
         $showAddonSupplies = (bool) ($otDef['show_addon_supplies'] ?? true);
+        if ($orderMode === 'drop_off' && $dropOffLines !== []) {
+            $includedDetergentQty = 0.0;
+            $includedFabconQty = 0.0;
+            $includedBleachQty = 0.0;
+            $showAddonSupplies = false;
+            foreach ($dropOffLines as $line) {
+                $lineQty = max(0, (int) ($line['quantity'] ?? 0));
+                if ($lineQty < 1) {
+                    continue;
+                }
+                $includedDetergentQty += max(0.0, (float) ($line['detergent_qty'] ?? 0)) * $lineQty;
+                $includedFabconQty += max(0.0, (float) ($line['fabcon_qty'] ?? 0)) * $lineQty;
+                $includedBleachQty += max(0.0, (float) ($line['bleach_qty'] ?? 0)) * $lineQty;
+                if (! empty($line['show_addon_supplies'])) {
+                    $showAddonSupplies = true;
+                }
+            }
+            $usesCoreSupplies = $includedDetergentQty > 0 || $includedFabconQty > 0 || $includedBleachQty > 0;
+        }
+        if ($orderMode === 'self_service') {
+            $supplyBlock = 'none';
+            $includedDetergentQty = 0.0;
+            $includedFabconQty = 0.0;
+            $includedBleachQty = 0.0;
+            $usesCoreSupplies = false;
+            $showAddonSupplies = true;
+        }
 
         $orderTypeCode = (string) ($otDef['code'] ?? $orderTypeCodeInput);
-        $pricePerLoad = max(0.0, (float) ($otDef['price_per_load'] ?? 0));
+        $pricePerLoad = $effectiveOrderLinePrice($otDef);
         $requiredWeight = ! empty($otDef['required_weight']) || $serviceKind === 'dry_cleaning';
+        $maxWeightKgPerLoad = max(0.0, (float) ($otDef['max_weight_kg'] ?? 0));
+        $excessWeightFeePerKg = max(0.0, (float) ($otDef['excess_weight_fee_per_kg'] ?? 0));
+        if ($orderMode === 'self_service') {
+            $requiredWeight = false;
+            $maxWeightKgPerLoad = 0.0;
+            $excessWeightFeePerKg = 0.0;
+        }
         $serviceWeight = null;
         if ($requiredWeight && $origin === 'staff_portal') {
             $serviceWeight = round((float) $request->input('service_weight', 0), 3);
@@ -364,6 +660,30 @@ final class LaundryController
         }
 
         $numberOfLoads = max(1, min(100, (int) $request->input('number_of_loads', 1)));
+        if ($orderMode === 'self_service') {
+            $numberOfLoads = max(1, array_sum(array_map(static fn (array $line): int => (int) ($line['quantity'] ?? 0), $selfServiceLines)));
+        } elseif ($dropOffLines !== []) {
+            $numberOfLoads = max(1, array_sum(array_map(static fn (array $line): int => (int) ($line['quantity'] ?? 0), $dropOffLines)));
+        }
+        $dropOffDistinctOrderTypes = 0;
+        if ($orderMode === 'drop_off' && $dropOffLines !== []) {
+            foreach ($dropOffLines as $line) {
+                if (max(0, (int) ($line['quantity'] ?? 0)) > 0) {
+                    $dropOffDistinctOrderTypes++;
+                }
+            }
+        }
+        if ($orderMode === 'drop_off' && $dropOffDistinctOrderTypes > 1) {
+            // Mixed Drop Off order types: actual weight limit does not apply.
+            $maxWeightKgPerLoad = 0.0;
+            $excessWeightFeePerKg = 0.0;
+        }
+        $actualWeightKg = round(max(0.0, (float) $request->input('actual_weight_kg', 0)), 3);
+        if ($maxWeightKgPerLoad > 0 && ! ($serviceMode === 'free' || $serviceMode === 'reward') && $actualWeightKg <= 0) {
+            session_flash('errors', ['Actual weight is required when a maximum weight limit is configured for this service.']);
+
+            return redirect(route($redirectRoute));
+        }
         $washQtyInput = $numberOfLoads;
         $dryQtyInput = $numberOfLoads;
         if ($serviceMode === 'reward') {
@@ -371,8 +691,46 @@ final class LaundryController
             $washQtyInput = $rewardQty;
             $dryQtyInput = $rewardQty;
         }
-        $washQty = ($serviceKind === 'dry_only' || $serviceKind === 'dry_cleaning') ? 0 : $washQtyInput;
-        $dryQty = ($serviceKind === 'wash_only' || $serviceKind === 'rinse_only' || $serviceKind === 'dry_cleaning') ? 0 : $dryQtyInput;
+        $washQty = in_array($serviceKind, ['dry_only', 'dry_cleaning', 'fold_only'], true) ? 0 : $washQtyInput;
+        $dryQty = in_array($serviceKind, ['wash_only', 'rinse_only', 'dry_cleaning', 'fold_only'], true) ? 0 : $dryQtyInput;
+        if ($orderMode === 'self_service') {
+            $washQty = 0;
+            $dryQty = 0;
+            foreach ($selfServiceLines as $line) {
+                $lineKind = (string) ($line['service_kind'] ?? 'full_service');
+                $lineQty = max(0, (int) ($line['quantity'] ?? 0));
+                if ($lineQty < 1) {
+                    continue;
+                }
+                if (! in_array($lineKind, ['dry_only', 'dry_cleaning', 'fold_only'], true)) {
+                    $washQty += $lineQty;
+                }
+                if (! in_array($lineKind, ['wash_only', 'rinse_only', 'dry_cleaning', 'fold_only'], true)) {
+                    $dryQty += $lineQty;
+                }
+            }
+            $washQty = max(1, $washQty);
+            $dryQty = max(0, $dryQty);
+            $actualWeightKg = 0.0;
+        } elseif ($dropOffLines !== []) {
+            $washQty = 0;
+            $dryQty = 0;
+            foreach ($dropOffLines as $line) {
+                $lineKind = (string) ($line['service_kind'] ?? 'full_service');
+                $lineQty = max(0, (int) ($line['quantity'] ?? 0));
+                if ($lineQty < 1) {
+                    continue;
+                }
+                if (! in_array($lineKind, ['dry_only', 'dry_cleaning', 'fold_only'], true)) {
+                    $washQty += $lineQty;
+                }
+                if (! in_array($lineKind, ['wash_only', 'rinse_only', 'dry_cleaning', 'fold_only'], true)) {
+                    $dryQty += $lineQty;
+                }
+            }
+            $washQty = max(1, $washQty);
+            $dryQty = max(0, $dryQty);
+        }
         $washerMachineId = 0;
         $dryerMachineId = 0;
         $useMachines = $this->isMachineAssignmentEnabled($pdo, $tenantId);
@@ -389,12 +747,17 @@ final class LaundryController
         $inclusionDetergentId = max(0, (int) $request->input('inclusion_detergent_item_id', 0));
         $inclusionFabconId = max(0, (int) $request->input('inclusion_fabcon_item_id', 0));
         $inclusionBleachId = max(0, (int) $request->input('inclusion_bleach_item_id', 0));
+        $manualInclusionDetQty = max(0.0, (float) $request->input('inclusion_detergent_qty', 0));
+        $manualInclusionFabQty = max(0.0, (float) $request->input('inclusion_fabcon_qty', 0));
+        $manualInclusionBleachQty = max(0.0, (float) $request->input('inclusion_bleach_qty', 0));
         $addonDetergentId = max(0, (int) $request->input('addon_detergent_item_id', 0));
         $addonFabconId = max(0, (int) $request->input('addon_fabcon_item_id', 0));
         $addonBleachId = max(0, (int) $request->input('addon_bleach_item_id', 0));
+        $addonOtherId = max(0, (int) $request->input('addon_other_item_id', 0));
         $extraDetergentQty = max(0.0, (float) $request->input('detergent_qty', 0));
         $extraFabconQty = max(0.0, (float) $request->input('fabcon_qty', 0));
         $extraBleachQty = max(0.0, (float) $request->input('bleach_qty', 0));
+        $extraOtherQty = max(0.0, (float) $request->input('other_qty', 0));
 
         if (! $showAddonSupplies) {
             $extraDetergentQty = 0.0;
@@ -403,22 +766,44 @@ final class LaundryController
             $addonDetergentId = 0;
             $addonFabconId = 0;
             $addonBleachId = 0;
+            $addonOtherId = 0;
+            $extraOtherQty = 0.0;
         }
         if (! $usesCoreSupplies) {
             $inclusionDetergentId = 0;
             $inclusionFabconId = 0;
             $inclusionBleachId = 0;
         }
-        if ($blockRinseSupplies) {
+        if ($includedDetergentQty <= 0) {
             $inclusionDetergentId = 0;
+        }
+        if ($includedFabconQty <= 0) {
+            $inclusionFabconId = 0;
+        }
+        if ($includedBleachQty <= 0) {
             $inclusionBleachId = 0;
         }
-
-        if ($blockFullWashSupplies) {
-            if ($inclusionDetergentId < 1 || $inclusionFabconId < 1) {
-                session_flash('errors', ['Select detergent and fabric conditioner for service stock use (included consumption).']);
-
-                return redirect(route($redirectRoute));
+        if ($includedDetergentQty > 0 && $inclusionDetergentId < 1) {
+            session_flash('errors', ['Select detergent for service stock use (included consumption).']);
+            return redirect(route($redirectRoute));
+        }
+        if ($includedFabconQty > 0 && $inclusionFabconId < 1) {
+            session_flash('errors', ['Select fabcon for service stock use (included consumption).']);
+            return redirect(route($redirectRoute));
+        }
+        if ($includedBleachQty > 0 && $inclusionBleachId < 1) {
+            session_flash('errors', ['Select bleach for service stock use (included consumption).']);
+            return redirect(route($redirectRoute));
+        }
+        if ($orderMode === 'drop_off') {
+            if ($inclusionDetergentId > 0 && $manualInclusionDetQty > 0) {
+                $includedDetergentQty = $manualInclusionDetQty;
+            }
+            if ($inclusionFabconId > 0 && $manualInclusionFabQty > 0) {
+                $includedFabconQty = $manualInclusionFabQty;
+            }
+            if ($inclusionBleachId > 0 && $manualInclusionBleachQty > 0) {
+                $includedBleachQty = $manualInclusionBleachQty;
             }
         }
 
@@ -427,40 +812,64 @@ final class LaundryController
         $dryerIdDb = null;
         $machineIdLegacy = null;
 
-        $includeFoldService = $request->boolean('include_fold_service');
+        $selfServiceFoldQty = max(0, (int) $request->input('fold_service_qty', 0));
+        $includeFoldService = $orderMode === 'self_service'
+            ? ($selfServiceFoldQty > 0)
+            : $request->boolean('include_fold_service');
+        if ($serviceKind === 'fold_only') {
+            // Fold-only orders always count as folding service for commission routing.
+            $includeFoldService = true;
+        }
 
         $basePrice = ($requiredWeight && $serviceWeight !== null)
             ? ($pricePerLoad * (float) $serviceWeight)
             : $this->computeBasePriceFromKind($serviceKind, $pricePerLoad, $washQty, $dryQty);
-
-        $incDetItem = $blockFullWashSupplies ? $this->getInventoryItemByCategory($pdo, $tenantId, $inclusionDetergentId, 'detergent') : null;
-        $incFabItem = null;
-        if ($blockFullWashSupplies) {
-            $incFabItem = $this->getInventoryItemByCategory($pdo, $tenantId, $inclusionFabconId, 'fabcon');
-        } elseif ($blockRinseSupplies && $inclusionFabconId > 0) {
-            $incFabItem = $this->getInventoryItemByCategory($pdo, $tenantId, $inclusionFabconId, 'fabcon');
+        if ($orderMode === 'self_service') {
+            $basePrice = 0.0;
+            foreach ($selfServiceLines as $line) {
+                $basePrice += max(0, (int) ($line['quantity'] ?? 0)) * max(0.0, (float) ($line['price_per_load'] ?? 0));
+            }
+        } elseif ($dropOffLines !== []) {
+            $basePrice = 0.0;
+            foreach ($dropOffLines as $line) {
+                $basePrice += max(0, (int) ($line['quantity'] ?? 0)) * max(0.0, (float) ($line['price_per_load'] ?? 0));
+            }
         }
-        $incBleachItem = $blockFullWashSupplies && $inclusionBleachId > 0
+        $allowedWeightKg = $maxWeightKgPerLoad > 0 ? ($maxWeightKgPerLoad * $numberOfLoads) : 0.0;
+        $excessWeightKg = ($maxWeightKgPerLoad > 0 && $actualWeightKg > $allowedWeightKg)
+            ? round($actualWeightKg - $allowedWeightKg, 3)
+            : 0.0;
+        $excessWeightChargeUnits = $excessWeightKg > 0 ? (float) ceil($excessWeightKg) : 0.0;
+        $excessWeightFeeAmount = round($excessWeightChargeUnits * $excessWeightFeePerKg, 4);
+
+        $incDetItem = $includedDetergentQty > 0
+            ? $this->getInventoryItemByCategory($pdo, $tenantId, $inclusionDetergentId, 'detergent')
+            : null;
+        $incFabItem = $includedFabconQty > 0
+            ? $this->getInventoryItemByCategory($pdo, $tenantId, $inclusionFabconId, 'fabcon')
+            : null;
+        $incBleachItem = $includedBleachQty > 0
             ? $this->getInventoryItemByCategory($pdo, $tenantId, $inclusionBleachId, 'bleach')
             : null;
+        $incDetQty = ($includedDetergentQty > 0 && $incDetItem !== null) ? $includedDetergentQty : 0.0;
+        $incFabQty = ($includedFabconQty > 0 && $incFabItem !== null) ? $includedFabconQty : 0.0;
+        $incBleachQty = ($includedBleachQty > 0 && $incBleachItem !== null) ? $includedBleachQty : 0.0;
 
         $addonDetItem = $this->getInventoryItemByCategory($pdo, $tenantId, $addonDetergentId, 'detergent');
         $addonFabItem = $this->getInventoryItemByCategory($pdo, $tenantId, $addonFabconId, 'fabcon');
         $addonBleachItem = $this->getInventoryItemByCategory($pdo, $tenantId, $addonBleachId, 'bleach');
+        $addonOtherItem = $this->getInventoryItemByCategory($pdo, $tenantId, $addonOtherId, 'other');
 
-        if ($blockFullWashSupplies && ($incDetItem === null || $incFabItem === null)) {
-            session_flash('errors', ['Invalid product selection for detergent or fabric conditioner (service stock).']);
-
+        if ($includedDetergentQty > 0 && $incDetItem === null) {
+            session_flash('errors', ['Invalid product selection for detergent (service stock).']);
             return redirect(route($redirectRoute));
         }
-        if ($blockFullWashSupplies && $inclusionBleachId > 0 && $incBleachItem === null) {
+        if ($includedFabconQty > 0 && $incFabItem === null) {
+            session_flash('errors', ['Invalid product selection for fabcon (service stock).']);
+            return redirect(route($redirectRoute));
+        }
+        if ($includedBleachQty > 0 && $incBleachItem === null) {
             session_flash('errors', ['Invalid product selection for bleach (service stock).']);
-
-            return redirect(route($redirectRoute));
-        }
-        if ($blockRinseSupplies && $inclusionFabconId > 0 && $incFabItem === null) {
-            session_flash('errors', ['Invalid fabric conditioner selection for rinse service stock.']);
-
             return redirect(route($redirectRoute));
         }
 
@@ -474,6 +883,9 @@ final class LaundryController
         if ($addonBleachItem !== null && $extraBleachQty > 0) {
             $addOns[] = [$addonBleachItem['name'] ?? 'Bleach', $extraBleachQty, (float) ($addonBleachItem['unit_cost'] ?? 10.0)];
         }
+        if ($addonOtherItem !== null && $extraOtherQty > 0) {
+            $addOns[] = [$addonOtherItem['name'] ?? 'Other', $extraOtherQty, (float) ($addonOtherItem['unit_cost'] ?? 10.0)];
+        }
         $addOnTotal = 0.0;
         foreach ($addOns as $entry) {
             $addOnTotal += $entry[1] * $entry[2];
@@ -483,26 +895,40 @@ final class LaundryController
         if ($isFree || $isReward) {
             $basePrice = 0.0;
             $addOnTotal = 0.0;
+            $excessWeightKg = 0.0;
+            $excessWeightFeeAmount = 0.0;
             $addOns = [];
             $extraDetergentQty = 0.0;
             $extraFabconQty = 0.0;
             $extraBleachQty = 0.0;
+            $extraOtherQty = 0.0;
         }
-        $totalAmount = $basePrice + $addOnTotal;
+        $serviceSubtotal = $basePrice + $excessWeightFeeAmount;
+        $foldPricingOrderType = $this->fetchOrderTypeByCode($pdo, $tenantId, 'fold_with_price');
+        if (! is_array($foldPricingOrderType)) {
+            $foldPricingOrderType = $otDef;
+        }
+        $foldServiceRate = max(0.0, (float) ($foldPricingOrderType['fold_service_amount'] ?? ($foldPricingOrderType['price_per_load'] ?? 0)));
+        $foldQtyForBilling = $orderMode === 'self_service'
+            ? $selfServiceFoldQty
+            : ($includeFoldService ? max(1, $numberOfLoads) : 0);
+        if ($foldQtyForBilling > 0 && $foldServiceRate > 0) {
+            $addOns[] = ['Fold Service', (float) $foldQtyForBilling, $foldServiceRate];
+            $addOnTotal += ($foldQtyForBilling * $foldServiceRate);
+        }
+        $totalAmount = $serviceSubtotal + $addOnTotal;
+        $discountAmount = 0.0;
+        $totalAmountForPayment = $totalAmount;
 
         $deductionByItemId = [];
-        if ($blockFullWashSupplies) {
-            if ($incDetItem !== null) {
-                $deductionByItemId[(int) $incDetItem['id']] = ($deductionByItemId[(int) $incDetItem['id']] ?? 0.0) + 1.0;
-            }
-            if ($incFabItem !== null) {
-                $deductionByItemId[(int) $incFabItem['id']] = ($deductionByItemId[(int) $incFabItem['id']] ?? 0.0) + 1.0;
-            }
-            if ($incBleachItem !== null) {
-                $deductionByItemId[(int) $incBleachItem['id']] = ($deductionByItemId[(int) $incBleachItem['id']] ?? 0.0) + 1.0;
-            }
-        } elseif ($blockRinseSupplies && $incFabItem !== null) {
-            $deductionByItemId[(int) $incFabItem['id']] = ($deductionByItemId[(int) $incFabItem['id']] ?? 0.0) + 1.0;
+        if ($incDetItem !== null && $incDetQty > 0) {
+            $deductionByItemId[(int) $incDetItem['id']] = ($deductionByItemId[(int) $incDetItem['id']] ?? 0.0) + $incDetQty;
+        }
+        if ($incFabItem !== null && $incFabQty > 0) {
+            $deductionByItemId[(int) $incFabItem['id']] = ($deductionByItemId[(int) $incFabItem['id']] ?? 0.0) + $incFabQty;
+        }
+        if ($incBleachItem !== null && $incBleachQty > 0) {
+            $deductionByItemId[(int) $incBleachItem['id']] = ($deductionByItemId[(int) $incBleachItem['id']] ?? 0.0) + $incBleachQty;
         }
         if ($addonDetItem !== null && $extraDetergentQty > 0) {
             $deductionByItemId[(int) $addonDetItem['id']] = ($deductionByItemId[(int) $addonDetItem['id']] ?? 0.0) + $extraDetergentQty;
@@ -512,6 +938,9 @@ final class LaundryController
         }
         if ($addonBleachItem !== null && $extraBleachQty > 0) {
             $deductionByItemId[(int) $addonBleachItem['id']] = ($deductionByItemId[(int) $addonBleachItem['id']] ?? 0.0) + $extraBleachQty;
+        }
+        if ($addonOtherItem !== null && $extraOtherQty > 0) {
+            $deductionByItemId[(int) $addonOtherItem['id']] = ($deductionByItemId[(int) $addonOtherItem['id']] ?? 0.0) + $extraOtherQty;
         }
 
         if ($showAddonSupplies) {
@@ -530,9 +959,21 @@ final class LaundryController
 
                 return redirect(route($redirectRoute));
             }
+            if ($extraOtherQty > 0 && $addonOtherItem === null) {
+                session_flash('errors', ['Select an other add-on product for the extra quantity.']);
+
+                return redirect(route($redirectRoute));
+            }
         }
 
         $isPaidNowRequest = $paymentTiming === 'pay_now';
+        if (! $isPaidNowRequest || $isFree || $isReward) {
+            $discountPercentage = 0.0;
+        }
+        if (! $isFree && ! $isReward && $isPaidNowRequest) {
+            $discountAmount = round($totalAmount * ($discountPercentage / 100), 4);
+            $totalAmountForPayment = round(max(0.0, $totalAmount - $discountAmount), 4);
+        }
         $initialPaymentStatus = ($isFree || $isReward || $isPaidNowRequest) ? 'paid' : 'unpaid';
         $initialPaymentMethod = $isFree
             ? 'free'
@@ -541,12 +982,51 @@ final class LaundryController
                 : ($isPaidNowRequest
                     ? ($requestedPaymentMethod !== '' && $requestedPaymentMethod !== 'pending' ? $requestedPaymentMethod : 'cash')
                     : 'pending'));
+        if ($initialPaymentMethod === 'split_payment') {
+            if ($splitCashAmount <= 0 && $splitOnlineAmount <= 0) {
+                session_flash('errors', ['Enter split payment amounts.']);
+
+                return redirect(route($redirectRoute));
+            }
+            if ($splitOnlineAmount > 0 && $splitOnlineMethod === '') {
+                session_flash('errors', ['Select an online payment method for split payment.']);
+
+                return redirect(route($redirectRoute));
+            }
+            $splitTotal = round($splitCashAmount + $splitOnlineAmount, 4);
+            if (abs($splitTotal - $totalAmountForPayment) > 0.01) {
+                session_flash('errors', ['Split payment total must match the service total.']);
+
+                return redirect(route($redirectRoute));
+            }
+        } elseif (! $isFree && ! $isReward && $isPaidNowRequest && $amountTendered + 1e-6 < $totalAmountForPayment) {
+            session_flash('errors', ['Amount paid must be at least the service total ('.number_format($totalAmountForPayment, 2, '.', '').').']);
+
+            return redirect(route($redirectRoute));
+        } else {
+            $splitCashAmount = 0.0;
+            $splitOnlineAmount = 0.0;
+            $splitOnlineMethod = '';
+        }
+        $recordedAmountTendered = null;
+        $recordedChangeAmount = null;
+        if (! $isFree && ! $isReward && $isPaidNowRequest) {
+            if ($initialPaymentMethod === 'split_payment') {
+                $amountTendered = round($splitCashAmount + $splitOnlineAmount, 4);
+            }
+            if ($amountTendered <= 0.0) {
+                // For initial Pay Now without explicit tendered input, store exact due as tendered.
+                $amountTendered = $totalAmountForPayment;
+            }
+            $recordedAmountTendered = round(max(0.0, $amountTendered), 4);
+            $recordedChangeAmount = round(max(0.0, $recordedAmountTendered - $totalAmountForPayment), 4);
+        }
         // Initial load status depends on workflow toggle:
         // - Workflow ON  -> regular flow starts at pending
         // - Workflow OFF -> direct payment-state flow (open_ticket/paid)
-        // Free/Reward remains completed.
+        // Free/Reward now maps directly to Paid (no Completed stage).
         if ($isFree || $isReward) {
-            $initialLaundryStatus = 'completed';
+            $initialLaundryStatus = 'paid';
         } elseif ($trackLaundryStatus) {
             $initialLaundryStatus = 'pending';
         } else {
@@ -571,8 +1051,8 @@ final class LaundryController
 
             $pdo->prepare(
                 'INSERT INTO laundry_orders
-                 (tenant_id, created_by_user_id, reference_code, machine_id, washer_machine_id, dryer_machine_id, customer_id, include_fold_service, inclusion_detergent_item_id, inclusion_fabcon_item_id, inclusion_bleach_item_id, order_type, machine_type, wash_qty, dry_minutes, service_weight, subtotal, add_on_total, total_amount, payment_method, payment_status, is_free, is_reward, reward_config_id, status, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+                 (tenant_id, created_by_user_id, reference_code, machine_id, washer_machine_id, dryer_machine_id, customer_id, include_fold_service, inclusion_detergent_item_id, inclusion_fabcon_item_id, inclusion_bleach_item_id, order_type, machine_type, wash_qty, dry_minutes, service_weight, actual_weight_kg, excess_weight_kg, excess_weight_fee_amount, subtotal, add_on_total, total_amount, payment_method, payment_status, split_cash_amount, split_online_amount, split_online_method, is_free, is_reward, reward_config_id, status, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
             )->execute([
                 $tenantId,
                 $userId > 0 ? $userId : null,
@@ -590,11 +1070,17 @@ final class LaundryController
                 $washQty,
                 $dryQty,
                 $serviceWeight,
-                $basePrice,
+                $actualWeightKg > 0 ? $actualWeightKg : null,
+                $excessWeightKg,
+                $excessWeightFeeAmount,
+                $serviceSubtotal,
                 $addOnTotal,
-                $totalAmount,
+                $totalAmountForPayment,
                 $initialPaymentMethod,
                 $initialPaymentStatus,
+                $splitCashAmount,
+                $splitOnlineAmount,
+                $splitOnlineMethod !== '' ? $splitOnlineMethod : null,
                 $isFree ? 1 : 0,
                 $isReward ? 1 : 0,
                 $isReward && $rewardConfig !== null ? (int) ($rewardConfig['id'] ?? 0) : null,
@@ -603,6 +1089,35 @@ final class LaundryController
 
             $orderId = (int) $pdo->lastInsertId();
             $savedOrderId = $orderId;
+            if ($orderId > 0) {
+                $setParts = [];
+                $setParams = [];
+                if ($this->hasLaundryOrdersDiscountPercentage($pdo)) {
+                    $setParts[] = 'discount_percentage = ?';
+                    $setParams[] = $discountPercentage;
+                }
+                if ($this->hasLaundryOrdersDiscountAmount($pdo)) {
+                    $setParts[] = 'discount_amount = ?';
+                    $setParams[] = $discountAmount;
+                }
+                if ($this->hasLaundryOrdersAmountTendered($pdo)) {
+                    $setParts[] = 'amount_tendered = ?';
+                    $setParams[] = $recordedAmountTendered;
+                }
+                if ($this->hasLaundryOrdersChangeAmount($pdo)) {
+                    $setParts[] = 'change_amount = ?';
+                    $setParams[] = $recordedChangeAmount;
+                }
+                if ($setParts !== []) {
+                    $setParams[] = $tenantId;
+                    $setParams[] = $orderId;
+                    $pdo->prepare(
+                        'UPDATE laundry_orders
+                         SET '.implode(', ', $setParts).', updated_at = NOW()
+                         WHERE tenant_id = ? AND id = ?'
+                    )->execute($setParams);
+                }
+            }
             $finalReferenceCode = $this->resolveUniqueOrderReference($pdo, $tenantId, $this->generateOrderReferenceCandidate($orderId));
             if ($finalReferenceCode !== $referenceCode) {
                 $pdo->prepare(
@@ -624,12 +1139,43 @@ final class LaundryController
                 }
                 $stAddon->execute([$tenantId, $orderId, $entry[0], $entry[1], $entry[2], $entry[1] * $entry[2]]);
             }
+            if (($orderMode === 'self_service' && $selfServiceLines !== []) || ($orderMode === 'drop_off' && $dropOffLines !== [])) {
+                $lineSource = $orderMode === 'self_service' ? $selfServiceLines : $dropOffLines;
+                $lineInsert = $pdo->prepare(
+                    'INSERT INTO laundry_order_lines (tenant_id, order_id, order_type_code, order_type_label, service_kind, quantity, unit_price, line_total, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+                );
+                foreach ($lineSource as $line) {
+                    $lineQty = max(0, (int) ($line['quantity'] ?? 0));
+                    $linePrice = max(0.0, (float) ($line['price_per_load'] ?? 0));
+                    if ($lineQty < 1) {
+                        continue;
+                    }
+                    $lineInsert->execute([
+                        $tenantId,
+                        $orderId,
+                        (string) ($line['code'] ?? ''),
+                        (string) ($line['label'] ?? ''),
+                        (string) ($line['service_kind'] ?? 'full_service'),
+                        $lineQty,
+                        $linePrice,
+                        $lineQty * $linePrice,
+                    ]);
+                }
+            }
 
             $this->deductInventoryByItemId($pdo, $tenantId, $deductionByItemId);
+            $this->recordOrderInventoryMovements($pdo, $tenantId, $orderId, $deductionByItemId, 'deduct', 'Order inventory deduction', $userId > 0 ? $userId : null);
             if ($isReward && $rewardConfig !== null) {
                 $this->redeemRewardForOrder($pdo, $tenantId, $customerId, $orderId, $rewardConfig, $userId);
             }
-
+            if (! $isFree && ! $isReward && $initialPaymentStatus === 'paid' && $customerId > 0) {
+                $this->applyRewardsCounter($pdo, $tenantId, $customerId, $otDef, $orderId, $userId, [
+                    'wash_qty' => $washQty,
+                    'dry_minutes' => $dryQty,
+                ]);
+            }
+            $this->persistBranchBluetoothPrintConfig($pdo, $tenantId, $enableBluetoothPrint);
             $pdo->commit();
         } catch (\RuntimeException $e) {
             if ($pdo->inTransaction()) {
@@ -706,7 +1252,7 @@ final class LaundryController
         );
         $rows->execute([$tenantId]);
         $items = $rows->fetchAll(PDO::FETCH_ASSOC);
-        return view_page('Inventory Management', 'tenant.laundry.inventory', [
+        return view_page('Inventory Stocks', 'tenant.laundry.inventory', [
             'items' => $items,
             'free_inventory_limit' => null,
         ]);
@@ -745,6 +1291,7 @@ final class LaundryController
         return view_page('Machines', 'tenant.laundry.machines', [
             'machines_washer' => $washers,
             'machines_dryer' => $dryers,
+            'machine_assignment_enabled' => $this->isMachineAssignmentEnabled($pdo, $tenantId),
             'free_machine_limit_washers' => $freeRestricted ? self::FREE_LIMIT_WASHERS : null,
             'free_machine_limit_dryers' => $freeRestricted ? self::FREE_LIMIT_DRYERS : null,
         ]);
@@ -758,7 +1305,11 @@ final class LaundryController
 
         $name = trim((string) $request->input('name'));
         $category = trim((string) $request->input('category', 'other'));
+        $showItemIn = strtolower(trim((string) $request->input('show_item_in', 'both')));
         $unit = trim((string) $request->input('unit', 'pcs'));
+        if (! in_array($showItemIn, ['inclusion', 'addon', 'both'], true)) {
+            $showItemIn = 'both';
+        }
         $initialQuantity = max(0.0, (float) $request->input('stock_quantity', 0));
         $threshold = max(0.0, (float) $request->input('low_stock_threshold', 0));
         $unitCost = max(0.0, (float) $request->input('unit_cost', 0));
@@ -788,16 +1339,16 @@ final class LaundryController
         }
         if ($hasImageColumn) {
             $pdo->prepare(
-                'INSERT INTO laundry_inventory_items (tenant_id, name, category, unit, low_stock_threshold, stock_quantity, unit_cost, image_path, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-                 ON DUPLICATE KEY UPDATE category = VALUES(category), low_stock_threshold = VALUES(low_stock_threshold), unit = VALUES(unit), unit_cost = VALUES(unit_cost), image_path = COALESCE(VALUES(image_path), image_path), updated_at = NOW()'
-            )->execute([$tenantId, $name, $category, $unit, $threshold, $initialQuantity, $unitCost, $imagePath !== '' ? $imagePath : null]);
+                'INSERT INTO laundry_inventory_items (tenant_id, name, category, show_item_in, unit, low_stock_threshold, stock_quantity, unit_cost, image_path, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE category = VALUES(category), show_item_in = VALUES(show_item_in), low_stock_threshold = VALUES(low_stock_threshold), unit = VALUES(unit), unit_cost = VALUES(unit_cost), image_path = COALESCE(VALUES(image_path), image_path), updated_at = NOW()'
+            )->execute([$tenantId, $name, $category, $showItemIn, $unit, $threshold, $initialQuantity, $unitCost, $imagePath !== '' ? $imagePath : null]);
         } else {
             $pdo->prepare(
-                'INSERT INTO laundry_inventory_items (tenant_id, name, category, unit, low_stock_threshold, stock_quantity, unit_cost, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-                 ON DUPLICATE KEY UPDATE category = VALUES(category), low_stock_threshold = VALUES(low_stock_threshold), unit = VALUES(unit), unit_cost = VALUES(unit_cost), updated_at = NOW()'
-            )->execute([$tenantId, $name, $category, $unit, $threshold, $initialQuantity, $unitCost]);
+                'INSERT INTO laundry_inventory_items (tenant_id, name, category, show_item_in, unit, low_stock_threshold, stock_quantity, unit_cost, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE category = VALUES(category), show_item_in = VALUES(show_item_in), low_stock_threshold = VALUES(low_stock_threshold), unit = VALUES(unit), unit_cost = VALUES(unit_cost), updated_at = NOW()'
+            )->execute([$tenantId, $name, $category, $showItemIn, $unit, $threshold, $initialQuantity, $unitCost]);
         }
 
         session_flash('success', 'Inventory item saved.');
@@ -814,7 +1365,11 @@ final class LaundryController
 
         $name = trim((string) $request->input('name'));
         $category = trim((string) $request->input('category', 'other'));
+        $showItemIn = strtolower(trim((string) $request->input('show_item_in', 'both')));
         $unit = trim((string) $request->input('unit', 'pcs'));
+        if (! in_array($showItemIn, ['inclusion', 'addon', 'both'], true)) {
+            $showItemIn = 'both';
+        }
         $threshold = max(0.0, (float) $request->input('low_stock_threshold', 0));
         $unitCost = max(0.0, (float) $request->input('unit_cost', 0));
         $allowedCategories = ['detergent', 'fabcon', 'machine_cleaner', 'bleach', 'other'];
@@ -851,15 +1406,15 @@ final class LaundryController
             }
             $pdo->prepare(
                 'UPDATE laundry_inventory_items
-                 SET name = ?, category = ?, unit = ?, low_stock_threshold = ?, unit_cost = ?, image_path = ?, updated_at = NOW()
+                 SET name = ?, category = ?, show_item_in = ?, unit = ?, low_stock_threshold = ?, unit_cost = ?, image_path = ?, updated_at = NOW()
                  WHERE tenant_id = ? AND id = ?'
-            )->execute([$name, $category, $unit, $threshold, $unitCost, $imagePath !== '' ? $imagePath : null, $tenantId, $itemId]);
+            )->execute([$name, $category, $showItemIn, $unit, $threshold, $unitCost, $imagePath !== '' ? $imagePath : null, $tenantId, $itemId]);
         } else {
             $pdo->prepare(
                 'UPDATE laundry_inventory_items
-                 SET name = ?, category = ?, unit = ?, low_stock_threshold = ?, unit_cost = ?, updated_at = NOW()
+                 SET name = ?, category = ?, show_item_in = ?, unit = ?, low_stock_threshold = ?, unit_cost = ?, updated_at = NOW()
                  WHERE tenant_id = ? AND id = ?'
-            )->execute([$name, $category, $unit, $threshold, $unitCost, $tenantId, $itemId]);
+            )->execute([$name, $category, $showItemIn, $unit, $threshold, $unitCost, $tenantId, $itemId]);
         }
 
         session_flash('success', 'Inventory item updated.');
@@ -872,6 +1427,8 @@ final class LaundryController
         $ctx = $this->baseContext();
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
+        $actor = Auth::user();
+        $actorId = (int) ($actor['id'] ?? 0);
         $itemId = max(0, (int) $id);
         if ($itemId < 1) {
             session_flash('errors', ['Invalid inventory item.']);
@@ -894,6 +1451,17 @@ final class LaundryController
 
             return redirect(route('tenant.laundry-inventory.index'));
         }
+        $itemSt = $pdo->prepare('SELECT id, name, category, is_system_item FROM laundry_inventory_items WHERE tenant_id = ? AND id = ? LIMIT 1');
+        $itemSt->execute([$tenantId, $itemId]);
+        $item = $itemSt->fetch(PDO::FETCH_ASSOC) ?: null;
+        if (! is_array($item)) {
+            session_flash('errors', ['Inventory item not found.']);
+            return redirect(route('tenant.laundry-inventory.index'));
+        }
+        if ((int) ($item['is_system_item'] ?? 0) === 1) {
+            session_flash('errors', ['This item is required by the system and cannot be deleted.']);
+            return redirect(route('tenant.laundry-inventory.index'));
+        }
 
         $pdo->beginTransaction();
         try {
@@ -910,6 +1478,20 @@ final class LaundryController
 
             return redirect(route('tenant.laundry-inventory.index'));
         }
+        ActivityLogger::log(
+            $tenantId,
+            $actorId,
+            (string) ($actor['role'] ?? 'tenant_admin'),
+            'laundry_inventory',
+            'destroy_item',
+            $request,
+            'Deleted inventory item.',
+            [
+                'item_id' => $itemId,
+                'item_name' => (string) ($item['name'] ?? ''),
+                'category' => (string) ($item['category'] ?? ''),
+            ]
+        );
 
         session_flash('success', 'Inventory item deleted.');
 
@@ -988,6 +1570,12 @@ final class LaundryController
         $ctx = $this->baseContext();
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
+        if ((string) $request->input('update_machine_assignment', '') === '1') {
+            $enabled = $request->boolean('machine_assignment_enabled');
+            $this->persistMachineAssignmentConfig($pdo, $tenantId, $enabled);
+            session_flash('success', 'Machine assignment setting updated.');
+            return redirect(route('tenant.machines.index'));
+        }
 
         $machineCode = trim((string) $request->input('machine_code'));
         $machineLabel = trim((string) $request->input('machine_label'));
@@ -998,10 +1586,17 @@ final class LaundryController
         if (! in_array($machineKind, ['washer', 'dryer'], true)) {
             $machineKind = 'washer';
         }
-        if ($machineCode === '' || $machineLabel === '') {
-            session_flash('errors', ['Machine code and machine label are required.']);
+        if ($machineLabel === '') {
+            session_flash('errors', ['Machine label is required.']);
 
             return redirect(route('tenant.machines.index'));
+        }
+        if ($this->hasDuplicateMachineLabel($pdo, $tenantId, $machineLabel)) {
+            session_flash('errors', ['Machine label already exists. Please use a different label.']);
+            return redirect(route('tenant.machines.index'));
+        }
+        if ($machineCode === '') {
+            $machineCode = $this->generateMachineCode($pdo, $tenantId, $machineKind);
         }
         if (Auth::isTenantFreePlanRestricted(Auth::user())) {
             $limit = $machineKind === 'dryer' ? self::FREE_LIMIT_DRYERS : self::FREE_LIMIT_WASHERS;
@@ -1019,6 +1614,24 @@ final class LaundryController
              VALUES (?, ?, ?, ?, ?, ?, ?, "available", NULL, NOW(), NOW())
              ON DUPLICATE KEY UPDATE machine_label = VALUES(machine_label), machine_kind = VALUES(machine_kind), machine_type = VALUES(machine_type), credit_required = VALUES(credit_required), credit_balance = VALUES(credit_balance), updated_at = NOW()'
         )->execute([$tenantId, $machineKind, $machineType, $creditRequired, $creditBalance, $machineCode, $machineLabel]);
+        $machineId = (int) $pdo->lastInsertId();
+        if ($machineId < 1) {
+            $stMachine = $pdo->prepare('SELECT id FROM laundry_machines WHERE tenant_id = ? AND machine_code = ? LIMIT 1');
+            $stMachine->execute([$tenantId, $machineCode]);
+            $machineId = (int) ($stMachine->fetchColumn() ?: 0);
+        }
+        if ($machineId > 0 && $creditRequired === 1 && $creditBalance > 0) {
+            $this->recordMachineCreditMovement(
+                $pdo,
+                $tenantId,
+                $machineId,
+                'restock',
+                $creditBalance,
+                null,
+                'Initial machine credit',
+                (int) (Auth::user()['id'] ?? 0)
+            );
+        }
 
         session_flash('success', 'Machine saved.');
 
@@ -1041,10 +1654,27 @@ final class LaundryController
         if (! in_array($machineKind, ['washer', 'dryer'], true)) {
             $machineKind = 'washer';
         }
-        if ($machineId < 1 || $machineCode === '' || $machineLabel === '') {
-            session_flash('errors', ['Machine code and machine label are required.']);
+        if ($machineId < 1 || $machineLabel === '') {
+            session_flash('errors', ['Machine label is required.']);
 
             return redirect(route('tenant.machines.index'));
+        }
+        $existingSt = $pdo->prepare('SELECT machine_code, credit_required, credit_balance FROM laundry_machines WHERE tenant_id = ? AND id = ? LIMIT 1');
+        $existingSt->execute([$tenantId, $machineId]);
+        $existingMachine = $existingSt->fetch(PDO::FETCH_ASSOC);
+        if (! is_array($existingMachine)) {
+            session_flash('errors', ['Machine not found.']);
+            return redirect(route('tenant.machines.index'));
+        }
+        if ($this->hasDuplicateMachineLabel($pdo, $tenantId, $machineLabel, $machineId)) {
+            session_flash('errors', ['Machine label already exists. Please use a different label.']);
+            return redirect(route('tenant.machines.index'));
+        }
+        if ($machineCode === '') {
+            $machineCode = (string) ($existingMachine['machine_code'] ?? '');
+        }
+        if ($machineCode === '') {
+            $machineCode = $this->generateMachineCode($pdo, $tenantId, $machineKind);
         }
 
         $pdo->prepare(
@@ -1052,10 +1682,71 @@ final class LaundryController
              SET machine_kind = ?, machine_type = ?, credit_required = ?, credit_balance = ?, machine_code = ?, machine_label = ?, updated_at = NOW()
              WHERE tenant_id = ? AND id = ?'
         )->execute([$machineKind, $machineType, $creditRequired, $creditBalance, $machineCode, $machineLabel, $tenantId, $machineId]);
+        $oldBalance = max(0.0, (float) ($existingMachine['credit_balance'] ?? 0));
+        $newBalance = max(0.0, (float) $creditBalance);
+        $delta = round($newBalance - $oldBalance, 4);
+        if ($delta > 0) {
+            $this->recordMachineCreditMovement(
+                $pdo,
+                $tenantId,
+                $machineId,
+                'restock',
+                $delta,
+                null,
+                'Manual credit restock',
+                (int) (Auth::user()['id'] ?? 0)
+            );
+        } elseif ($delta < 0) {
+            $this->recordMachineCreditMovement(
+                $pdo,
+                $tenantId,
+                $machineId,
+                'deduct',
+                abs($delta),
+                null,
+                'Manual credit adjustment',
+                (int) (Auth::user()['id'] ?? 0)
+            );
+        }
 
         session_flash('success', 'Machine updated.');
 
         return redirect(route('tenant.machines.index'));
+    }
+
+    private function hasDuplicateMachineLabel(PDO $pdo, int $tenantId, string $machineLabel, ?int $excludeId = null): bool
+    {
+        $normalized = trim($machineLabel);
+        if ($normalized === '') {
+            return false;
+        }
+        $sql = 'SELECT 1
+                FROM laundry_machines
+                WHERE tenant_id = ?
+                  AND LOWER(TRIM(machine_label)) = LOWER(TRIM(?))';
+        $params = [$tenantId, $normalized];
+        if ($excludeId !== null && $excludeId > 0) {
+            $sql .= ' AND id <> ?';
+            $params[] = $excludeId;
+        }
+        $sql .= ' LIMIT 1';
+        $st = $pdo->prepare($sql);
+        $st->execute($params);
+        return $st->fetchColumn() !== false;
+    }
+
+    private function generateMachineCode(PDO $pdo, int $tenantId, string $machineKind): string
+    {
+        $prefix = strtolower($machineKind) === 'dryer' ? 'D' : 'W';
+        for ($i = 1; $i <= 1000; $i++) {
+            $candidate = sprintf('%s-%02d', $prefix, $i);
+            $st = $pdo->prepare('SELECT 1 FROM laundry_machines WHERE tenant_id = ? AND machine_code = ? LIMIT 1');
+            $st->execute([$tenantId, $candidate]);
+            if ($st->fetchColumn() === false) {
+                return $candidate;
+            }
+        }
+        return sprintf('%s-%s', $prefix, strtoupper(substr(md5((string) microtime(true)), 0, 6)));
     }
 
     public function machineDestroy(Request $request, string $id): Response
@@ -1097,13 +1788,35 @@ final class LaundryController
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
         $st = $pdo->prepare(
-            'SELECT * FROM laundry_order_types WHERE tenant_id = ? ORDER BY sort_order ASC, id ASC'
+            'SELECT * FROM laundry_order_types WHERE tenant_id = ? ORDER BY id ASC'
         );
         $st->execute([$tenantId]);
+        $orderTypes = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $orderTypeTransactionCounts = [];
+        try {
+            $cntSt = $pdo->prepare(
+                'SELECT order_type AS code, COUNT(*) AS cnt
+                 FROM laundry_orders
+                 WHERE tenant_id = ?
+                 GROUP BY order_type'
+            );
+            $cntSt->execute([$tenantId]);
+            foreach ($cntSt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $c = (string) ($row['code'] ?? '');
+                if ($c !== '') {
+                    $orderTypeTransactionCounts[$c] = (int) ($row['cnt'] ?? 0);
+                }
+            }
+        } catch (\Throwable) {
+            $orderTypeTransactionCounts = [];
+        }
 
         return view_page('Order Pricing', 'tenant.laundry.order-type-pricing', [
-            'order_types' => $st->fetchAll(PDO::FETCH_ASSOC),
+            'order_types' => $orderTypes,
+            'order_type_transaction_counts' => $orderTypeTransactionCounts,
             'reward_system_active' => $this->rewardProgramIsActive($pdo, $tenantId),
+            'core_order_type_codes' => LaundrySchema::CORE_ORDER_TYPE_CODES,
         ]);
     }
 
@@ -1115,21 +1828,54 @@ final class LaundryController
 
         $label = trim((string) $request->input('label'));
         $serviceKind = (string) $request->input('service_kind', 'full_service');
-        if (! in_array($serviceKind, ['full_service', 'wash_only', 'dry_only', 'rinse_only', 'dry_cleaning', 'other'], true)) {
+        if (! in_array($serviceKind, ['full_service', 'wash_only', 'dry_only', 'rinse_only', 'dry_cleaning', 'fold_only', 'other'], true)) {
             $serviceKind = 'full_service';
         }
         $supplyBlock = (string) $request->input('supply_block', $this->defaultSupplyBlockForServiceKind($serviceKind));
-        if (! in_array($supplyBlock, ['none', 'full_service', 'wash_supplies', 'rinse_supplies'], true)) {
+        if (! in_array($supplyBlock, ['none', 'full_service', 'full_service_2x', 'wash_supplies', 'rinse_supplies'], true)) {
             $supplyBlock = $this->defaultSupplyBlockForServiceKind($serviceKind);
         }
         $showAddon = $request->has('show_addon_supplies')
             ? $request->boolean('show_addon_supplies')
             : $this->defaultShowAddonSuppliesForServiceKind($serviceKind);
+        $showInOrderMode = $this->normalizeOrderTypeShowMode((string) $request->input('show_in_order_mode', 'both'));
         $requiredWeight = $request->boolean('required_weight');
+        $detergentQty = max(0.0, round((float) $request->input('detergent_qty', 0), 3));
+        $fabconQty = max(0.0, round((float) $request->input('fabcon_qty', 0), 3));
+        $bleachQty = max(0.0, round((float) $request->input('bleach_qty', 0), 3));
         $price = max(0.0, (float) $request->input('price_per_load', 0));
+        $foldServiceAmount = max(0.0, (float) $request->input('fold_service_amount', 0));
+        $foldStaffShareAmount = max(0.0, (float) $request->input('fold_staff_share_amount', 0));
+        $foldCommissionTarget = strtolower(trim((string) $request->input('fold_commission_target', 'branch')));
+        if (! in_array($foldCommissionTarget, ['branch', 'staff'], true)) {
+            $foldCommissionTarget = 'branch';
+        }
+        if ($serviceKind !== 'fold_only') {
+            $foldServiceAmount = 0.0;
+            $foldStaffShareAmount = 0.0;
+            $foldCommissionTarget = 'branch';
+        }
+        $maxWeightKg = max(0.0, round((float) $request->input('max_weight_kg', 0), 3));
+        $excessWeightFeePerKg = max(0.0, round((float) $request->input('excess_weight_fee_per_kg', 0), 4));
+        if ($maxWeightKg <= 0) {
+            $excessWeightFeePerKg = 0.0;
+        }
         if ($serviceKind === 'dry_cleaning') {
             $supplyBlock = 'none';
             $requiredWeight = true;
+            $detergentQty = 0.0;
+            $fabconQty = 0.0;
+            $bleachQty = 0.0;
+            $showAddon = false;
+        } elseif ($serviceKind === 'fold_only') {
+            $supplyBlock = 'none';
+            $requiredWeight = false;
+            $detergentQty = 0.0;
+            $fabconQty = 0.0;
+            $bleachQty = 0.0;
+            $showAddon = false;
+            $maxWeightKg = 0.0;
+            $excessWeightFeePerKg = 0.0;
         }
 
         if ($label === '') {
@@ -1138,9 +1884,6 @@ final class LaundryController
             return redirect(route('tenant.laundry-order-pricing.index'));
         }
 
-        $mx = $pdo->prepare('SELECT COALESCE(MAX(sort_order), 0) FROM laundry_order_types WHERE tenant_id = ?');
-        $mx->execute([$tenantId]);
-        $sortOrder = ((int) $mx->fetchColumn()) + 1;
         $code = $serviceKind === 'dry_cleaning'
             ? 'dry_cleaning'
             : $this->generateUniqueOrderTypeCode($pdo, $tenantId, $label);
@@ -1150,10 +1893,52 @@ final class LaundryController
             return redirect(route('tenant.laundry-order-pricing.index'));
         }
         $includeInRewards = $this->resolveIncludeInRewardsForSave($pdo, $tenantId, $serviceKind, $request, false);
-        $pdo->prepare(
-            'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, required_weight, price_per_load, sort_order, is_active, include_in_rewards, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
-        )->execute([$tenantId, $code, $label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $price, $sortOrder, $includeInRewards]);
+        $hasFoldAmountColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fold_service_amount');
+        $hasFoldTargetColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fold_commission_target');
+        $hasFoldStaffShareColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fold_staff_share_amount');
+        $hasShowInModeColumn = $this->hasColumn($pdo, 'laundry_order_types', 'show_in_order_mode');
+        $hasDetergentQtyColumn = $this->hasColumn($pdo, 'laundry_order_types', 'detergent_qty');
+        $hasFabconQtyColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fabcon_qty');
+        $hasBleachQtyColumn = $this->hasColumn($pdo, 'laundry_order_types', 'bleach_qty');
+        if ($hasFoldAmountColumn && $hasFoldTargetColumn && $hasDetergentQtyColumn && $hasFabconQtyColumn && $hasBleachQtyColumn) {
+            if ($hasFoldStaffShareColumn) {
+                $pdo->prepare(
+                    $hasShowInModeColumn
+                        ? 'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, show_in_order_mode, supply_block, show_addon_supplies, required_weight, detergent_qty, fabcon_qty, bleach_qty, fold_service_amount, fold_commission_target, fold_staff_share_amount, price_per_load, max_weight_kg, excess_weight_fee_per_kg, sort_order, is_active, include_in_rewards, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
+                        : 'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, required_weight, detergent_qty, fabcon_qty, bleach_qty, fold_service_amount, fold_commission_target, fold_staff_share_amount, price_per_load, max_weight_kg, excess_weight_fee_per_kg, sort_order, is_active, include_in_rewards, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
+                )->execute(
+                    $hasShowInModeColumn
+                        ? [$tenantId, $code, $label, $serviceKind, $showInOrderMode, $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $detergentQty, $fabconQty, $bleachQty, $foldServiceAmount, $foldCommissionTarget, $foldStaffShareAmount, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $includeInRewards]
+                        : [$tenantId, $code, $label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $detergentQty, $fabconQty, $bleachQty, $foldServiceAmount, $foldCommissionTarget, $foldStaffShareAmount, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $includeInRewards]
+                );
+            } else {
+                $pdo->prepare(
+                    $hasShowInModeColumn
+                        ? 'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, show_in_order_mode, supply_block, show_addon_supplies, required_weight, detergent_qty, fabcon_qty, bleach_qty, fold_service_amount, fold_commission_target, price_per_load, max_weight_kg, excess_weight_fee_per_kg, sort_order, is_active, include_in_rewards, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
+                        : 'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, required_weight, detergent_qty, fabcon_qty, bleach_qty, fold_service_amount, fold_commission_target, price_per_load, max_weight_kg, excess_weight_fee_per_kg, sort_order, is_active, include_in_rewards, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
+                )->execute(
+                    $hasShowInModeColumn
+                        ? [$tenantId, $code, $label, $serviceKind, $showInOrderMode, $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $detergentQty, $fabconQty, $bleachQty, $foldServiceAmount, $foldCommissionTarget, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $includeInRewards]
+                        : [$tenantId, $code, $label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $detergentQty, $fabconQty, $bleachQty, $foldServiceAmount, $foldCommissionTarget, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $includeInRewards]
+                );
+            }
+        } else {
+            $pdo->prepare(
+                $hasShowInModeColumn
+                    ? 'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, show_in_order_mode, supply_block, show_addon_supplies, required_weight, price_per_load, max_weight_kg, excess_weight_fee_per_kg, sort_order, is_active, include_in_rewards, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
+                    : 'INSERT INTO laundry_order_types (tenant_id, code, label, service_kind, supply_block, show_addon_supplies, required_weight, price_per_load, max_weight_kg, excess_weight_fee_per_kg, sort_order, is_active, include_in_rewards, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())'
+            )->execute(
+                $hasShowInModeColumn
+                    ? [$tenantId, $code, $label, $serviceKind, $showInOrderMode, $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $includeInRewards]
+                    : [$tenantId, $code, $label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $includeInRewards]
+            );
+        }
 
         session_flash('success', 'Order type added.');
 
@@ -1167,31 +1952,71 @@ final class LaundryController
         $tenantId = $ctx['tenant_id'];
         $rowId = max(0, (int) $id);
 
-        $st = $pdo->prepare('SELECT id FROM laundry_order_types WHERE tenant_id = ? AND id = ? LIMIT 1');
+        $st = $pdo->prepare('SELECT id, code FROM laundry_order_types WHERE tenant_id = ? AND id = ? LIMIT 1');
         $st->execute([$tenantId, $rowId]);
-        if ($st->fetch() === false) {
+        $existingRow = $st->fetch(PDO::FETCH_ASSOC);
+        if (! is_array($existingRow)) {
             session_flash('errors', ['Order type not found.']);
 
             return redirect(route('tenant.laundry-order-pricing.index'));
         }
+        $existingCode = strtolower(trim((string) ($existingRow['code'] ?? '')));
 
         $label = trim((string) $request->input('label'));
         $serviceKind = (string) $request->input('service_kind', 'full_service');
-        if (! in_array($serviceKind, ['full_service', 'wash_only', 'dry_only', 'rinse_only', 'dry_cleaning', 'other'], true)) {
+        if (! in_array($serviceKind, ['full_service', 'wash_only', 'dry_only', 'rinse_only', 'dry_cleaning', 'fold_only', 'other'], true)) {
             $serviceKind = 'full_service';
         }
         $supplyBlock = (string) $request->input('supply_block', $this->defaultSupplyBlockForServiceKind($serviceKind));
-        if (! in_array($supplyBlock, ['none', 'full_service', 'wash_supplies', 'rinse_supplies'], true)) {
+        if (! in_array($supplyBlock, ['none', 'full_service', 'full_service_2x', 'wash_supplies', 'rinse_supplies'], true)) {
             $supplyBlock = $this->defaultSupplyBlockForServiceKind($serviceKind);
         }
         $showAddon = $request->boolean('show_addon_supplies');
+        $showInOrderMode = $this->normalizeOrderTypeShowMode((string) $request->input('show_in_order_mode', 'both'));
         $requiredWeight = $request->boolean('required_weight');
+        $detergentQty = max(0.0, round((float) $request->input('detergent_qty', 0), 3));
+        $fabconQty = max(0.0, round((float) $request->input('fabcon_qty', 0), 3));
+        $bleachQty = max(0.0, round((float) $request->input('bleach_qty', 0), 3));
         $price = max(0.0, (float) $request->input('price_per_load', 0));
-        $sortOrder = (int) $request->input('sort_order', 0);
+        $foldServiceAmount = max(0.0, (float) $request->input('fold_service_amount', 0));
+        $foldStaffShareAmount = max(0.0, (float) $request->input('fold_staff_share_amount', 0));
+        $foldCommissionTarget = strtolower(trim((string) $request->input('fold_commission_target', 'branch')));
+        if (! in_array($foldCommissionTarget, ['branch', 'staff'], true)) {
+            $foldCommissionTarget = 'branch';
+        }
+        if ($existingCode === 'free_fold') {
+            $price = 0.0;
+            $foldServiceAmount = 0.0;
+            $foldStaffShareAmount = 0.0;
+            $foldCommissionTarget = 'branch';
+        }
+        if ($serviceKind !== 'fold_only') {
+            $foldServiceAmount = 0.0;
+            $foldStaffShareAmount = 0.0;
+            $foldCommissionTarget = 'branch';
+        }
+        $maxWeightKg = max(0.0, round((float) $request->input('max_weight_kg', 0), 3));
+        $excessWeightFeePerKg = max(0.0, round((float) $request->input('excess_weight_fee_per_kg', 0), 4));
+        if ($maxWeightKg <= 0) {
+            $excessWeightFeePerKg = 0.0;
+        }
         $isActive = $request->boolean('is_active');
         if ($serviceKind === 'dry_cleaning') {
             $supplyBlock = 'none';
             $requiredWeight = true;
+            $detergentQty = 0.0;
+            $fabconQty = 0.0;
+            $bleachQty = 0.0;
+            $showAddon = false;
+        } elseif ($serviceKind === 'fold_only') {
+            $supplyBlock = 'none';
+            $requiredWeight = false;
+            $detergentQty = 0.0;
+            $fabconQty = 0.0;
+            $bleachQty = 0.0;
+            $showAddon = false;
+            $maxWeightKg = 0.0;
+            $excessWeightFeePerKg = 0.0;
         }
 
         if ($label === '') {
@@ -1201,16 +2026,75 @@ final class LaundryController
         }
 
         $includeInRewards = $this->resolveIncludeInRewardsForSave($pdo, $tenantId, $serviceKind, $request, true);
+        $hasFoldAmountColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fold_service_amount');
+        $hasFoldTargetColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fold_commission_target');
+        $hasFoldStaffShareColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fold_staff_share_amount');
+        $hasShowInModeColumn = $this->hasColumn($pdo, 'laundry_order_types', 'show_in_order_mode');
+        $hasDetergentQtyColumn = $this->hasColumn($pdo, 'laundry_order_types', 'detergent_qty');
+        $hasFabconQtyColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fabcon_qty');
+        $hasBleachQtyColumn = $this->hasColumn($pdo, 'laundry_order_types', 'bleach_qty');
         if ($includeInRewards !== null) {
-            $pdo->prepare(
-                'UPDATE laundry_order_types SET label = ?, service_kind = ?, supply_block = ?, show_addon_supplies = ?, required_weight = ?, price_per_load = ?, sort_order = ?, is_active = ?, include_in_rewards = ?, updated_at = NOW()
-                 WHERE tenant_id = ? AND id = ?'
-            )->execute([$label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $price, $sortOrder, $isActive ? 1 : 0, $includeInRewards, $tenantId, $rowId]);
+            if ($hasFoldAmountColumn && $hasFoldTargetColumn && $hasDetergentQtyColumn && $hasFabconQtyColumn && $hasBleachQtyColumn) {
+                if ($hasFoldStaffShareColumn) {
+                    $pdo->prepare(
+                        'UPDATE laundry_order_types SET label = ?, service_kind = ?, '.($hasShowInModeColumn ? 'show_in_order_mode = ?, ' : '').'supply_block = ?, show_addon_supplies = ?, required_weight = ?, detergent_qty = ?, fabcon_qty = ?, bleach_qty = ?, fold_service_amount = ?, fold_commission_target = ?, fold_staff_share_amount = ?, price_per_load = ?, max_weight_kg = ?, excess_weight_fee_per_kg = ?, sort_order = ?, is_active = ?, include_in_rewards = ?, updated_at = NOW()
+                         WHERE tenant_id = ? AND id = ?'
+                    )->execute(array_values(array_filter([
+                        $label, $serviceKind,
+                        $hasShowInModeColumn ? $showInOrderMode : null,
+                        $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $detergentQty, $fabconQty, $bleachQty, $foldServiceAmount, $foldCommissionTarget, $foldStaffShareAmount, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $isActive ? 1 : 0, $includeInRewards, $tenantId, $rowId
+                    ], static fn ($v) => $v !== null)));
+                } else {
+                    $pdo->prepare(
+                        'UPDATE laundry_order_types SET label = ?, service_kind = ?, '.($hasShowInModeColumn ? 'show_in_order_mode = ?, ' : '').'supply_block = ?, show_addon_supplies = ?, required_weight = ?, detergent_qty = ?, fabcon_qty = ?, bleach_qty = ?, fold_service_amount = ?, fold_commission_target = ?, price_per_load = ?, max_weight_kg = ?, excess_weight_fee_per_kg = ?, sort_order = ?, is_active = ?, include_in_rewards = ?, updated_at = NOW()
+                         WHERE tenant_id = ? AND id = ?'
+                    )->execute(array_values(array_filter([
+                        $label, $serviceKind,
+                        $hasShowInModeColumn ? $showInOrderMode : null,
+                        $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $detergentQty, $fabconQty, $bleachQty, $foldServiceAmount, $foldCommissionTarget, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $isActive ? 1 : 0, $includeInRewards, $tenantId, $rowId
+                    ], static fn ($v) => $v !== null)));
+                }
+            } else {
+                $pdo->prepare(
+                    'UPDATE laundry_order_types SET label = ?, service_kind = ?, '.($hasShowInModeColumn ? 'show_in_order_mode = ?, ' : '').'supply_block = ?, show_addon_supplies = ?, required_weight = ?, price_per_load = ?, max_weight_kg = ?, excess_weight_fee_per_kg = ?, sort_order = ?, is_active = ?, include_in_rewards = ?, updated_at = NOW()
+                     WHERE tenant_id = ? AND id = ?'
+                )->execute(array_values(array_filter([
+                    $label, $serviceKind,
+                    $hasShowInModeColumn ? $showInOrderMode : null,
+                    $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $isActive ? 1 : 0, $includeInRewards, $tenantId, $rowId
+                ], static fn ($v) => $v !== null)));
+            }
         } else {
-            $pdo->prepare(
-                'UPDATE laundry_order_types SET label = ?, service_kind = ?, supply_block = ?, show_addon_supplies = ?, required_weight = ?, price_per_load = ?, sort_order = ?, is_active = ?, updated_at = NOW()
-                 WHERE tenant_id = ? AND id = ?'
-            )->execute([$label, $serviceKind, $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $price, $sortOrder, $isActive ? 1 : 0, $tenantId, $rowId]);
+            if ($hasFoldAmountColumn && $hasFoldTargetColumn && $hasDetergentQtyColumn && $hasFabconQtyColumn && $hasBleachQtyColumn) {
+                if ($hasFoldStaffShareColumn) {
+                    $pdo->prepare(
+                        'UPDATE laundry_order_types SET label = ?, service_kind = ?, '.($hasShowInModeColumn ? 'show_in_order_mode = ?, ' : '').'supply_block = ?, show_addon_supplies = ?, required_weight = ?, detergent_qty = ?, fabcon_qty = ?, bleach_qty = ?, fold_service_amount = ?, fold_commission_target = ?, fold_staff_share_amount = ?, price_per_load = ?, max_weight_kg = ?, excess_weight_fee_per_kg = ?, sort_order = ?, is_active = ?, updated_at = NOW()
+                         WHERE tenant_id = ? AND id = ?'
+                    )->execute(array_values(array_filter([
+                        $label, $serviceKind,
+                        $hasShowInModeColumn ? $showInOrderMode : null,
+                        $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $detergentQty, $fabconQty, $bleachQty, $foldServiceAmount, $foldCommissionTarget, $foldStaffShareAmount, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $isActive ? 1 : 0, $tenantId, $rowId
+                    ], static fn ($v) => $v !== null)));
+                } else {
+                    $pdo->prepare(
+                        'UPDATE laundry_order_types SET label = ?, service_kind = ?, '.($hasShowInModeColumn ? 'show_in_order_mode = ?, ' : '').'supply_block = ?, show_addon_supplies = ?, required_weight = ?, detergent_qty = ?, fabcon_qty = ?, bleach_qty = ?, fold_service_amount = ?, fold_commission_target = ?, price_per_load = ?, max_weight_kg = ?, excess_weight_fee_per_kg = ?, sort_order = ?, is_active = ?, updated_at = NOW()
+                         WHERE tenant_id = ? AND id = ?'
+                    )->execute(array_values(array_filter([
+                        $label, $serviceKind,
+                        $hasShowInModeColumn ? $showInOrderMode : null,
+                        $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $detergentQty, $fabconQty, $bleachQty, $foldServiceAmount, $foldCommissionTarget, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $isActive ? 1 : 0, $tenantId, $rowId
+                    ], static fn ($v) => $v !== null)));
+                }
+            } else {
+                $pdo->prepare(
+                    'UPDATE laundry_order_types SET label = ?, service_kind = ?, '.($hasShowInModeColumn ? 'show_in_order_mode = ?, ' : '').'supply_block = ?, show_addon_supplies = ?, required_weight = ?, price_per_load = ?, max_weight_kg = ?, excess_weight_fee_per_kg = ?, sort_order = ?, is_active = ?, updated_at = NOW()
+                     WHERE tenant_id = ? AND id = ?'
+                )->execute(array_values(array_filter([
+                    $label, $serviceKind,
+                    $hasShowInModeColumn ? $showInOrderMode : null,
+                    $supplyBlock, $showAddon ? 1 : 0, $requiredWeight ? 1 : 0, $price, $maxWeightKg, $excessWeightFeePerKg, 0, $isActive ? 1 : 0, $tenantId, $rowId
+                ], static fn ($v) => $v !== null)));
+            }
         }
 
         session_flash('success', 'Order type updated.');
@@ -1223,6 +2107,8 @@ final class LaundryController
         $ctx = $this->baseContext();
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
+        $actor = Auth::user();
+        $actorId = (int) ($actor['id'] ?? 0);
         $rowId = max(0, (int) $id);
 
         $st = $pdo->prepare('SELECT id, code FROM laundry_order_types WHERE tenant_id = ? AND id = ? LIMIT 1');
@@ -1235,10 +2121,19 @@ final class LaundryController
         }
         $code = (string) ($row['code'] ?? '');
 
-        $cntSt = $pdo->prepare('SELECT COUNT(*) FROM laundry_orders WHERE tenant_id = ? AND order_type = ?');
-        $cntSt->execute([$tenantId, $code]);
-        if ((int) $cntSt->fetchColumn() > 0) {
-            session_flash('errors', ['This order type cannot be deleted because existing transactions use it. Deactivate it instead.']);
+        if (in_array($code, LaundrySchema::CORE_ORDER_TYPE_CODES, true)) {
+            session_flash('errors', ['This order type is included with every shop and cannot be deleted. Optional types you add (for example Dry Cleaning or Other) can still be removed.']);
+
+            return redirect(route('tenant.laundry-order-pricing.index'));
+        }
+
+        $totalOrdersSt = $pdo->prepare('SELECT COUNT(*) FROM laundry_orders WHERE tenant_id = ? AND order_type = ?');
+        $totalOrdersSt->execute([$tenantId, $code]);
+        $totalOrdersForType = (int) $totalOrdersSt->fetchColumn();
+        $purgeConfirmed = $request->boolean('confirm_purge_orders');
+
+        if ($totalOrdersForType > 0 && ! $purgeConfirmed) {
+            session_flash('errors', ['This order type still has saved transactions. Open this page with JavaScript enabled, use Delete again, and choose Yes to remove those transactions and the order type.']);
 
             return redirect(route('tenant.laundry-order-pricing.index'));
         }
@@ -1251,11 +2146,82 @@ final class LaundryController
             return redirect(route('tenant.laundry-order-pricing.index'));
         }
 
-        $pdo->prepare('DELETE FROM laundry_order_types WHERE tenant_id = ? AND id = ?')->execute([$tenantId, $rowId]);
+        $removedOrders = 0;
+        $pdo->beginTransaction();
+        try {
+            if ($totalOrdersForType > 0) {
+                $this->purgeLaundryOrdersByOrderTypeCode($pdo, $tenantId, $code);
+            }
+            $leftSt = $pdo->prepare('SELECT COUNT(*) FROM laundry_orders WHERE tenant_id = ? AND order_type = ?');
+            $leftSt->execute([$tenantId, $code]);
+            if ((int) $leftSt->fetchColumn() > 0) {
+                throw new \RuntimeException('Linked transactions could not be fully removed.');
+            }
+            $removedOrders = $totalOrdersForType;
+            $pdo->prepare('DELETE FROM laundry_order_types WHERE tenant_id = ? AND id = ?')->execute([$tenantId, $rowId]);
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            session_flash('errors', ['Could not delete this order type. It may still be referenced elsewhere.']);
 
-        session_flash('success', 'Order type removed.');
+            return redirect(route('tenant.laundry-order-pricing.index'));
+        }
+
+        if ($removedOrders > 0) {
+            session_flash('success', sprintf('Order type removed. %d related transaction(s) were permanently deleted.', $removedOrders));
+        } else {
+            session_flash('success', 'Order type removed.');
+        }
+        ActivityLogger::log(
+            $tenantId,
+            $actorId,
+            (string) ($actor['role'] ?? 'tenant_admin'),
+            'laundry_order_types',
+            'destroy',
+            $request,
+            'Deleted order type.',
+            ['order_type_id' => $rowId, 'order_type_code' => $code, 'purged_orders' => $removedOrders]
+        );
 
         return redirect(route('tenant.laundry-order-pricing.index'));
+    }
+
+    /**
+     * Deletes all laundry orders (any status) for the given type code, plus dependent rows that are not ON DELETE CASCADE.
+     */
+    private function purgeLaundryOrdersByOrderTypeCode(PDO $pdo, int $tenantId, string $orderTypeCode): void
+    {
+        if ($tenantId < 1 || $orderTypeCode === '') {
+            return;
+        }
+        try {
+            $pdo->prepare(
+                'DELETE re FROM laundry_reward_events re
+                 INNER JOIN laundry_orders o ON o.id = re.order_id AND o.tenant_id = re.tenant_id
+                 WHERE o.tenant_id = ? AND o.order_type = ?'
+            )->execute([$tenantId, $orderTypeCode]);
+        } catch (\Throwable) {
+        }
+        try {
+            $pdo->prepare(
+                'DELETE rr FROM laundry_reward_redemptions rr
+                 INNER JOIN laundry_orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id
+                 WHERE o.tenant_id = ? AND o.order_type = ?'
+            )->execute([$tenantId, $orderTypeCode]);
+        } catch (\Throwable) {
+        }
+        try {
+            $pdo->prepare(
+                'UPDATE laundry_machines m
+                 INNER JOIN laundry_orders o ON o.id = m.current_order_id AND o.tenant_id = m.tenant_id
+                 SET m.current_order_id = NULL
+                 WHERE m.tenant_id = ? AND o.order_type = ?'
+            )->execute([$tenantId, $orderTypeCode]);
+        } catch (\Throwable) {
+        }
+        $pdo->prepare('DELETE FROM laundry_orders WHERE tenant_id = ? AND order_type = ?')->execute([$tenantId, $orderTypeCode]);
     }
 
     public function advanceTransactionStatus(Request $request, int|string $id): Response
@@ -1266,7 +2232,7 @@ final class LaundryController
         $tenantId = $ctx['tenant_id'];
         $trackingEnabled = $this->isLaundryStatusTrackingEnabled($pdo, $tenantId);
         $toStatus = strtolower(trim((string) $request->input('to_status', '')));
-        if (! in_array($toStatus, ['washing_drying', 'open_ticket', 'completed'], true)) {
+        if (! in_array($toStatus, ['washing_drying', 'open_ticket'], true)) {
             if ($request->wantsJson()) {
                 return json_response(['success' => false, 'message' => 'Invalid next status.'], 422);
             }
@@ -1294,42 +2260,12 @@ final class LaundryController
             }
             $current = (string) ($order['status'] ?? '');
             if (! $trackingEnabled) {
-                if ($toStatus !== 'completed') {
-                    throw new \RuntimeException('When workflow is disabled, only transition to Completed is allowed.');
-                }
-                if (! in_array($current, ['open_ticket', 'paid'], true)) {
-                    throw new \RuntimeException('Only Paid or Unpaid transactions can be marked Completed when workflow is disabled.');
-                }
-                $paidFlag = (string) ($order['payment_status'] ?? '');
-                if ($paidFlag === 'paid') {
-                    $pdo->prepare(
-                        'UPDATE laundry_orders
-                         SET status = "completed", payment_status = "paid", updated_at = NOW()
-                         WHERE tenant_id = ? AND id = ?'
-                    )->execute([$tenantId, $id]);
-                } else {
-                    $pdo->prepare(
-                        'UPDATE laundry_orders
-                         SET status = "completed", payment_method = "pending", payment_status = "unpaid", updated_at = NOW()
-                         WHERE tenant_id = ? AND id = ?'
-                    )->execute([$tenantId, $id]);
-                }
-                $pdo->commit();
-                if ($request->wantsJson()) {
-                    return json_response([
-                        'success' => true,
-                        'message' => 'Status updated.',
-                    ]);
-                }
-                session_flash('success', 'Status updated.');
-
-                return redirect(route('tenant.laundry-sales.index'));
+                throw new \RuntimeException('Status transitions are disabled when workflow tracking is off.');
             }
             $allowed = [
                 'pending' => 'washing_drying',
                 'washing_drying' => 'open_ticket',
                 'running' => 'open_ticket',
-                'paid' => 'completed',
             ];
             if (! isset($allowed[$current]) || $allowed[$current] !== $toStatus) {
                 throw new \RuntimeException('Invalid status sequence. Move forward only.');
@@ -1339,7 +2275,7 @@ final class LaundryController
                 $machineAssignmentEnabled = $this->isMachineAssignmentEnabled($pdo, $tenantId);
                 $orderType = $this->fetchOrderTypeByCode($pdo, $tenantId, (string) ($order['order_type'] ?? ''));
                 $serviceKind = (string) ($orderType['service_kind'] ?? 'full_service');
-                if (! in_array($serviceKind, ['full_service', 'wash_only', 'dry_only', 'rinse_only', 'dry_cleaning', 'other'], true)) {
+                if (! in_array($serviceKind, ['full_service', 'wash_only', 'dry_only', 'rinse_only', 'dry_cleaning', 'fold_only', 'other'], true)) {
                     $serviceKind = 'full_service';
                 }
                 $needsWasher = in_array($serviceKind, ['full_service', 'wash_only', 'rinse_only'], true);
@@ -1386,7 +2322,7 @@ final class LaundryController
                             throw new \RuntimeException('Selected machine is no longer available.');
                         }
                     }
-                    $this->deductMachineCredits($pdo, $tenantId, [$washer, $dryer], max(1, (int) ($order['wash_qty'] ?? 1)));
+                    $this->deductMachineCredits($pdo, $tenantId, [$washer, $dryer], max(1, (int) ($order['wash_qty'] ?? 1)), $id);
                     $this->applyLoadCardUsage(
                         $pdo,
                         $tenantId,
@@ -1550,6 +2486,12 @@ final class LaundryController
         $paymentMethod = strtolower(trim((string) $request->input('payment_method', '')));
         $allowedPayment = ['cash', 'gcash', 'paymaya', 'online_banking', 'qr_payment', 'card', 'split_payment'];
         $amountTendered = max(0.0, (float) $request->input('amount_tendered', 0));
+        $splitCashAmount = round(max(0.0, (float) $request->input('split_cash_amount', 0)), 4);
+        $splitOnlineAmount = round(max(0.0, (float) $request->input('split_online_amount', 0)), 4);
+        $splitOnlineMethod = strtolower(trim((string) $request->input('split_online_method', '')));
+        if (! in_array($splitOnlineMethod, ['gcash', 'paymaya', 'online_banking', 'qr_payment', 'card'], true)) {
+            $splitOnlineMethod = '';
+        }
         $discountPercentage = (float) $request->input('discount_percentage', 0);
         $discountPercentage = max(0.0, min(100.0, $discountPercentage));
         $completedWithoutPayment = false;
@@ -1557,7 +2499,7 @@ final class LaundryController
         $pdo->beginTransaction();
         try {
             $st = $pdo->prepare(
-                'SELECT id, status, total_amount, payment_status, customer_id, order_type, is_free, is_reward, is_void
+                'SELECT id, status, total_amount, payment_status, customer_id, order_type, is_free, is_reward, is_void, wash_qty, dry_minutes
                  FROM laundry_orders
                  WHERE tenant_id = ? AND id = ?
                  LIMIT 1
@@ -1579,17 +2521,17 @@ final class LaundryController
                     if ($request->wantsJson()) {
                         return json_response(['success' => true, 'message' => '']);
                     }
-                    session_flash('success', 'Transaction already marked as Paid - Completed.');
+                    session_flash('success', 'Transaction already marked as Paid.');
 
                     return redirect(route('tenant.laundry-sales.index'));
                 }
                 throw new \RuntimeException('This transaction is already paid.');
             }
             if ($isNoPaymentMode) {
-                if (! in_array($currStatus, ['pending', 'washing_drying', 'running', 'open_ticket', 'completed'], true)) {
-                    throw new \RuntimeException('This transaction cannot be moved to Paid - Completed.');
+                if (! in_array($currStatus, ['pending', 'washing_drying', 'running', 'open_ticket', 'paid'], true)) {
+                    throw new \RuntimeException('This transaction cannot be moved to Paid.');
                 }
-            } elseif (! in_array($currStatus, ['open_ticket', 'completed'], true)) {
+            } elseif (! in_array($currStatus, ['open_ticket', 'paid'], true)) {
                 throw new \RuntimeException('Payment can only be recorded for Finishing - To Be Picked Up transactions.');
             }
 
@@ -1597,6 +2539,9 @@ final class LaundryController
                 $paymentMethod = (int) ($order['is_reward'] ?? 0) === 1 ? 'reward' : 'free';
                 $amountTendered = 0.0;
                 $discountPercentage = 0.0;
+                $splitCashAmount = 0.0;
+                $splitOnlineAmount = 0.0;
+                $splitOnlineMethod = '';
             } elseif (! in_array($paymentMethod, $allowedPayment, true)) {
                 throw new \RuntimeException('Select a payment method.');
             }
@@ -1606,6 +2551,22 @@ final class LaundryController
             $discountedTotal = round(max(0.0, $total - $discountAmount), 4);
             if (! $isNoPaymentMode && $amountTendered + 1e-6 < $discountedTotal) {
                 throw new \RuntimeException('Amount paid must be at least the service total ('.number_format($discountedTotal, 2, '.', '').').');
+            }
+            if (! $isNoPaymentMode && $paymentMethod === 'split_payment') {
+                if ($splitCashAmount <= 0 && $splitOnlineAmount <= 0) {
+                    throw new \RuntimeException('Enter split payment amounts.');
+                }
+                if ($splitOnlineAmount > 0 && $splitOnlineMethod === '') {
+                    throw new \RuntimeException('Select an online payment method for split payment.');
+                }
+                $splitTotal = round($splitCashAmount + $splitOnlineAmount, 4);
+                if (abs($splitTotal - $discountedTotal) > 0.01) {
+                    throw new \RuntimeException('Split payment total must match the service total.');
+                }
+            } elseif ($paymentMethod !== 'split_payment') {
+                $splitCashAmount = 0.0;
+                $splitOnlineAmount = 0.0;
+                $splitOnlineMethod = '';
             }
             if ($isNoPaymentMode) {
                 $discountAmount = 0.0;
@@ -1621,9 +2582,20 @@ final class LaundryController
                 'amount_tendered = ?',
                 'change_amount = ?',
                 'total_amount = ?',
+                'split_cash_amount = ?',
+                'split_online_amount = ?',
+                'split_online_method = ?',
                 'updated_at = NOW()',
             ];
-            $params = [$paymentMethod, $amountTendered, $change, $discountedTotal];
+            $params = [
+                $paymentMethod,
+                $amountTendered,
+                $change,
+                $discountedTotal,
+                $splitCashAmount,
+                $splitOnlineAmount,
+                $splitOnlineMethod !== '' ? $splitOnlineMethod : null,
+            ];
             if ($this->hasLaundryOrdersDiscountPercentage($pdo)) {
                 $setParts[] = 'discount_percentage = ?';
                 $params[] = $discountPercentage;
@@ -1646,7 +2618,7 @@ final class LaundryController
 
             if ((int) ($order['is_free'] ?? 0) !== 1 && (int) ($order['is_reward'] ?? 0) !== 1) {
                 $otDef = $this->fetchOrderTypeByCode($pdo, $tenantId, (string) ($order['order_type'] ?? ''));
-                $this->applyRewardsCounter($pdo, $tenantId, (int) ($order['customer_id'] ?? 0) ?: null, $otDef, $id, (int) (Auth::user()['id'] ?? 0));
+                $this->applyRewardsCounter($pdo, $tenantId, (int) ($order['customer_id'] ?? 0) ?: null, $otDef, $id, (int) (Auth::user()['id'] ?? 0), $order);
             } else {
                 $completedWithoutPayment = true;
             }
@@ -1672,7 +2644,7 @@ final class LaundryController
             throw $e;
         }
 
-        $successMessage = $completedWithoutPayment ? 'Transaction completed without payment.' : 'Payment recorded.';
+        $successMessage = $completedWithoutPayment ? 'Transaction marked as paid without payment.' : 'Payment recorded.';
         if ($request->wantsJson()) {
             return json_response(['success' => true, 'message' => $successMessage]);
         }
@@ -1688,7 +2660,18 @@ final class LaundryController
         $ctx = $this->baseContext();
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
-        $userId = (int) (Auth::user()['id'] ?? 0);
+        $user = Auth::user();
+        $role = (string) ($user['role'] ?? '');
+        if ($role !== 'tenant_admin') {
+            $msg = 'Only tenant admin can void transactions.';
+            if ($request->wantsJson()) {
+                return json_response(['success' => false, 'message' => $msg], 403);
+            }
+            session_flash('errors', [$msg]);
+
+            return redirect(route('tenant.laundry-sales.index'));
+        }
+        $userId = (int) ($user['id'] ?? 0);
         $reason = trim((string) $request->input('void_reason', ''));
         if ($reason === '') {
             session_flash('errors', ['Void reason is required.']);
@@ -1714,6 +2697,7 @@ final class LaundryController
                 throw new \RuntimeException('Transaction is already void.');
             }
             $this->reverseRewardEarnForVoidedOrderIfApplicable($pdo, $tenantId, $id, $order, $userId);
+            $this->restoreInventoryForVoidedOrder($pdo, $tenantId, $id, $userId > 0 ? $userId : null);
             $pdo->prepare(
                 'UPDATE laundry_machines
                  SET status = "available", current_order_id = NULL, updated_at = NOW()
@@ -1740,6 +2724,16 @@ final class LaundryController
         }
 
         session_flash('success', 'Transaction marked VOID.');
+        ActivityLogger::log(
+            $tenantId,
+            $userId,
+            $role !== '' ? $role : 'tenant_admin',
+            'laundry_sales',
+            'void',
+            $request,
+            'Marked transaction as void.',
+            ['order_id' => $id, 'reason' => mb_substr($reason, 0, 255)]
+        );
 
         return redirect(route('tenant.laundry-sales.index'));
     }
@@ -1873,6 +2867,185 @@ final class LaundryController
         session_flash('success', 'Customer saved.');
 
         return redirect(route('tenant.customers.index'));
+    }
+
+    public function customersStoreFromKiosk(Request $request): Response
+    {
+        if (Auth::isTenantFreePlanRestricted(Auth::user())) {
+            return json_response(['success' => false, 'message' => 'Premium: customer profile actions are not available in Free Mode.'], 403);
+        }
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+
+        $name = trim((string) $request->input('name'));
+        $contact = trim((string) $request->input('contact'));
+        $email = trim((string) $request->input('email'));
+        $birthday = trim((string) $request->input('birthday'));
+        if ($name === '') {
+            return json_response(['success' => false, 'message' => 'Customer name is required.'], 422);
+        }
+        $birthdayValue = $birthday !== '' ? $birthday : null;
+
+        $pdo->prepare(
+            'INSERT INTO laundry_customers (tenant_id, name, contact, email, birthday, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, NOW(), NOW())'
+        )->execute([$tenantId, $name, $contact !== '' ? $contact : null, $email !== '' ? $email : null, $birthdayValue]);
+        $customerId = (int) $pdo->lastInsertId();
+
+        return json_response([
+            'success' => true,
+            'message' => 'Customer saved.',
+            'customer' => [
+                'id' => $customerId,
+                'name' => $name,
+                'contact' => $contact,
+                'email' => $email,
+                'birthday' => $birthdayValue,
+                'rewards_balance' => 0,
+            ],
+        ]);
+    }
+
+    public function updateBluetoothPrintPreference(Request $request): Response
+    {
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+        if ($tenantId < 1) {
+            return json_response(['success' => false, 'message' => 'Invalid tenant context.'], 422);
+        }
+        $enabled = $request->boolean('enable_bluetooth_print');
+        if (Auth::isTenantFreePlanRestricted(Auth::user())) {
+            $enabled = false;
+        }
+        try {
+            $this->persistBranchBluetoothPrintConfig($pdo, $tenantId, $enabled);
+        } catch (\Throwable) {
+            return json_response(['success' => false, 'message' => 'Could not save Bluetooth printing setting.'], 500);
+        }
+
+        return json_response([
+            'success' => true,
+            'message' => 'Bluetooth printing setting saved.',
+            'enable_bluetooth_print' => $enabled ? 1 : 0,
+        ]);
+    }
+
+    public function customersTransactions(Request $request, string $id): Response
+    {
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+        $customerId = max(0, (int) $id);
+        if ($customerId < 1) {
+            return json_response(['success' => false, 'message' => 'Invalid customer selected.'], 422);
+        }
+
+        $cst = $pdo->prepare('SELECT id, name FROM laundry_customers WHERE tenant_id = ? AND id = ? LIMIT 1');
+        $cst->execute([$tenantId, $customerId]);
+        $customer = $cst->fetch(PDO::FETCH_ASSOC);
+        if (! is_array($customer)) {
+            return json_response(['success' => false, 'message' => 'Customer not found.'], 404);
+        }
+
+        $ordersSt = $pdo->prepare(
+            'SELECT
+                o.id,
+                o.reference_code,
+                o.created_at,
+                o.updated_at,
+                o.order_type,
+                o.machine_type,
+                o.machine_id,
+                o.washer_machine_id,
+                o.dryer_machine_id,
+                o.wash_qty,
+                o.dry_minutes,
+                o.service_weight,
+                o.actual_weight_kg,
+                o.excess_weight_kg,
+                o.excess_weight_fee_amount,
+                o.subtotal,
+                o.add_on_total,
+                o.discount_percentage,
+                o.discount_amount,
+                o.total_amount,
+                o.payment_method,
+                o.payment_status,
+                o.split_cash_amount,
+                o.split_online_amount,
+                o.split_online_method,
+                o.include_fold_service,
+                o.status,
+                o.is_free,
+                o.is_reward
+             FROM laundry_orders o
+             WHERE o.tenant_id = ? AND o.customer_id = ?
+               AND COALESCE(o.is_void, 0) = 0
+             ORDER BY o.created_at DESC, o.id DESC'
+        );
+        $ordersSt->execute([$tenantId, $customerId]);
+        $orders = $ordersSt->fetchAll(PDO::FETCH_ASSOC);
+
+        $addonSt = $pdo->prepare(
+            'SELECT order_id, item_name, quantity, unit_price, total_price
+             FROM laundry_order_add_ons
+             WHERE tenant_id = ? AND order_id = ?
+             ORDER BY id ASC'
+        );
+
+        $payload = [];
+        foreach ($orders as $row) {
+            $orderId = (int) ($row['id'] ?? 0);
+            if ($orderId > 0) {
+                $addonSt->execute([$tenantId, $orderId]);
+                $addons = $addonSt->fetchAll(PDO::FETCH_ASSOC);
+            } else {
+                $addons = [];
+            }
+            $payload[] = [
+                'id' => $orderId,
+                'reference_code' => (string) ($row['reference_code'] ?? ''),
+                'created_at' => (string) ($row['created_at'] ?? ''),
+                'updated_at' => (string) ($row['updated_at'] ?? ''),
+                'order_type' => (string) ($row['order_type'] ?? ''),
+                'machine_type' => (string) ($row['machine_type'] ?? ''),
+                'machine_id' => (int) ($row['machine_id'] ?? 0),
+                'washer_machine_id' => (int) ($row['washer_machine_id'] ?? 0),
+                'dryer_machine_id' => (int) ($row['dryer_machine_id'] ?? 0),
+                'wash_qty' => (float) ($row['wash_qty'] ?? 0),
+                'dry_minutes' => (int) ($row['dry_minutes'] ?? 0),
+                'service_weight' => (float) ($row['service_weight'] ?? 0),
+                'actual_weight_kg' => (float) ($row['actual_weight_kg'] ?? 0),
+                'excess_weight_kg' => (float) ($row['excess_weight_kg'] ?? 0),
+                'excess_weight_fee_amount' => (float) ($row['excess_weight_fee_amount'] ?? 0),
+                'subtotal' => (float) ($row['subtotal'] ?? 0),
+                'add_on_total' => (float) ($row['add_on_total'] ?? 0),
+                'discount_percentage' => (float) ($row['discount_percentage'] ?? 0),
+                'discount_amount' => (float) ($row['discount_amount'] ?? 0),
+                'total_amount' => (float) ($row['total_amount'] ?? 0),
+                'payment_method' => (string) ($row['payment_method'] ?? ''),
+                'payment_status' => (string) ($row['payment_status'] ?? ''),
+                'split_cash_amount' => (float) ($row['split_cash_amount'] ?? 0),
+                'split_online_amount' => (float) ($row['split_online_amount'] ?? 0),
+                'split_online_method' => (string) ($row['split_online_method'] ?? ''),
+                'include_fold_service' => (int) ($row['include_fold_service'] ?? 0) === 1,
+                'status' => (string) ($row['status'] ?? ''),
+                'is_free' => (int) ($row['is_free'] ?? 0) === 1,
+                'is_reward' => (int) ($row['is_reward'] ?? 0) === 1,
+                'add_ons' => $addons,
+            ];
+        }
+
+        return json_response([
+            'success' => true,
+            'customer' => [
+                'id' => (int) ($customer['id'] ?? 0),
+                'name' => (string) ($customer['name'] ?? ''),
+            ],
+            'transactions' => $payload,
+        ]);
     }
 
     public function customersUpdate(Request $request, string $id): Response
@@ -2036,6 +3209,8 @@ final class LaundryController
         $ctx = $this->baseContext();
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
+        $actor = Auth::user();
+        $actorId = (int) ($actor['id'] ?? 0);
         $customerId = max(0, (int) $id);
         if ($customerId < 1) {
             session_flash('errors', ['Invalid customer selected.']);
@@ -2043,6 +3218,13 @@ final class LaundryController
             return redirect(route('tenant.customers.index'));
         }
 
+        $custSt = $pdo->prepare('SELECT id, name FROM laundry_customers WHERE tenant_id = ? AND id = ? LIMIT 1');
+        $custSt->execute([$tenantId, $customerId]);
+        $customer = $custSt->fetch(PDO::FETCH_ASSOC) ?: null;
+        if (! is_array($customer)) {
+            session_flash('errors', ['Customer not found.']);
+            return redirect(route('tenant.customers.index'));
+        }
         $pdo->prepare(
             'UPDATE laundry_orders
              SET customer_id = NULL, updated_at = NOW()
@@ -2052,6 +3234,16 @@ final class LaundryController
             ->execute([$tenantId, $customerId]);
         $pdo->prepare('DELETE FROM laundry_customers WHERE tenant_id = ? AND id = ?')
             ->execute([$tenantId, $customerId]);
+        ActivityLogger::log(
+            $tenantId,
+            $actorId,
+            (string) ($actor['role'] ?? 'tenant_admin'),
+            'customers',
+            'destroy',
+            $request,
+            'Deleted customer profile.',
+            ['customer_id' => $customerId, 'customer_name' => (string) ($customer['name'] ?? '')]
+        );
 
         session_flash('success', 'Customer deleted.');
 
@@ -2063,6 +3255,7 @@ final class LaundryController
         $ctx = $this->baseContext();
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
+        $attendanceLocked = Auth::isTenantFreePlanRestricted(Auth::user());
         $from = trim((string) $request->query('from', date('Y-m-d')));
         $to = trim((string) $request->query('to', date('Y-m-d')));
         if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) !== 1) {
@@ -2118,6 +3311,8 @@ final class LaundryController
             'rows' => $rows,
             'range_from' => $from,
             'range_to' => $to,
+            'premium_trial_browse_lock' => $attendanceLocked,
+            'attendance_locked' => $attendanceLocked,
         ]);
     }
 
@@ -2264,7 +3459,7 @@ final class LaundryController
                 'hours_per_day' => $hoursPerDay,
                 'overall_total_salary' => 0.0,
                 'fold_service_amount' => 0.0,
-                'fold_commission_target' => 'staff',
+                'fold_commission_target' => 'per_order_type',
                 'activate_commission' => false,
                 'activate_ot_incentives' => false,
                 'shop_name' => $shopName,
@@ -2293,8 +3488,6 @@ final class LaundryController
         $staffSt->execute([$tenantId]);
         $staffList = $staffSt->fetchAll(PDO::FETCH_ASSOC);
 
-        $foldingFeePerLoad = $this->getBranchFoldServiceAmount($pdo, $tenantId);
-        $foldCommissionTarget = $this->getBranchFoldCommissionTarget($pdo, $tenantId);
         $eligibleStaffCount = 0;
         foreach ($staffList as $staff) {
             if ((int) ($staff['commission_eligible'] ?? 0) === 1) {
@@ -2323,21 +3516,44 @@ final class LaundryController
             $overtimeHoursCredit = (float) ($attendanceTotals['approved_ot_hours'] ?? 0.0);
             $basePay = (float) ($attendanceTotals['pay_units'] ?? 0.0) * $dayRate;
             $overtimePay = $overtimeHoursCredit * $otRate;
-            $loadsFolded = (int) ($this->scalar(
-                $pdo,
-                'SELECT COUNT(*) FROM laundry_orders o
-                 INNER JOIN laundry_order_types t ON t.tenant_id = o.tenant_id AND t.code = o.order_type AND t.service_kind = "full_service"
+            $foldAggSt = $pdo->prepare(
+                'SELECT
+                    COALESCE(SUM(CASE
+                        WHEN o.include_fold_service = 1
+                            AND o.order_mode <> "self_service"
+                            THEN GREATEST(1, COALESCE(o.number_of_loads, 0))
+                        WHEN o.order_mode = "self_service"
+                            THEN GREATEST(0, COALESCE(o.fold_service_qty, 0))
+                        ELSE 0
+                    END), 0) AS loads_folded,
+                    COALESCE(SUM(CASE
+                        WHEN LOWER(COALESCE(fold_cfg.fold_commission_target, "branch")) = "staff"
+                            THEN (
+                                CASE
+                                    WHEN o.include_fold_service = 1
+                                        AND o.order_mode <> "self_service"
+                                        THEN GREATEST(1, COALESCE(o.number_of_loads, 0))
+                                    WHEN o.order_mode = "self_service"
+                                        THEN GREATEST(0, COALESCE(o.fold_service_qty, 0))
+                                    ELSE 0
+                                END
+                            ) * GREATEST(0, COALESCE(fold_cfg.fold_staff_share_amount, fold_cfg.fold_service_amount, 0))
+                        ELSE 0
+                    END), 0) AS folding_fee_total
+                 FROM laundry_orders o
+                 LEFT JOIN laundry_order_types fold_cfg ON fold_cfg.tenant_id = o.tenant_id AND fold_cfg.code = "fold_with_price"
                  WHERE o.tenant_id = ? AND o.created_by_user_id = ?
-                   AND o.include_fold_service = 1
                    AND o.created_at BETWEEN ? AND ?
                    AND COALESCE(o.is_void, 0) = 0
                    AND o.status <> "void"
                    AND COALESCE(o.is_free, 0) = 0
                    AND COALESCE(o.is_reward, 0) = 0
-                   AND (o.status = "paid" OR (o.status = "completed" AND o.payment_status = "paid"))',
-                [$tenantId, $uid, $cutoffStart.' 00:00:00', $cutoffEnd.' 23:59:59']
-            ) ?: 0);
-            $foldingFeeTotal = $foldCommissionTarget === 'staff' ? ($loadsFolded * $foldingFeePerLoad) : 0.0;
+                   AND o.status = "paid"'
+            );
+            $foldAggSt->execute([$tenantId, $uid, $cutoffStart.' 00:00:00', $cutoffEnd.' 23:59:59']);
+            $foldAggregation = $foldAggSt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $loadsFolded = (int) round((float) ($foldAggregation['loads_folded'] ?? 0));
+            $foldingFeeTotal = (float) ($foldAggregation['folding_fee_total'] ?? 0.0);
             $quotaCommission = ($activateCommission && (int) ($staff['commission_eligible'] ?? 0) === 1) ? $commissionShare : 0.0;
             $totalSalary = $basePay + $overtimePay + $foldingFeeTotal + $quotaCommission;
             $overallTotal += $totalSalary;
@@ -2369,8 +3585,8 @@ final class LaundryController
             'cutoff_days' => $cutoffDays,
             'hours_per_day' => $hoursPerDay,
             'overall_total_salary' => $overallTotal,
-            'fold_service_amount' => $foldingFeePerLoad,
-            'fold_commission_target' => $foldCommissionTarget,
+            'fold_service_amount' => 0.0,
+            'fold_commission_target' => 'per_order_type',
             'activate_commission' => $activateCommission,
             'activate_ot_incentives' => $activateOtIncentives,
             'daily_load_quota' => $dailyLoadQuota,
@@ -2635,11 +3851,31 @@ final class LaundryController
     private function fetchActiveOrderTypes(PDO $pdo, int $tenantId): array
     {
         try {
+            $hasFoldAmountColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fold_service_amount');
+            $hasFoldTargetColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fold_commission_target');
+            $hasFoldStaffShareColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fold_staff_share_amount');
+            $hasShowInModeColumn = $this->hasColumn($pdo, 'laundry_order_types', 'show_in_order_mode');
+            $hasDetergentQtyColumn = $this->hasColumn($pdo, 'laundry_order_types', 'detergent_qty');
+            $hasFabconQtyColumn = $this->hasColumn($pdo, 'laundry_order_types', 'fabcon_qty');
+            $hasBleachQtyColumn = $this->hasColumn($pdo, 'laundry_order_types', 'bleach_qty');
+            $foldAmountSelect = $hasFoldAmountColumn ? 'fold_service_amount' : '10 AS fold_service_amount';
+            $foldTargetSelect = $hasFoldTargetColumn ? 'fold_commission_target' : '\'branch\' AS fold_commission_target';
+            $foldStaffShareSelect = $hasFoldStaffShareColumn ? 'fold_staff_share_amount' : '10 AS fold_staff_share_amount';
+            $showInModeSelect = $hasShowInModeColumn ? 'show_in_order_mode' : '\'both\' AS show_in_order_mode';
+            $detergentQtySelect = $hasDetergentQtyColumn
+                ? 'detergent_qty'
+                : 'CASE WHEN supply_block = "full_service_2x" THEN 2 WHEN supply_block IN ("full_service","wash_supplies") THEN 1 ELSE 0 END AS detergent_qty';
+            $fabconQtySelect = $hasFabconQtyColumn
+                ? 'fabcon_qty'
+                : 'CASE WHEN supply_block = "full_service_2x" THEN 2 WHEN supply_block IN ("full_service","wash_supplies","rinse_supplies") THEN 1 ELSE 0 END AS fabcon_qty';
+            $bleachQtySelect = $hasBleachQtyColumn
+                ? 'bleach_qty'
+                : '0 AS bleach_qty';
             $st = $pdo->prepare(
-                'SELECT id, code, label, service_kind, supply_block, show_addon_supplies, required_weight, price_per_load, sort_order
+                'SELECT id, code, label, service_kind, '.$showInModeSelect.', supply_block, show_addon_supplies, required_weight, '.$detergentQtySelect.', '.$fabconQtySelect.', '.$bleachQtySelect.', '.$foldAmountSelect.', '.$foldTargetSelect.', '.$foldStaffShareSelect.', price_per_load, max_weight_kg, excess_weight_fee_per_kg, sort_order, include_in_rewards
                  FROM laundry_order_types
                  WHERE tenant_id = ? AND is_active = 1
-                 ORDER BY sort_order ASC, id ASC'
+                 ORDER BY id ASC'
             );
             $st->execute([$tenantId]);
 
@@ -2652,7 +3888,7 @@ final class LaundryController
     private function isMachineAssignmentEnabled(PDO $pdo, int $tenantId): bool
     {
         if ($tenantId < 1) {
-            return true;
+            return false;
         }
         try {
             $st = $pdo->prepare(
@@ -2664,19 +3900,43 @@ final class LaundryController
             $st->execute([$tenantId]);
             $row = $st->fetch(PDO::FETCH_ASSOC);
             if (! is_array($row)) {
-                return true;
+                return false;
             }
 
-            return (int) ($row['machine_assignment_enabled'] ?? 1) === 1;
+            return (int) ($row['machine_assignment_enabled'] ?? 0) === 1;
         } catch (\Throwable) {
-            return true;
+            return false;
         }
+    }
+
+    private function persistMachineAssignmentConfig(PDO $pdo, int $tenantId, bool $enabled): void
+    {
+        if ($tenantId < 1 || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'machine_assignment_enabled')) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, machine_assignment_enabled, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE machine_assignment_enabled = VALUES(machine_assignment_enabled), updated_at = NOW()'
+        )->execute([$tenantId, $enabled ? 1 : 0]);
+    }
+
+    private function persistLaundryStatusTrackingConfig(PDO $pdo, int $tenantId, bool $enabled): void
+    {
+        if ($tenantId < 1 || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'laundry_status_tracking_enabled')) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, laundry_status_tracking_enabled, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE laundry_status_tracking_enabled = VALUES(laundry_status_tracking_enabled), updated_at = NOW()'
+        )->execute([$tenantId, $enabled ? 1 : 0]);
     }
 
     private function isLaundryStatusTrackingEnabled(PDO $pdo, int $tenantId): bool
     {
         if ($tenantId < 1) {
-            return true;
+            return false;
         }
         try {
             $st = $pdo->prepare(
@@ -2688,15 +3948,20 @@ final class LaundryController
             $st->execute([$tenantId]);
             $row = $st->fetch(PDO::FETCH_ASSOC);
             if (! is_array($row)) {
-                return true;
+                return false;
             }
 
-            return (int) ($row['laundry_status_tracking_enabled'] ?? 1) === 1;
+            return (int) ($row['laundry_status_tracking_enabled'] ?? 0) === 1;
         } catch (\Throwable) {
             // Fail-safe: prefer simplified workflow when config read fails,
             // instead of forcing full workflow unexpectedly.
             return false;
         }
+    }
+
+    private function isBranchBluetoothPrintEnabled(PDO $pdo, int $tenantId): bool
+    {
+        return $this->getBranchBoolConfig($pdo, $tenantId, 'enable_bluetooth_print', false);
     }
 
     /**
@@ -2721,6 +3986,9 @@ final class LaundryController
 
     private function computeBasePriceFromKind(string $serviceKind, float $pricePerLoad, int $washQty, int $dryQty): float
     {
+        if ($serviceKind === 'fold_only') {
+            return max(1, max($washQty, $dryQty)) * $pricePerLoad;
+        }
         if ($serviceKind === 'dry_only') {
             return max(1, $dryQty) * $pricePerLoad;
         }
@@ -2775,9 +4043,70 @@ final class LaundryController
         };
     }
 
+    private function resolveOrderTypeSupplyQty(array $orderTypeDef, string $column, string $serviceKind, string $supplyBlock): float
+    {
+        $raw = $orderTypeDef[$column] ?? null;
+        if ($raw !== null && $raw !== '') {
+            return max(0.0, (float) $raw);
+        }
+
+        return $this->legacySupplyQtyByBlock($column, $serviceKind, $supplyBlock);
+    }
+
+    private function legacySupplyQtyByBlock(string $column, string $serviceKind, string $supplyBlock): float
+    {
+        if ($column === 'detergent_qty') {
+            if ($serviceKind === 'full_service' && $supplyBlock === 'full_service_2x') {
+                return 2.0;
+            }
+            if (in_array($supplyBlock, ['full_service', 'wash_supplies'], true) && $serviceKind === 'full_service') {
+                return 1.0;
+            }
+
+            return 0.0;
+        }
+        if ($column === 'fabcon_qty') {
+            if ($serviceKind === 'full_service' && $supplyBlock === 'full_service_2x') {
+                return 2.0;
+            }
+            if (in_array($supplyBlock, ['full_service', 'wash_supplies'], true) && $serviceKind === 'full_service') {
+                return 1.0;
+            }
+            if ($supplyBlock === 'rinse_supplies') {
+                return 1.0;
+            }
+
+            return 0.0;
+        }
+        if ($column === 'bleach_qty') {
+            // Legacy flow treated bleach as optional; keep default at zero unless explicitly configured.
+            return 0.0;
+        }
+
+        return 0.0;
+    }
+
     private function defaultShowAddonSuppliesForServiceKind(string $serviceKind): bool
     {
         return in_array($serviceKind, ['full_service', 'wash_only'], true);
+    }
+
+    private function normalizeOrderTypeShowMode(string $raw): string
+    {
+        $v = strtolower(trim($raw));
+        return in_array($v, ['both', 'drop_off', 'self_service'], true) ? $v : 'both';
+    }
+
+    /**
+     * @param array<string,mixed> $orderTypeDef
+     */
+    private function isOrderTypeVisibleInMode(array $orderTypeDef, string $orderMode): bool
+    {
+        $mode = $this->normalizeOrderTypeShowMode((string) ($orderTypeDef['show_in_order_mode'] ?? 'both'));
+        if ($mode === 'both') {
+            return true;
+        }
+        return $mode === $orderMode;
     }
 
     private function getInventoryItemByCategory(PDO $pdo, int $tenantId, int $itemId, string $category): ?array
@@ -2936,7 +4265,7 @@ final class LaundryController
     private function getBranchFoldCommissionTarget(PDO $pdo, int $tenantId): string
     {
         if ($tenantId < 1) {
-            return 'staff';
+            return 'branch';
         }
         try {
             $st = $pdo->prepare(
@@ -2947,11 +4276,11 @@ final class LaundryController
             );
             $st->execute([$tenantId]);
             $row = $st->fetch(PDO::FETCH_ASSOC);
-            $v = strtolower(trim((string) ($row['fold_commission_target'] ?? 'staff')));
+            $v = strtolower(trim((string) ($row['fold_commission_target'] ?? 'branch')));
 
-            return in_array($v, ['staff', 'branch'], true) ? $v : 'staff';
+            return in_array($v, ['staff', 'branch'], true) ? $v : 'branch';
         } catch (\Throwable) {
-            return 'staff';
+            return 'branch';
         }
     }
 
@@ -3000,6 +4329,18 @@ final class LaundryController
         return (bool) $this->getBranchScalarConfig($pdo, $tenantId, $column, $default ? 1 : 0);
     }
 
+    private function persistBranchBluetoothPrintConfig(PDO $pdo, int $tenantId, bool $enabled): void
+    {
+        if ($tenantId < 1 || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'enable_bluetooth_print')) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, enable_bluetooth_print, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE enable_bluetooth_print = VALUES(enable_bluetooth_print), updated_at = NOW()'
+        )->execute([$tenantId, $enabled ? 1 : 0]);
+    }
+
     private function getBranchIntConfig(PDO $pdo, int $tenantId, string $column, int $default): int
     {
         return max(0, (int) $this->getBranchScalarConfig($pdo, $tenantId, $column, $default));
@@ -3032,10 +4373,17 @@ final class LaundryController
             return false;
         }
         try {
-            $st = $pdo->prepare('SHOW COLUMNS FROM `'.$table.'` LIKE ?');
-            $st->execute([$column]);
+            // Use exact COLUMN_NAME match: SHOW COLUMNS ... LIKE treats '_' as a single-char wildcard in MySQL.
+            $st = $pdo->prepare(
+                'SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = ?
+                   AND COLUMN_NAME = ?
+                 LIMIT 1'
+            );
+            $st->execute([$table, $column]);
 
-            return $st->fetch(PDO::FETCH_ASSOC) !== false;
+            return $st->fetchColumn() !== false;
         } catch (\Throwable) {
             return false;
         }
@@ -3116,7 +4464,7 @@ final class LaundryController
                AND COALESCE(o.is_free, 0) = 0
                AND COALESCE(o.is_reward, 0) = 0
                AND t.service_kind IN ("full_service", "wash_only", "rinse_only")
-               AND (o.status = "paid" OR (o.status = "completed" AND o.payment_status = "paid"))
+               AND o.status = "paid"
              GROUP BY DATE(o.created_at)'
         );
         $st->execute([$tenantId, $from.' 00:00:00', $to.' 23:59:59']);
@@ -3309,10 +4657,34 @@ final class LaundryController
         return (string) ($orderType['service_kind'] ?? '') === 'full_service';
     }
 
-    private function applyRewardsCounter(PDO $pdo, int $tenantId, ?int $customerId, ?array $orderType, ?int $orderId = null, ?int $actorUserId = null): void
+    /** Reward "loads" for earning: one logical load per wash/dry pair (full service stores the same N in both columns). */
+    private function rewardLoadUnitsFromOrderRow(?array $orderRow): int
+    {
+        if (! is_array($orderRow)) {
+            return 1;
+        }
+        $w = max(0, (int) ($orderRow['wash_qty'] ?? 0));
+        $d = max(0, (int) ($orderRow['dry_minutes'] ?? 0));
+
+        return max(1, max($w, $d));
+    }
+
+    private function applyRewardsCounter(PDO $pdo, int $tenantId, ?int $customerId, ?array $orderType, ?int $orderId = null, ?int $actorUserId = null, ?array $orderRowForLoads = null): void
     {
         if ($customerId === null || $customerId < 1) {
             return;
+        }
+        if ($orderId !== null && $orderId > 0) {
+            $dupEarn = $pdo->prepare(
+                'SELECT id
+                 FROM laundry_reward_events
+                 WHERE tenant_id = ? AND order_id = ? AND event_type = "earned"
+                 LIMIT 1'
+            );
+            $dupEarn->execute([$tenantId, $orderId]);
+            if ($dupEarn->fetch(PDO::FETCH_ASSOC)) {
+                return;
+            }
         }
 
         $cfgSt = $pdo->prepare('SELECT * FROM laundry_reward_configs WHERE tenant_id = ? LIMIT 1');
@@ -3324,7 +4696,12 @@ final class LaundryController
         if (! $this->orderTypeEarnsRewardPoints($orderType)) {
             return;
         }
-        $serviceCount = 1.0;
+        $loadUnits = $this->rewardLoadUnitsFromOrderRow($orderRowForLoads);
+        $perLoad = max(0.0, (float) ($cfg['points_per_dropoff_load'] ?? 1));
+        $delta = round($perLoad * $loadUnits, 4);
+        if ($delta <= 1e-9) {
+            return;
+        }
 
         $pdo->prepare(
             'INSERT INTO laundry_customer_points (tenant_id, customer_id, points_balance, lifetime_earned, lifetime_redeemed, created_at, updated_at)
@@ -3333,7 +4710,7 @@ final class LaundryController
                 points_balance = points_balance + VALUES(points_balance),
                 lifetime_earned = lifetime_earned + VALUES(lifetime_earned),
                 updated_at = NOW()'
-        )->execute([$tenantId, $customerId, $serviceCount, $serviceCount]);
+        )->execute([$tenantId, $customerId, $delta, $delta]);
 
         $balance = (float) ($this->scalar(
             $pdo,
@@ -3347,16 +4724,12 @@ final class LaundryController
             $tenantId,
             $customerId,
             $orderId,
-            $serviceCount,
+            $delta,
             $balance,
             (int) ($cfg['id'] ?? 0) ?: null,
             $cfg['reward_order_type_code'] ?? null,
             $actorUserId !== null && $actorUserId > 0 ? $actorUserId : null,
         ]);
-        $threshold = max(1.0, (float) ($cfg['minimum_points_to_redeem'] ?? $cfg['reward_points_cost'] ?? 10));
-        if ($balance >= $threshold) {
-            session_flash('status', 'Customer now has a reward available. Use Reward in Add Service when redeeming.');
-        }
     }
 
     private function fetchRewardConfigForRedemption(PDO $pdo, int $tenantId): ?array
@@ -3502,6 +4875,141 @@ final class LaundryController
         }
     }
 
+    private function recordOrderInventoryMovements(PDO $pdo, int $tenantId, int $orderId, array $itemQtyMap, string $direction, ?string $note = null, ?int $actorUserId = null): void
+    {
+        if ($orderId < 1 || $itemQtyMap === []) {
+            return;
+        }
+        if (! in_array($direction, ['deduct', 'restore'], true)) {
+            $direction = 'deduct';
+        }
+        $st = $pdo->prepare(
+            'INSERT INTO laundry_order_inventory_movements
+             (tenant_id, order_id, inventory_item_id, direction, quantity, note, created_by_user_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NOW())'
+        );
+        foreach ($itemQtyMap as $itemId => $qtyRaw) {
+            $qty = (float) $qtyRaw;
+            if ($qty <= 0) {
+                continue;
+            }
+            $st->execute([$tenantId, $orderId, (int) $itemId, $direction, $qty, $note, $actorUserId]);
+        }
+    }
+
+    private function restoreInventoryForVoidedOrder(PDO $pdo, int $tenantId, int $orderId, ?int $actorUserId = null): void
+    {
+        if ($orderId < 1) {
+            return;
+        }
+        $pending = [];
+        if ($this->hasTable($pdo, 'laundry_order_inventory_movements')) {
+            $agg = $pdo->prepare(
+                'SELECT inventory_item_id,
+                        SUM(CASE WHEN direction = "deduct" THEN quantity WHEN direction = "restore" THEN -quantity ELSE 0 END) AS pending_qty
+                 FROM laundry_order_inventory_movements
+                 WHERE tenant_id = ? AND order_id = ?
+                 GROUP BY inventory_item_id
+                 HAVING pending_qty > 0'
+            );
+            $agg->execute([$tenantId, $orderId]);
+            foreach ($agg->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $itemId = (int) ($row['inventory_item_id'] ?? 0);
+                $qty = (float) ($row['pending_qty'] ?? 0);
+                if ($itemId > 0 && $qty > 0) {
+                    $pending[$itemId] = $qty;
+                }
+            }
+        }
+        if ($pending === []) {
+            $pending = $this->buildLegacyDeductionMapForOrder($pdo, $tenantId, $orderId);
+        }
+        if ($pending === []) {
+            return;
+        }
+        $st = $pdo->prepare(
+            'UPDATE laundry_inventory_items
+             SET stock_quantity = stock_quantity + ?, updated_at = NOW()
+             WHERE tenant_id = ? AND id = ?'
+        );
+        foreach ($pending as $itemId => $qty) {
+            if ((float) $qty <= 0) {
+                continue;
+            }
+            $st->execute([(float) $qty, $tenantId, (int) $itemId]);
+        }
+        if ($this->hasTable($pdo, 'laundry_order_inventory_movements')) {
+            $this->recordOrderInventoryMovements($pdo, $tenantId, $orderId, $pending, 'restore', 'Void inventory restore', $actorUserId);
+        }
+    }
+
+    private function buildLegacyDeductionMapForOrder(PDO $pdo, int $tenantId, int $orderId): array
+    {
+        $st = $pdo->prepare(
+            'SELECT o.id, o.order_type, o.inclusion_detergent_item_id, o.inclusion_fabcon_item_id, o.inclusion_bleach_item_id
+             FROM laundry_orders o
+             WHERE o.tenant_id = ? AND o.id = ?
+             LIMIT 1'
+        );
+        $st->execute([$tenantId, $orderId]);
+        $order = $st->fetch(PDO::FETCH_ASSOC);
+        if (! is_array($order)) {
+            return [];
+        }
+        $ot = $this->fetchOrderTypeByCode($pdo, $tenantId, (string) ($order['order_type'] ?? ''));
+        $map = [];
+        $incDetId = (int) ($order['inclusion_detergent_item_id'] ?? 0);
+        $incFabId = (int) ($order['inclusion_fabcon_item_id'] ?? 0);
+        $incBleachId = (int) ($order['inclusion_bleach_item_id'] ?? 0);
+        $detQty = max(0.0, (float) ($ot['detergent_qty'] ?? 0));
+        $fabQty = max(0.0, (float) ($ot['fabcon_qty'] ?? 0));
+        $bleachQty = max(0.0, (float) ($ot['bleach_qty'] ?? 0));
+        if ($incDetId > 0 && $detQty > 0) {
+            $map[$incDetId] = ($map[$incDetId] ?? 0.0) + $detQty;
+        }
+        if ($incFabId > 0 && $fabQty > 0) {
+            $map[$incFabId] = ($map[$incFabId] ?? 0.0) + $fabQty;
+        }
+        if ($incBleachId > 0 && $bleachQty > 0) {
+            $map[$incBleachId] = ($map[$incBleachId] ?? 0.0) + $bleachQty;
+        }
+        $ao = $pdo->prepare(
+            'SELECT ao.item_name, ao.quantity, i.id AS inventory_item_id
+             FROM laundry_order_add_ons ao
+             INNER JOIN laundry_inventory_items i ON i.tenant_id = ao.tenant_id AND i.name = ao.item_name
+             WHERE ao.tenant_id = ? AND ao.order_id = ?'
+        );
+        $ao->execute([$tenantId, $orderId]);
+        foreach ($ao->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $itemId = (int) ($row['inventory_item_id'] ?? 0);
+            $qty = max(0.0, (float) ($row['quantity'] ?? 0));
+            if ($itemId > 0 && $qty > 0) {
+                $map[$itemId] = ($map[$itemId] ?? 0.0) + $qty;
+            }
+        }
+
+        return $map;
+    }
+
+    private function hasTable(PDO $pdo, string $table): bool
+    {
+        if (! preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
+            return false;
+        }
+        try {
+            $st = $pdo->prepare(
+                'SELECT 1 FROM information_schema.TABLES
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = ?
+                 LIMIT 1'
+            );
+            $st->execute([$table]);
+            return $st->fetchColumn() !== false;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     private function applyLoadCardUsage(PDO $pdo, int $tenantId, string $machineType, string $serviceKind, int $washQty): void
     {
         if (strtolower($machineType) !== 'c5') {
@@ -3527,7 +5035,7 @@ final class LaundryController
     /**
      * @param list<array<string,mixed>|null> $machines
      */
-    private function deductMachineCredits(PDO $pdo, int $tenantId, array $machines, int $washQty): void
+    private function deductMachineCredits(PDO $pdo, int $tenantId, array $machines, int $washQty, ?int $orderId = null): void
     {
         $usage = max(1, $washQty);
         $seen = [];
@@ -3546,6 +5054,51 @@ final class LaundryController
             }
             $seen[$id] = true;
             $st->execute([$usage, $tenantId, $id]);
+            $this->recordMachineCreditMovement(
+                $pdo,
+                $tenantId,
+                $id,
+                'deduct',
+                (float) $usage,
+                $orderId,
+                'Machine usage credit deduction',
+                (int) (Auth::user()['id'] ?? 0)
+            );
+        }
+    }
+
+    private function recordMachineCreditMovement(
+        PDO $pdo,
+        int $tenantId,
+        int $machineId,
+        string $direction,
+        float $amount,
+        ?int $orderId = null,
+        ?string $note = null,
+        ?int $createdByUserId = null
+    ): void {
+        if ($tenantId < 1 || $machineId < 1 || $amount <= 0) {
+            return;
+        }
+        $dir = strtolower(trim($direction));
+        if (! in_array($dir, ['deduct', 'restock'], true)) {
+            return;
+        }
+        try {
+            $pdo->prepare(
+                'INSERT INTO laundry_machine_credit_movements
+                 (tenant_id, machine_id, order_id, direction, amount, note, created_by_user_id, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, NOW())'
+            )->execute([
+                $tenantId,
+                $machineId,
+                ($orderId !== null && $orderId > 0) ? $orderId : null,
+                $dir,
+                round($amount, 4),
+                $note !== null && trim($note) !== '' ? mb_substr(trim($note), 0, 255) : null,
+                ($createdByUserId !== null && $createdByUserId > 0) ? $createdByUserId : null,
+            ]);
+        } catch (\Throwable) {
         }
     }
 
@@ -3584,7 +5137,23 @@ final class LaundryController
 
             return '';
         }
+        $imgMeta = @getimagesize($tmp);
+        if (! is_array($imgMeta) || empty($imgMeta['mime'])) {
+            $error = 'Uploaded file is not a valid image.';
+
+            return '';
+        }
+        $width = (int) ($imgMeta[0] ?? 0);
+        $height = (int) ($imgMeta[1] ?? 0);
+        if ($width < 1 || $height < 1 || $width > 8000 || $height > 8000) {
+            $error = 'Image dimensions are invalid or too large.';
+
+            return '';
+        }
         $mime = (string) (mime_content_type($tmp) ?: '');
+        if ($mime === '') {
+            $mime = (string) $imgMeta['mime'];
+        }
         $extFromMime = match ($mime) {
             'image/jpeg' => 'jpg',
             'image/png' => 'png',
@@ -3762,6 +5331,36 @@ final class LaundryController
         }
 
         return self::$hasLaundryOrdersDiscountAmount;
+    }
+
+    private function hasLaundryOrdersAmountTendered(PDO $pdo): bool
+    {
+        if (self::$hasLaundryOrdersAmountTendered !== null) {
+            return self::$hasLaundryOrdersAmountTendered;
+        }
+        try {
+            $st = $pdo->query("SHOW COLUMNS FROM `laundry_orders` LIKE 'amount_tendered'");
+            self::$hasLaundryOrdersAmountTendered = $st !== false && $st->fetch(PDO::FETCH_ASSOC) !== false;
+        } catch (\Throwable) {
+            self::$hasLaundryOrdersAmountTendered = false;
+        }
+
+        return self::$hasLaundryOrdersAmountTendered;
+    }
+
+    private function hasLaundryOrdersChangeAmount(PDO $pdo): bool
+    {
+        if (self::$hasLaundryOrdersChangeAmount !== null) {
+            return self::$hasLaundryOrdersChangeAmount;
+        }
+        try {
+            $st = $pdo->query("SHOW COLUMNS FROM `laundry_orders` LIKE 'change_amount'");
+            self::$hasLaundryOrdersChangeAmount = $st !== false && $st->fetch(PDO::FETCH_ASSOC) !== false;
+        } catch (\Throwable) {
+            self::$hasLaundryOrdersChangeAmount = false;
+        }
+
+        return self::$hasLaundryOrdersChangeAmount;
     }
 
     private function ensureLaundryOrdersReferenceCode(PDO $pdo): bool

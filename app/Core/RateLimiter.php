@@ -14,20 +14,39 @@ final class RateLimiter
         }
         $file = $dir . '/' . sha1($key) . '.json';
         $now = time();
-        $data = ['count' => 0, 'reset_at' => $now + $decaySeconds];
-        if (is_readable($file)) {
-            $raw = json_decode((string) file_get_contents($file), true);
-            if (is_array($raw) && isset($raw['reset_at'], $raw['count'])) {
-                if ($now > (int) $raw['reset_at']) {
-                    $data = ['count' => 0, 'reset_at' => $now + $decaySeconds];
-                } else {
-                    $data = $raw;
+        $fp = @fopen($file, 'c+');
+        if ($fp === false) {
+            return false;
+        }
+        try {
+            if (! flock($fp, LOCK_EX)) {
+                fclose($fp);
+                return false;
+            }
+            $raw = stream_get_contents($fp);
+            $data = ['count' => 0, 'reset_at' => $now + $decaySeconds];
+            if (is_string($raw) && trim($raw) !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded) && isset($decoded['reset_at'], $decoded['count'])) {
+                    if ($now <= (int) $decoded['reset_at']) {
+                        $data = $decoded;
+                    }
                 }
             }
-        }
-        $data['count'] = (int) $data['count'] + 1;
-        file_put_contents($file, json_encode($data));
+            $data['count'] = (int) $data['count'] + 1;
+            $data['reset_at'] = isset($data['reset_at']) ? (int) $data['reset_at'] : ($now + $decaySeconds);
+            ftruncate($fp, 0);
+            rewind($fp);
+            fwrite($fp, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+            fflush($fp);
+            flock($fp, LOCK_UN);
 
-        return $data['count'] <= $maxAttempts;
+            return $data['count'] <= $maxAttempts;
+        } catch (\Throwable) {
+            @flock($fp, LOCK_UN);
+            return false;
+        } finally {
+            fclose($fp);
+        }
     }
 }

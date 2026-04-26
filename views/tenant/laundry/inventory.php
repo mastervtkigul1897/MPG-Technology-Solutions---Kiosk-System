@@ -30,6 +30,14 @@
                         <label class="form-label mb-1">Unit</label>
                         <input class="form-control" name="unit" value="pcs" required>
                     </div>
+                    <div class="col-md-4">
+                        <label class="form-label mb-1">Show item in</label>
+                        <select class="form-select" name="show_item_in" required>
+                            <option value="both" selected>Inclusion + Add-on</option>
+                            <option value="inclusion">Inclusion only</option>
+                            <option value="addon">Add-on only</option>
+                        </select>
+                    </div>
                     <div class="col-md-2">
                         <label class="form-label mb-1">Quantity</label>
                         <input class="form-control" name="stock_quantity" type="number" min="0" step="0.01" value="0">
@@ -92,6 +100,7 @@
                 <th>Image</th>
                 <th>Item</th>
                 <th>Category</th>
+                <th>Show item in</th>
                 <th>Unit</th>
                 <th class="text-end">Stock</th>
                 <th class="text-end">Low stock threshold</th>
@@ -118,11 +127,23 @@
                     </td>
                     <td>
                         <?= e((string) ($item['name'] ?? '')) ?>
+                        <?php if ((int) ($item['is_system_item'] ?? 0) === 1): ?>
+                            <button
+                                type="button"
+                                class="btn btn-link btn-sm p-0 ms-1 align-baseline js-system-item-info"
+                                data-item-name="<?= e((string) ($item['name'] ?? 'Item')) ?>"
+                                title="System item info"
+                                aria-label="System item info"
+                            >
+                                <i class="fa-solid fa-circle-info"></i>
+                            </button>
+                        <?php endif; ?>
                         <?php if ($freeInventoryLimit > 0 && $freeRowIndex <= $freeInventoryLimit): ?>
                             <span class="badge text-bg-warning text-dark ms-1">Free-limited</span>
                         <?php endif; ?>
                     </td>
                     <td><?= e(ucwords(str_replace('_', ' ', (string) ($item['category'] ?? 'other')))) ?></td>
+                    <td><?= e(ucwords(str_replace('_', ' ', (string) ($item['show_item_in'] ?? 'both')))) ?></td>
                     <td><?= e((string) ($item['unit'] ?? '')) ?></td>
                     <td class="text-end"><?= e(format_stock($stock)) ?></td>
                     <td class="text-end"><?= e(format_stock($threshold)) ?></td>
@@ -136,16 +157,21 @@
                                 data-name="<?= e((string) ($item['name'] ?? '')) ?>"
                                 data-category="<?= e((string) ($item['category'] ?? 'other')) ?>"
                                 data-unit="<?= e((string) ($item['unit'] ?? 'pcs')) ?>"
+                                data-show-item-in="<?= e((string) ($item['show_item_in'] ?? 'both')) ?>"
                                 data-low-stock-threshold="<?= e((string) ($item['low_stock_threshold'] ?? '0')) ?>"
                                 data-unit-cost="<?= e((string) ($item['unit_cost'] ?? '0')) ?>"
                                 data-image-path="<?= e((string) ($item['image_path'] ?? '')) ?>"
                                 title="Edit item"
                             ><i class="fa fa-pen"></i></button>
-                            <form method="POST" action="<?= e(route('tenant.laundry-inventory.destroy', ['id' => (int) ($item['id'] ?? 0)])) ?>" onsubmit="return confirm('Delete this inventory item?');">
-                                <?= csrf_field() ?>
-                                <?= method_field('DELETE') ?>
-                                <button class="btn btn-sm btn-outline-danger" type="submit" title="Delete item"><i class="fa fa-trash"></i></button>
-                            </form>
+                            <?php if ((int) ($item['is_system_item'] ?? 0) === 1): ?>
+                                <button class="btn btn-sm btn-outline-secondary" type="button" title="System required item" disabled><i class="fa fa-lock"></i></button>
+                            <?php else: ?>
+                                <form method="POST" action="<?= e(route('tenant.laundry-inventory.destroy', ['id' => (int) ($item['id'] ?? 0)])) ?>" onsubmit="return confirm('Delete this inventory item?');">
+                                    <?= csrf_field() ?>
+                                    <?= method_field('DELETE') ?>
+                                    <button class="btn btn-sm btn-outline-danger" type="submit" title="Delete item"><i class="fa fa-trash"></i></button>
+                                </form>
+                            <?php endif; ?>
                         </div>
                     </td>
                 </tr>
@@ -183,6 +209,14 @@
                         <label class="form-label mb-1" for="inventoryEditUnit">Unit</label>
                         <input class="form-control" id="inventoryEditUnit" name="unit" required>
                     </div>
+                    <div class="mb-3">
+                        <label class="form-label mb-1" for="inventoryEditShowItemIn">Show item in</label>
+                        <select class="form-select" id="inventoryEditShowItemIn" name="show_item_in" required>
+                            <option value="both">Inclusion + Add-on</option>
+                            <option value="inclusion">Inclusion only</option>
+                            <option value="addon">Add-on only</option>
+                        </select>
+                    </div>
                     <div>
                         <label class="form-label mb-1" for="inventoryEditLowStock">Low stock threshold</label>
                         <input class="form-control" id="inventoryEditLowStock" name="low_stock_threshold" type="number" min="0" step="0.01" value="0">
@@ -217,6 +251,7 @@
     const editName = document.getElementById('inventoryEditName');
     const editCategory = document.getElementById('inventoryEditCategory');
     const editUnit = document.getElementById('inventoryEditUnit');
+    const editShowItemIn = document.getElementById('inventoryEditShowItemIn');
     const editLow = document.getElementById('inventoryEditLowStock');
     const editUnitCost = document.getElementById('inventoryEditUnitCost');
     const editPreview = document.getElementById('inventoryEditPreview');
@@ -236,6 +271,7 @@
             if (editName) editName.value = btn.getAttribute('data-name') || '';
             if (editCategory) editCategory.value = btn.getAttribute('data-category') || 'other';
             if (editUnit) editUnit.value = btn.getAttribute('data-unit') || 'pcs';
+            if (editShowItemIn) editShowItemIn.value = btn.getAttribute('data-show-item-in') || 'both';
             if (editLow) editLow.value = btn.getAttribute('data-low-stock-threshold') || '0';
             if (editUnitCost) editUnitCost.value = btn.getAttribute('data-unit-cost') || '0';
             if (editPreview) {
@@ -249,6 +285,21 @@
                 }
             }
             editModal?.show();
+        });
+    });
+    document.querySelectorAll('.js-system-item-info').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const itemName = btn.getAttribute('data-item-name') || 'This item';
+            if (typeof Swal !== 'undefined' && Swal && typeof Swal.fire === 'function') {
+                Swal.fire({
+                    icon: 'info',
+                    title: 'System item',
+                    text: `${itemName} is required by the system. You can edit it, but you cannot delete it.`,
+                    confirmButtonText: 'OK',
+                });
+                return;
+            }
+            window.alert(`${itemName} is required by the system. You can edit it, but you cannot delete it.`);
         });
     });
 })();

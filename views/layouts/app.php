@@ -135,6 +135,19 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
     <link rel="stylesheet" href="<?= e(url('vendor/datatables/dataTables.bootstrap5.min.css')) ?>">
     <link rel="stylesheet" href="<?= e(url('vendor/datatables/responsive.bootstrap5.min.css')) ?>">
     <link rel="stylesheet" href="<?= e(url('css/app-theme.css')) ?>">
+    <script>
+    (() => {
+        // Apply desktop sidebar state before paint to avoid open/close flicker on navigation.
+        try {
+            const saved = window.localStorage.getItem('appDesktopSidebarCollapsed');
+            const isDesktop = window.matchMedia('(min-width: 768px)').matches;
+            if (saved === '1' && isDesktop) {
+                document.documentElement.classList.add('preload-sidebar-collapsed');
+            }
+        } catch (_) {
+        }
+    })();
+    </script>
     <script src="<?= e(url('vendor/sweetalert2/sweetalert2.all.min.js')) ?>"></script>
 <script>
 (() => {
@@ -217,6 +230,11 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
 </div>
 <div class="app-shell d-flex flex-grow-1 min-vh-100">
     <aside class="desktop-sidebar bg-dark text-white p-3">
+        <div class="desktop-sidebar-toggle d-none d-md-flex justify-content-end mb-2">
+            <button class="btn btn-dark btn-sm toolbar-btn" type="button" id="appSidebarToggleBtnDesktop" aria-expanded="true" title="Close sidebar" aria-label="Toggle sidebar">
+                <i class="fa-solid fa-bars"></i>
+            </button>
+        </div>
         <div class="d-flex align-items-center gap-2 mb-3">
             <img src="<?= e($brandLogoPath) ?>" alt="<?= e($appName) ?> logo" width="36" height="36" class="rounded-circle border border-secondary-subtle">
             <h5 class="mb-0"><?= e($brandDisplayName) ?></h5>
@@ -237,19 +255,23 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                 <?php if (user_can_module('pos')): ?>
                     <a class="nav-link text-white <?= route_is('tenant.staff-portal.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.staff-portal.index')) ?>"><i class="fa-solid fa-table-cells-large"></i><span>Staff Kiosk Portal</span></a>
                     <a class="nav-link text-white <?= route_is('tenant.laundry-sales.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.laundry-sales.index')) ?>"><i class="fa-solid fa-soap"></i><span>Loads Status</span></a>
+                    <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
+                        <a class="nav-link text-white <?= route_is('tenant.laundry-order-pricing.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.laundry-order-pricing.index')) ?>"><i class="fa-solid fa-sliders"></i><span>Order Pricing</span></a>
+                        <?php if (user_can_module('ingredients')): ?>
+                            <a class="nav-link text-white <?= route_is('tenant.laundry-inventory.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.laundry-inventory.index')) ?>"><i class="fa-solid fa-box-open"></i><span>Inventory Stocks</span></a>
+                        <?php endif; ?>
+                    <?php endif; ?>
                 <?php endif; ?>
                 <?php if (user_can_module('transactions')): ?>
                     <a class="nav-link text-white <?= route_is('tenant.customers.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.customers.index')) ?>"><i class="fa-solid fa-users"></i><span>Customer Profile<?= $premiumNavBadge(true) ?></span></a>
-                <?php endif; ?>
-                <?php if (user_can_module('ingredients')): ?>
-                    <a class="nav-link text-white <?= route_is('tenant.laundry-inventory.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.laundry-inventory.index')) ?>"><i class="fa-solid fa-box-open"></i><span>Inventory Management</span></a>
+                    <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
+                        <a class="nav-link text-white <?= route_is('tenant.redeem-config.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.redeem-config.index')) ?>"><i class="fa-solid fa-gift"></i><span>Rewards<?= $premiumNavBadge(true) ?></span></a>
+                    <?php endif; ?>
                 <?php endif; ?>
                 <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
                     <a class="nav-link text-white <?= route_is('tenant.machines.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.machines.index')) ?>"><i class="fa-solid fa-gears"></i><span>Machines</span></a>
-                    <a class="nav-link text-white <?= route_is('tenant.laundry-order-pricing.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.laundry-order-pricing.index')) ?>"><i class="fa-solid fa-sliders"></i><span>Order Pricing</span></a>
-                    <a class="nav-link text-white <?= route_is('tenant.attendance.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.attendance.index')) ?>"><i class="fa-solid fa-user-clock"></i><span>Attendance</span></a>
+                    <a class="nav-link text-white <?= route_is('tenant.attendance.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.attendance.index')) ?>"><i class="fa-solid fa-user-clock"></i><span>Attendance<?= $premiumNavBadge(true) ?></span></a>
                     <a class="nav-link text-white <?= route_is('tenant.payroll.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.payroll.index')) ?>"><i class="fa-solid fa-money-check-dollar"></i><span>Payroll<?= $premiumNavBadge(true) ?></span></a>
-                    <a class="nav-link text-white <?= route_is('tenant.redeem-config.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.redeem-config.index')) ?>"><i class="fa-solid fa-gift"></i><span>Rewards<?= $premiumNavBadge(true) ?></span></a>
                 <?php endif; ?>
                 <?php if (user_can_module('expenses')): ?>
                     <a class="nav-link text-white <?= route_is('tenant.expenses.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/expenses')) ?>"><i class="fa-solid fa-money-bill-wave"></i><span>Expenses<?= $premiumNavBadge(true) ?></span></a>
@@ -268,7 +290,7 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                     <a class="nav-link text-white <?= route_is('tenant.staff.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/staff')) ?>"><i class="fa-solid fa-users"></i><span>Staff</span></a>
                     <a class="nav-link text-white <?= route_is('tenant.receipt-settings.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.receipt-settings.edit')) ?>"><i class="fa-solid fa-file-lines"></i><span>Receipt Config<?= $premiumNavBadge(true) ?></span></a>
                     <?php if ($currentBranchIsMain): ?>
-                        <a class="nav-link text-white <?= route_is('tenant.branches.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch"></i><span>Branch Config</span></a>
+                        <a class="nav-link text-white <?= route_is('tenant.branches.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch"></i><span>Branches</span></a>
                     <?php endif; ?>
                 <?php endif; ?>
                 <?php endif; ?>
@@ -302,19 +324,23 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                     <?php if (user_can_module('pos')): ?>
                         <a class="nav-link text-white" href="<?= e(route('tenant.staff-portal.index')) ?>"><i class="fa-solid fa-table-cells-large me-2"></i>Staff Kiosk Portal</a>
                         <a class="nav-link text-white" href="<?= e(route('tenant.laundry-sales.index')) ?>"><i class="fa-solid fa-soap me-2"></i>Loads Status</a>
+                        <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
+                            <a class="nav-link text-white" href="<?= e(route('tenant.laundry-order-pricing.index')) ?>"><i class="fa-solid fa-sliders me-2"></i>Order Pricing</a>
+                            <?php if (user_can_module('ingredients')): ?>
+                                <a class="nav-link text-white" href="<?= e(route('tenant.laundry-inventory.index')) ?>"><i class="fa-solid fa-box-open me-2"></i>Inventory Stocks</a>
+                            <?php endif; ?>
+                        <?php endif; ?>
                     <?php endif; ?>
                     <?php if (user_can_module('transactions')): ?>
                         <a class="nav-link text-white" href="<?= e(route('tenant.customers.index')) ?>"><i class="fa-solid fa-users me-2"></i>Customer Profile<?= $premiumNavBadge(true) ?></a>
-                    <?php endif; ?>
-                    <?php if (user_can_module('ingredients')): ?>
-                        <a class="nav-link text-white" href="<?= e(route('tenant.laundry-inventory.index')) ?>"><i class="fa-solid fa-box-open me-2"></i>Inventory Management</a>
+                        <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
+                            <a class="nav-link text-white" href="<?= e(route('tenant.redeem-config.index')) ?>"><i class="fa-solid fa-gift me-2"></i>Rewards<?= $premiumNavBadge(true) ?></a>
+                        <?php endif; ?>
                     <?php endif; ?>
                     <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
                         <a class="nav-link text-white" href="<?= e(route('tenant.machines.index')) ?>"><i class="fa-solid fa-gears me-2"></i>Machines</a>
-                        <a class="nav-link text-white" href="<?= e(route('tenant.laundry-order-pricing.index')) ?>"><i class="fa-solid fa-sliders me-2"></i>Order Pricing</a>
-                        <a class="nav-link text-white" href="<?= e(route('tenant.attendance.index')) ?>"><i class="fa-solid fa-user-clock me-2"></i>Attendance</a>
+                        <a class="nav-link text-white" href="<?= e(route('tenant.attendance.index')) ?>"><i class="fa-solid fa-user-clock me-2"></i>Attendance<?= $premiumNavBadge(true) ?></a>
                         <a class="nav-link text-white" href="<?= e(route('tenant.payroll.index')) ?>"><i class="fa-solid fa-money-check-dollar me-2"></i>Payroll<?= $premiumNavBadge(true) ?></a>
-                        <a class="nav-link text-white" href="<?= e(route('tenant.redeem-config.index')) ?>"><i class="fa-solid fa-gift me-2"></i>Rewards<?= $premiumNavBadge(true) ?></a>
                     <?php endif; ?>
                     <?php if (user_can_module('expenses')): ?>
                         <a class="nav-link text-white" href="<?= e(url('/tenant/expenses')) ?>"><i class="fa-solid fa-money-bill-wave me-2"></i>Expenses<?= $premiumNavBadge(true) ?></a>
@@ -333,7 +359,7 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                         <a class="nav-link text-white" href="<?= e(url('/tenant/staff')) ?>"><i class="fa-solid fa-users me-2"></i>Staff</a>
                         <a class="nav-link text-white" href="<?= e(route('tenant.receipt-settings.edit')) ?>"><i class="fa-solid fa-file-lines me-2"></i>Receipt Config<?= $premiumNavBadge(true) ?></a>
                         <?php if ($currentBranchIsMain): ?>
-                            <a class="nav-link text-white" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch me-2"></i>Branch Config</a>
+                            <a class="nav-link text-white" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch me-2"></i>Branches</a>
                         <?php endif; ?>
                     <?php endif; ?>
                     <?php endif; ?>
@@ -554,7 +580,7 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
         <div class="app-top-toolbar d-flex justify-content-between align-items-center mb-2">
             <div class="d-flex align-items-center gap-2 toolbar-left-group">
             <div class="mobile-sidebar-toggle">
-                <button class="btn btn-dark btn-sm toolbar-btn" type="button" data-bs-toggle="offcanvas" data-bs-target="#appSidebarMobile" aria-controls="appSidebarMobile">
+                <button class="btn btn-dark btn-sm toolbar-btn" type="button" id="appSidebarToggleBtnMobile" aria-controls="appSidebarMobile" aria-expanded="false" title="Open menu">
                     <i class="fa-solid fa-bars"></i>
                 </button>
             </div>
@@ -599,14 +625,18 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                                 <form method="POST" action="<?= e(route('dashboard.time-in')) ?>" class="m-0 js-top-attendance-photo-form">
                                     <?= csrf_field() ?>
                                     <input type="hidden" name="photo_data" value="">
-                                    <button type="button" class="btn btn-success btn-sm px-2 py-1 toolbar-btn js-top-attendance-photo-trigger"><i class="fa-solid fa-right-to-bracket"></i></button>
+                                    <button type="button" class="btn btn-success btn-sm px-2 py-1 toolbar-btn toolbar-attendance-in-btn js-top-attendance-photo-trigger" title="Time in" aria-label="Time in">
+                                        <i class="fa-solid fa-user-clock"></i>
+                                    </button>
                                     <button type="submit" class="d-none js-top-attendance-hidden-submit" aria-hidden="true"></button>
                                 </form>
                             <?php else: ?>
                                 <form method="POST" action="<?= e(route('dashboard.time-out')) ?>" class="m-0 js-top-attendance-photo-form">
                                     <?= csrf_field() ?>
                                     <input type="hidden" name="photo_data" value="">
-                                    <button type="button" class="btn btn-danger btn-sm px-2 py-1 toolbar-btn js-top-attendance-photo-trigger"><i class="fa-solid fa-right-from-bracket"></i></button>
+                                    <button type="button" class="btn btn-danger btn-sm px-2 py-1 toolbar-btn toolbar-attendance-out-btn js-top-attendance-photo-trigger" title="Time out" aria-label="Time out">
+                                        <i class="fa-solid fa-user-xmark"></i>
+                                    </button>
                                     <button type="submit" class="d-none js-top-attendance-hidden-submit" aria-hidden="true"></button>
                                 </form>
                             <?php endif; ?>
@@ -635,7 +665,7 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
             <div class="modern-page-note">Manage and monitor your laundry operations.</div>
         </div>
         <?php require dirname(__DIR__).'/partials/alerts.php'; ?>
-        <div class="app-content-area flex-grow-1 min-h-0 min-w-0 overflow-auto"><?= $content ?? '' ?></div>
+        <div class="app-content-area flex-grow-1 min-h-0 min-w-0 overflow-y-auto"><?= $content ?? '' ?></div>
         <?php
         $footerCreditClass = 'text-muted mt-auto pt-3 border-top';
         require dirname(__DIR__).'/partials/footer_credit.php';
@@ -698,6 +728,87 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
             select.addEventListener('change', handleBranchSelection);
             if ($select) {
                 $select.on('change', handleBranchSelection);
+            }
+        })();
+        </script>
+        <script>
+        (() => {
+            const STORAGE_KEY = 'appDesktopSidebarCollapsed';
+            const DESKTOP_QUERY = '(min-width: 768px)';
+            const body = document.body;
+            const desktopToggleBtn = document.getElementById('appSidebarToggleBtnDesktop');
+            const mobileToggleBtn = document.getElementById('appSidebarToggleBtnMobile');
+            const mobileSidebar = document.getElementById('appSidebarMobile');
+            if (!body) return;
+
+            const media = window.matchMedia(DESKTOP_QUERY);
+            const isDesktop = () => media.matches;
+            const applyButtonState = () => {
+                const collapsed = body.classList.contains('sidebar-collapsed');
+                if (desktopToggleBtn) {
+                    desktopToggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+                    desktopToggleBtn.setAttribute('title', collapsed ? 'Open sidebar' : 'Close sidebar');
+                }
+            };
+            const loadDesktopState = () => {
+                try {
+                    const saved = window.localStorage.getItem(STORAGE_KEY);
+                    body.classList.toggle('sidebar-collapsed', saved === '1');
+                } catch (_) {
+                    body.classList.remove('sidebar-collapsed');
+                }
+                applyButtonState();
+            };
+            const saveDesktopState = () => {
+                try {
+                    window.localStorage.setItem(STORAGE_KEY, body.classList.contains('sidebar-collapsed') ? '1' : '0');
+                } catch (_) {
+                }
+            };
+            const syncDesktopSidebarLabels = () => {
+                document.querySelectorAll('.desktop-sidebar .nav-link').forEach((link) => {
+                    const labelText = String(link.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (labelText !== '') {
+                        link.setAttribute('data-label', labelText);
+                    }
+                });
+            };
+
+            const syncByViewport = () => {
+                if (!isDesktop()) {
+                    body.classList.remove('sidebar-collapsed');
+                    if (mobileToggleBtn) {
+                        mobileToggleBtn.setAttribute('aria-expanded', 'false');
+                        mobileToggleBtn.setAttribute('title', 'Open menu');
+                    }
+                    document.documentElement.classList.remove('preload-sidebar-collapsed');
+                    return;
+                }
+                loadDesktopState();
+                document.documentElement.classList.remove('preload-sidebar-collapsed');
+            };
+
+            desktopToggleBtn?.addEventListener('click', () => {
+                if (isDesktop()) {
+                    body.classList.toggle('sidebar-collapsed');
+                    saveDesktopState();
+                    applyButtonState();
+                }
+            });
+
+            mobileToggleBtn?.addEventListener('click', () => {
+                if (mobileSidebar && typeof bootstrap !== 'undefined' && bootstrap.Offcanvas) {
+                    const instance = bootstrap.Offcanvas.getOrCreateInstance(mobileSidebar);
+                    instance.toggle();
+                }
+            });
+
+            syncDesktopSidebarLabels();
+            syncByViewport();
+            if (typeof media.addEventListener === 'function') {
+                media.addEventListener('change', syncByViewport);
+            } else if (typeof media.addListener === 'function') {
+                media.addListener(syncByViewport);
             }
         })();
         </script>

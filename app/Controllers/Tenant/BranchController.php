@@ -71,16 +71,35 @@ final class BranchController
         $isMainBranchContext = (bool) ($activeTenant['is_main_branch'] ?? false);
         $root = $svc->getTenant($svc->getGroupRootTenantId($tenantId));
         $branches = $svc->listBranches($tenantId);
+        $premiumTrialBrowseLock = Auth::isTenantFreePlanRestricted($u);
+        $enableBluetoothPrint = $premiumTrialBrowseLock
+            ? false
+            : $this->getBoolConfig($tenantId, 'enable_bluetooth_print', false);
+        if ($premiumTrialBrowseLock) {
+            try {
+                $pdo = App::db();
+                LaundrySchema::ensure($pdo);
+                if ($this->hasLaundryBranchConfigColumn($pdo, 'enable_bluetooth_print')) {
+                    $pdo->prepare(
+                        'UPDATE laundry_branch_configs
+                         SET enable_bluetooth_print = 0, updated_at = NOW()
+                         WHERE tenant_id = ?'
+                    )->execute([$tenantId]);
+                }
+            } catch (\Throwable) {
+            }
+        }
 
-        return view_page('Branch Management', 'tenant.branches.index', [
+        return view_page('Branches', 'tenant.branches.index', [
             'root_tenant' => $root,
             'current_tenant_id' => $tenantId,
             'branches' => $branches,
             'branch_limit' => $svc->getBranchLimit($tenantId),
             'clone_defaults' => [],
-            'premium_trial_browse_lock' => false,
+            'premium_trial_browse_lock' => $premiumTrialBrowseLock,
             'machine_assignment_enabled' => $this->isMachineAssignmentEnabled($tenantId),
-            'laundry_status_tracking_enabled' => $this->getBoolConfig($tenantId, 'laundry_status_tracking_enabled', true),
+            'laundry_status_tracking_enabled' => $this->getBoolConfig($tenantId, 'laundry_status_tracking_enabled', false),
+            'enable_bluetooth_print' => $enableBluetoothPrint,
             'fold_service_amount' => $this->getFoldServiceAmount($tenantId),
             'fold_commission_target' => $this->getFoldCommissionTarget($tenantId),
             'payroll_cutoff_days' => $this->getPayrollCutoffDays($tenantId),
@@ -195,18 +214,57 @@ final class BranchController
         if ($activeTenantId > 0) {
             $tenantId = $activeTenantId;
         }
-        $enabled = $request->boolean('machine_assignment_enabled');
-        $laundryStatusTrackingEnabled = $request->boolean('laundry_status_tracking_enabled');
+        $rawMachineAssignInput = $request->input('machine_assignment_enabled', null);
+        if ($rawMachineAssignInput === null || $rawMachineAssignInput === '') {
+            $enabled = $this->isMachineAssignmentEnabled($tenantId);
+        } else {
+            $enabled = $request->boolean('machine_assignment_enabled');
+        }
+        $rawLaundryStatusInput = $request->input('laundry_status_tracking_enabled', null);
+        if ($rawLaundryStatusInput === null || $rawLaundryStatusInput === '') {
+            $laundryStatusTrackingEnabled = $this->getBoolConfig($tenantId, 'laundry_status_tracking_enabled', false);
+        } else {
+            $laundryStatusTrackingEnabled = $request->boolean('laundry_status_tracking_enabled');
+        }
         $foldServiceAmount = max(0.0, (float) $request->input('fold_service_amount', 0));
-        $foldCommissionTarget = strtolower(trim((string) $request->input('fold_commission_target', 'staff')));
-        $payrollCutoffDays = max(1, min(31, (int) $request->input('payroll_cutoff_days', 15)));
-        $payrollHoursPerDay = max(1.0, min(24.0, (float) $request->input('payroll_hours_per_day', 8)));
-        $activateCommission = $request->boolean('activate_commission');
+        $foldCommissionTarget = strtolower(trim((string) $request->input('fold_commission_target', 'branch')));
+        $rawPayrollCutoffInput = $request->input('payroll_cutoff_days', null);
+        if ($rawPayrollCutoffInput === null || $rawPayrollCutoffInput === '') {
+            $payrollCutoffDays = max(1, min(31, (int) $this->getScalarConfig($tenantId, 'payroll_cutoff_days', 15)));
+        } else {
+            $payrollCutoffDays = max(1, min(31, (int) $request->input('payroll_cutoff_days', 15)));
+        }
+        $rawPayrollHoursInput = $request->input('payroll_hours_per_day', null);
+        if ($rawPayrollHoursInput === null || $rawPayrollHoursInput === '') {
+            $payrollHoursPerDay = max(1.0, min(24.0, (float) $this->getScalarConfig($tenantId, 'payroll_hours_per_day', 8)));
+        } else {
+            $payrollHoursPerDay = max(1.0, min(24.0, (float) $request->input('payroll_hours_per_day', 8)));
+        }
+        $rawActivateCommissionInput = $request->input('activate_commission', null);
+        if ($rawActivateCommissionInput === null || $rawActivateCommissionInput === '') {
+            $activateCommission = $this->getBoolConfig($tenantId, 'activate_commission', false);
+        } else {
+            $activateCommission = $request->boolean('activate_commission');
+        }
         $dailyLoadQuota = max(0, (int) $request->input('daily_load_quota', 0));
         $commissionRatePerLoad = max(0.0, (float) $request->input('commission_rate_per_load', 0));
-        $activateOtIncentives = $request->boolean('activate_ot_incentives');
+        $rawActivateOtInput = $request->input('activate_ot_incentives', null);
+        if ($rawActivateOtInput === null || $rawActivateOtInput === '') {
+            $activateOtIncentives = $this->getBoolConfig($tenantId, 'activate_ot_incentives', false);
+        } else {
+            $activateOtIncentives = $request->boolean('activate_ot_incentives');
+        }
+        $rawBluetoothInput = $request->input('enable_bluetooth_print', null);
+        if ($rawBluetoothInput === null || $rawBluetoothInput === '') {
+            $enableBluetoothPrint = $this->getBoolConfig($tenantId, 'enable_bluetooth_print', false);
+        } else {
+            $enableBluetoothPrint = $request->boolean('enable_bluetooth_print');
+        }
+        if (Auth::isTenantFreePlanRestricted($u)) {
+            $enableBluetoothPrint = false;
+        }
         if (! in_array($foldCommissionTarget, ['staff', 'branch'], true)) {
-            $foldCommissionTarget = 'staff';
+            $foldCommissionTarget = 'branch';
         }
         try {
             $pdo = App::db();
@@ -220,6 +278,7 @@ final class BranchController
             $hasDailyQuota = $this->hasLaundryBranchConfigColumn($pdo, 'daily_load_quota');
             $hasCommissionRate = $this->hasLaundryBranchConfigColumn($pdo, 'commission_rate_per_load');
             $hasActivateOt = $this->hasLaundryBranchConfigColumn($pdo, 'activate_ot_incentives');
+            $hasEnableBluetoothPrint = $this->hasLaundryBranchConfigColumn($pdo, 'enable_bluetooth_print');
             $hasLaundryStatusTracking = $this->hasLaundryBranchConfigColumn($pdo, 'laundry_status_tracking_enabled');
             $insertColumns = ['tenant_id', 'machine_assignment_enabled'];
             $insertValues = ['?', '?'];
@@ -279,6 +338,12 @@ final class BranchController
                 $updateParts[] = 'activate_ot_incentives = VALUES(activate_ot_incentives)';
                 $params[] = $activateOtIncentives ? 1 : 0;
             }
+            if ($hasEnableBluetoothPrint) {
+                $insertColumns[] = 'enable_bluetooth_print';
+                $insertValues[] = '?';
+                $updateParts[] = 'enable_bluetooth_print = VALUES(enable_bluetooth_print)';
+                $params[] = $enableBluetoothPrint ? 1 : 0;
+            }
             $sql = sprintf(
                 'INSERT INTO laundry_branch_configs (%s, created_at, updated_at)
                  VALUES (%s, NOW(), NOW())
@@ -301,8 +366,9 @@ final class BranchController
                 'daily_load_quota' => $dailyLoadQuota,
                 'commission_rate_per_load' => $commissionRatePerLoad,
                 'activate_ot_incentives' => $activateOtIncentives,
+                'enable_bluetooth_print' => $enableBluetoothPrint,
             ]);
-            if (! $hasFoldAmount || ! $hasFoldTarget || ! $hasCutoffDays || ! $hasHoursPerDay || ! $hasActivateCommission || ! $hasDailyQuota || ! $hasCommissionRate || ! $hasActivateOt) {
+            if (! $hasFoldAmount || ! $hasFoldTarget || ! $hasCutoffDays || ! $hasHoursPerDay || ! $hasActivateCommission || ! $hasDailyQuota || ! $hasCommissionRate || ! $hasActivateOt || ! $hasEnableBluetoothPrint) {
                 session_flash('errors', ['Branch config was partially updated, but some payroll/commission columns are missing in DB. Run latest migrations/export schema to fully enable all settings.']);
             } else {
                 session_flash('status', 'Branch laundry config updated.');
@@ -366,7 +432,7 @@ final class BranchController
     private function isMachineAssignmentEnabled(int $tenantId): bool
     {
         if ($tenantId < 1) {
-            return true;
+            return false;
         }
         try {
             $pdo = App::db();
@@ -375,12 +441,12 @@ final class BranchController
             $st->execute([$tenantId]);
             $row = $st->fetch(\PDO::FETCH_ASSOC);
             if (! is_array($row)) {
-                return true;
+                return false;
             }
 
-            return (int) ($row['machine_assignment_enabled'] ?? 1) === 1;
+            return (int) ($row['machine_assignment_enabled'] ?? 0) === 1;
         } catch (\Throwable) {
-            return true;
+            return false;
         }
     }
 
@@ -416,7 +482,7 @@ final class BranchController
             $st = $pdo->prepare('SELECT fold_commission_target FROM laundry_branch_configs WHERE tenant_id = ? LIMIT 1');
             $st->execute([$tenantId]);
             $row = $st->fetch(\PDO::FETCH_ASSOC);
-            $v = strtolower(trim((string) ($row['fold_commission_target'] ?? 'staff')));
+            $v = strtolower(trim((string) ($row['fold_commission_target'] ?? 'branch')));
 
             return in_array($v, ['staff', 'branch'], true) ? $v : 'staff';
         } catch (\Throwable) {
@@ -468,7 +534,7 @@ final class BranchController
         }
         if (! $this->hasLaundryBranchConfigColumn($pdo, 'fold_commission_target')) {
             try {
-                $pdo->exec('ALTER TABLE laundry_branch_configs ADD COLUMN fold_commission_target VARCHAR(20) NOT NULL DEFAULT "staff" AFTER fold_service_amount');
+                $pdo->exec('ALTER TABLE laundry_branch_configs ADD COLUMN fold_commission_target VARCHAR(20) NOT NULL DEFAULT "branch" AFTER fold_service_amount');
             } catch (\Throwable) {
             }
         }
@@ -490,6 +556,7 @@ final class BranchController
             'daily_load_quota' => 'ALTER TABLE laundry_branch_configs ADD COLUMN daily_load_quota INT NOT NULL DEFAULT 0 AFTER activate_commission',
             'commission_rate_per_load' => 'ALTER TABLE laundry_branch_configs ADD COLUMN commission_rate_per_load DECIMAL(16,4) NOT NULL DEFAULT 0 AFTER daily_load_quota',
             'activate_ot_incentives' => 'ALTER TABLE laundry_branch_configs ADD COLUMN activate_ot_incentives TINYINT(1) NOT NULL DEFAULT 0 AFTER commission_rate_per_load',
+            'enable_bluetooth_print' => 'ALTER TABLE laundry_branch_configs ADD COLUMN enable_bluetooth_print TINYINT(1) NOT NULL DEFAULT 0',
         ] as $column => $sql) {
             if (! $this->hasLaundryBranchConfigColumn($pdo, $column)) {
                 try {
@@ -538,9 +605,20 @@ final class BranchController
 
     private function hasLaundryBranchConfigColumn(\PDO $pdo, string $column): bool
     {
+        if (! preg_match('/^[a-z_]+$/', $column)) {
+            return false;
+        }
         try {
-            $st = $pdo->query("SHOW COLUMNS FROM `laundry_branch_configs` LIKE '{$column}'");
-            return $st !== false && $st->fetch(\PDO::FETCH_ASSOC) !== false;
+            $st = $pdo->prepare(
+                'SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = \'laundry_branch_configs\'
+                   AND COLUMN_NAME = ?
+                 LIMIT 1'
+            );
+            $st->execute([$column]);
+
+            return $st->fetchColumn() !== false;
         } catch (\Throwable) {
             return false;
         }

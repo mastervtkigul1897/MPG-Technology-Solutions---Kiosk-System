@@ -1,3 +1,12 @@
+<?php
+$attendanceLocked = ! empty($attendance_locked) || ! empty($premium_trial_browse_lock);
+?>
+<?php if ($attendanceLocked): ?>
+    <div class="alert alert-warning small py-2">
+        Attendance is Premium-only after the 7-day trial. You can view records, but editing and OT approval are disabled.
+    </div>
+<?php endif; ?>
+
 <div class="card mb-3">
     <div class="card-body">
         <h6 class="mb-2">Attendance</h6>
@@ -87,14 +96,19 @@
                         <button type="button" class="btn btn-sm btn-outline-primary js-attendance-edit"
                             data-action="<?= e(route('tenant.attendance.update', ['id' => $rid])) ?>"
                             data-in="<?= e((string) ($row['time_in'] ?? '')) ?>"
-                            data-out="<?= e((string) ($row['time_out'] ?? '')) ?>">
+                            data-out="<?= e((string) ($row['time_out'] ?? '')) ?>"
+                            <?= $attendanceLocked ? 'disabled' : '' ?>>
                             Edit
                         </button>
                         <?php if ((string) ($row['overtime_status'] ?? '') === 'pending'): ?>
-                            <form method="POST" action="<?= e(route('tenant.attendance.approve-ot', ['id' => $rid])) ?>" class="d-inline">
-                                <?= csrf_field() ?>
-                                <button class="btn btn-sm btn-outline-success">Approve OT</button>
-                            </form>
+                            <?php if ($attendanceLocked): ?>
+                                <button type="button" class="btn btn-sm btn-outline-success" disabled>Approve OT</button>
+                            <?php else: ?>
+                                <form method="POST" action="<?= e(route('tenant.attendance.approve-ot', ['id' => $rid])) ?>" class="d-inline">
+                                    <?= csrf_field() ?>
+                                    <button class="btn btn-sm btn-outline-success">Approve OT</button>
+                                </form>
+                            <?php endif; ?>
                         <?php endif; ?>
                     </td>
                 </tr>
@@ -128,7 +142,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button class="btn btn-primary">Save override</button>
+                <button class="btn btn-primary" <?= $attendanceLocked ? 'disabled' : '' ?>>Save override</button>
             </div>
         </form>
     </div>

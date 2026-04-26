@@ -145,6 +145,10 @@ final class TenantBackupService
         if (! is_string($compressed) || $compressed === '') {
             throw new RuntimeException('Backup file is unreadable.');
         }
+        $expectedChecksum = strtolower(trim((string) ($backup['checksum_sha256'] ?? '')));
+        if ($expectedChecksum !== '' && hash('sha256', $compressed) !== $expectedChecksum) {
+            throw new RuntimeException('Backup integrity check failed (checksum mismatch).');
+        }
         $decoded = gzdecode($compressed);
         if (! is_string($decoded) || $decoded === '') {
             throw new RuntimeException('Backup file is invalid.');
@@ -161,6 +165,9 @@ final class TenantBackupService
                 $trim = trim($sql);
                 if ($trim === '') {
                     continue;
+                }
+                if (! $this->isSafeRestoreStatement($trim, $tenantId)) {
+                    throw new RuntimeException('Backup file contains unsafe restore statement.');
                 }
                 $this->pdo->exec($trim);
             }
@@ -700,5 +707,37 @@ final class TenantBackupService
         }
 
         return $out;
+    }
+
+    private function isSafeRestoreStatement(string $sql, int $tenantId): bool
+    {
+        $stmt = trim($sql);
+        if ($stmt === '') {
+            return true;
+        }
+        $upper = strtoupper($stmt);
+        foreach ([' DROP ', ' TRUNCATE ', ' ALTER ', ' CREATE ', ' GRANT ', ' REVOKE ', ' INTO OUTFILE ', ' LOAD DATA ', ' USE '] as $needle) {
+            if (str_contains(' '.$upper.' ', $needle)) {
+                return false;
+            }
+        }
+        if (preg_match('/^SET\s+TIME_ZONE\s*=.+;?$/i', $stmt) === 1) {
+            return true;
+        }
+        if (preg_match('/^SET\s+FOREIGN_KEY_CHECKS\s*=\s*[01]\s*;?$/i', $stmt) === 1) {
+            return true;
+        }
+        if (preg_match('/^DELETE\s+FROM\s+`([a-z0-9_]+)`\s+WHERE\s+`tenant_id`\s*=\s*(\d+)\s*;?$/i', $stmt, $m) === 1) {
+            return in_array((string) $m[1], self::DELETE_ORDER, true) && (int) ($m[2] ?? 0) === $tenantId;
+        }
+        if (preg_match('/^INSERT\s+INTO\s+`([a-z0-9_]+)`\s+/i', $stmt, $m) === 1) {
+            $table = (string) ($m[1] ?? '');
+            if ($table === 'tenants') {
+                return str_contains($upper, 'ON DUPLICATE KEY UPDATE');
+            }
+            return in_array($table, self::BACKUP_TABLES, true);
+        }
+
+        return false;
     }
 }
