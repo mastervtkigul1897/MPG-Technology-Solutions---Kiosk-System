@@ -115,6 +115,10 @@ $showInLabels = [
                                 <input class="form-check-input" type="checkbox" name="show_addon_supplies" value="1" id="new_show_addon" checked>
                                 <label class="form-check-label" for="new_show_addon">Show add-on supplies (extra charged qty)</label>
                             </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="include_in_rewards" value="1" id="new_include_in_rewards" checked>
+                                <label class="form-check-label" for="new_include_in_rewards">Add to rewards</label>
+                            </div>
                             <div class="form-check d-none" id="new_required_weight_wrap">
                                 <input class="form-check-input" type="checkbox" name="required_weight" value="1" id="new_required_weight">
                                 <label class="form-check-label" for="new_required_weight">Calculate Price Per Weight</label>
@@ -158,6 +162,7 @@ $showInLabels = [
                     <th class="text-end">Fold Staff Share</th>
                     <th>Active</th>
                     <th>Add-ons</th>
+                    <th>Add to rewards</th>
                     <th class="text-end">Actions</th>
                 </tr>
                 </thead>
@@ -186,6 +191,7 @@ $showInLabels = [
                         <td class="text-end"><?= $isFoldRow ? e(number_format((float) ($r['fold_staff_share_amount'] ?? 10), 2)) : 'N/A' ?></td>
                         <td><?= ! empty($r['is_active']) ? 'Yes' : 'No' ?></td>
                         <td><?= ! empty($r['show_addon_supplies']) ? 'Yes' : 'No' ?></td>
+                        <td><?= ! empty($r['include_in_rewards']) ? 'Yes' : 'No' ?></td>
                         <td class="text-end">
                             <div class="d-inline-flex gap-1">
                                 <button
@@ -208,6 +214,7 @@ $showInLabels = [
                                     data-is-active="<?= ! empty($r['is_active']) ? '1' : '0' ?>"
                                     data-show-addon-supplies="<?= ! empty($r['show_addon_supplies']) ? '1' : '0' ?>"
                                     data-required-weight="<?= ! empty($r['required_weight']) ? '1' : '0' ?>"
+                                    data-include-in-rewards="<?= ! empty($r['include_in_rewards']) ? '1' : '0' ?>"
                                 >
                                     Edit
                                 </button>
@@ -323,6 +330,10 @@ $showInLabels = [
                                 <input class="form-check-input" type="checkbox" name="show_addon_supplies" value="1" id="edit_show_addon">
                                 <label class="form-check-label" for="edit_show_addon">Show add-on supplies (extra charged qty)</label>
                             </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="include_in_rewards" value="1" id="edit_include_in_rewards">
+                                <label class="form-check-label" for="edit_include_in_rewards">Add to rewards</label>
+                            </div>
                             <div class="form-check d-none" id="edit_required_weight_wrap">
                                 <input class="form-check-input" type="checkbox" name="required_weight" value="1" id="edit_required_weight">
                                 <label class="form-check-label" for="edit_required_weight">Calculate Price Per Weight</label>
@@ -343,6 +354,7 @@ $showInLabels = [
 (function () {
     const kind = document.getElementById('new_ot_kind');
     const addon = document.getElementById('new_show_addon');
+    const newIncludeInRewards = document.getElementById('new_include_in_rewards');
     const requiredWeight = document.getElementById('new_required_weight');
     const requiredWeightWrap = document.getElementById('new_required_weight_wrap');
     const newDetergentQty = document.getElementById('new_detergent_qty');
@@ -408,16 +420,22 @@ $showInLabels = [
         const v = kind.value;
         if (v === 'full_service') {
             addon.checked = true;
+            if (newIncludeInRewards) newIncludeInRewards.checked = true;
         } else if (v === 'wash_only') {
             addon.checked = true;
+            if (newIncludeInRewards) newIncludeInRewards.checked = false;
         } else if (v === 'dry_only') {
             addon.checked = false;
+            if (newIncludeInRewards) newIncludeInRewards.checked = false;
         } else if (v === 'rinse_only') {
             addon.checked = false;
+            if (newIncludeInRewards) newIncludeInRewards.checked = false;
         } else if (v === 'dry_cleaning' || v === 'fold_only') {
             addon.checked = false;
+            if (newIncludeInRewards) newIncludeInRewards.checked = false;
         } else if (v === 'other') {
             addon.checked = false;
+            if (newIncludeInRewards) newIncludeInRewards.checked = false;
         }
         const isNoWeightKind = v === 'dry_cleaning' || v === 'fold_only';
         const hideFoldFields = v !== 'fold_only';
@@ -534,6 +552,7 @@ $showInLabels = [
             setChecked('edit_is_active', 'data-is-active');
             setChecked('edit_show_addon', 'data-show-addon-supplies');
             setChecked('edit_required_weight', 'data-required-weight');
+            setChecked('edit_include_in_rewards', 'data-include-in-rewards');
             syncEditDefaults();
             editModal?.show();
         });

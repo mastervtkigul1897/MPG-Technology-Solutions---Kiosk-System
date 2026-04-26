@@ -254,7 +254,7 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                 <?php else: ?>
                 <?php if (user_can_module('pos')): ?>
                     <a class="nav-link text-white <?= route_is('tenant.staff-portal.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.staff-portal.index')) ?>"><i class="fa-solid fa-table-cells-large"></i><span>Staff Kiosk Portal</span></a>
-                    <a class="nav-link text-white <?= route_is('tenant.laundry-sales.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.laundry-sales.index')) ?>"><i class="fa-solid fa-soap"></i><span>Loads Status</span></a>
+                    <a class="nav-link text-white <?= route_is('tenant.laundry-sales.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.laundry-sales.index')) ?>"><i class="fa-solid fa-soap"></i><span>Transactions</span></a>
                     <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
                         <a class="nav-link text-white <?= route_is('tenant.laundry-order-pricing.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.laundry-order-pricing.index')) ?>"><i class="fa-solid fa-sliders"></i><span>Order Pricing</span></a>
                         <?php if (user_can_module('ingredients')): ?>
@@ -323,7 +323,7 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                     <?php else: ?>
                     <?php if (user_can_module('pos')): ?>
                         <a class="nav-link text-white" href="<?= e(route('tenant.staff-portal.index')) ?>"><i class="fa-solid fa-table-cells-large me-2"></i>Staff Kiosk Portal</a>
-                        <a class="nav-link text-white" href="<?= e(route('tenant.laundry-sales.index')) ?>"><i class="fa-solid fa-soap me-2"></i>Loads Status</a>
+                        <a class="nav-link text-white" href="<?= e(route('tenant.laundry-sales.index')) ?>"><i class="fa-solid fa-soap me-2"></i>Transactions</a>
                         <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
                             <a class="nav-link text-white" href="<?= e(route('tenant.laundry-order-pricing.index')) ?>"><i class="fa-solid fa-sliders me-2"></i>Order Pricing</a>
                             <?php if (user_can_module('ingredients')): ?>

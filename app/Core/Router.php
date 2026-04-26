@@ -363,10 +363,12 @@ final class Router
         $r(['GET'], '#^/tenant/staff-portal$#', LaundryController::class.'::staffPortalIndex', 'tenant.staff-portal.index', ['auth', 'tenant.active', 'tenant.subscription', 'tenant.access:pos']);
         $r(['POST'], '#^/tenant/laundry-sales$#', LaundryController::class.'::salesStore', 'tenant.laundry-sales.store', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/laundry-sales/bluetooth-printing$#', LaundryController::class.'::updateBluetoothPrintPreference', 'tenant.laundry-sales.bluetooth-printing', array_merge($ta, ['tenant.access:pos']));
+        $r(['POST'], '#^/tenant/laundry-sales/track-gasul$#', LaundryController::class.'::updateTrackGasulUsagePreference', 'tenant.laundry-sales.track-gasul', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/laundry-sales/customers$#', LaundryController::class.'::customersStoreFromKiosk', 'tenant.laundry-sales.customers.store', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/laundry-sales/(\d+)/advance$#', LaundryController::class.'::advanceTransactionStatus', 'tenant.laundry-sales.advance', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/laundry-sales/(\d+)/complete$#', LaundryController::class.'::completeTransaction', 'tenant.laundry-sales.complete', array_merge($ta, ['tenant.access:pos']));
         $r(['POST'], '#^/tenant/laundry-sales/(\d+)/pay$#', LaundryController::class.'::payTransaction', 'tenant.laundry-sales.pay', array_merge($ta, ['tenant.access:pos']));
+        $r(['POST'], '#^/tenant/laundry-sales/(\d+)/date$#', LaundryController::class.'::updateTransactionOrderDate', 'tenant.laundry-sales.date.update', $tenantAdmin);
         $r(['POST'], '#^/tenant/laundry-sales/(\d+)/void$#', LaundryController::class.'::voidTransaction', 'tenant.laundry-sales.void', $tenantAdmin);
         $r(['GET'], '#^/tenant/laundry-sales/(\d+)/detail$#', LaundryController::class.'::salesOrderDetail', 'tenant.laundry-sales.detail', array_merge($ta, ['tenant.access:pos']));
         $r(['GET'], '#^/tenant/laundry-inventory$#', LaundryController::class.'::inventoryIndex', 'tenant.laundry-inventory.index', array_merge($ta, ['tenant.access:ingredients']));

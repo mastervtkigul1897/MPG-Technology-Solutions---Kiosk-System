@@ -12,6 +12,8 @@ $rewardThreshold = $rewardConfig !== null ? max(1.0, (float) ($rewardConfig['min
 $rewardOrderTypeCode = $rewardConfig !== null ? (string) ($rewardConfig['reward_order_type_code'] ?? '') : '';
 $rewardPointsPerDropoffLoad = $rewardConfig !== null ? max(0.0, (float) ($rewardConfig['points_per_dropoff_load'] ?? 1)) : 0.0;
 $enableBluetoothPrint = ! empty($enable_bluetooth_print);
+$trackGasulUsage = ! empty($track_gasul_usage);
+$isTenantAdmin = ((auth_user()['role'] ?? '') === 'tenant_admin');
 $inventoryCardImageSrc = static function (array $item): string {
     $name = trim((string) ($item['name'] ?? 'Item'));
     $path = trim((string) ($item['image_path'] ?? ''));
@@ -316,7 +318,25 @@ $stockQtyLabel = static function (float $qty): string {
     <input type="hidden" name="fabcon_qty" id="kioskAddonFabconQty" value="0">
     <input type="hidden" name="bleach_qty" id="kioskAddonBleachQty" value="0">
     <input type="hidden" name="other_qty" id="kioskAddonOtherQty" value="0">
+    <input type="hidden" name="track_gasul" id="kioskTrackGasul" value="<?= $trackGasulUsage ? '1' : '0' ?>">
     <input type="hidden" name="fold_service_qty" id="kioskFoldServiceQty" value="0">
+
+    <?php if ($isTenantAdmin): ?>
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="small fw-semibold text-secondary text-uppercase mb-2">Kiosk Settings</div>
+                <div class="form-check mb-0">
+                    <input class="form-check-input" type="checkbox" id="kioskTrackGasulToggle" value="1" <?= $trackGasulUsage ? 'checked' : '' ?>>
+                    <label class="form-check-label" for="kioskTrackGasulToggle">
+                        Track Gasul Usage
+                    </label>
+                    <div class="small text-muted mt-1">
+                        ON: show Gasul in Add-on Other items and require selection before saving. OFF: Gasul is optional.
+                    </div>
+                </div>
+            </div>
+        </div>
+    <?php endif; ?>
 
     <div class="small text-muted mb-2">Single-page mode: tap selections below, then submit via Pay Now or Pay Later.</div>
 
@@ -423,6 +443,7 @@ $stockQtyLabel = static function (float $qty): string {
                     >Reward</button>
                 </div>
                 <div class="small text-muted mt-1" id="kioskRewardStatus">Select a saved customer to check reward availability.</div>
+                <div class="small text-muted">Note: Rewards are counted only after the order is paid.</div>
             </div>
         </div>
     </div>
@@ -559,7 +580,8 @@ $stockQtyLabel = static function (float $qty): string {
                     <div class="d-flex flex-wrap gap-2 mb-2" id="kioskAddonOtherCards">
                         <?php foreach (($other_items ?? []) as $item): ?>
                             <?php $showIn = strtolower(trim((string) ($item['show_item_in'] ?? 'both'))); if ($showIn === 'inclusion') { continue; } ?>
-                            <button type="button" class="btn btn-outline-primary kiosk-item-card kiosk-addon-other-btn kiosk-selectable-btn" data-id="<?= (int) ($item['id'] ?? 0) ?>" data-name="<?= e((string) ($item['name'] ?? '')) ?>" data-unit-cost="<?= e((string) (float) ($item['unit_cost'] ?? 0)) ?>" data-stock-qty="<?= e((string) (float) ($item['stock_quantity'] ?? 0)) ?>" data-low-stock-threshold="<?= e((string) (float) ($item['low_stock_threshold'] ?? 0)) ?>">
+                            <?php $isGasul = strtolower(trim((string) ($item['name'] ?? ''))) === 'gasul'; ?>
+                            <button type="button" class="btn btn-outline-primary kiosk-item-card kiosk-addon-other-btn kiosk-selectable-btn" data-id="<?= (int) ($item['id'] ?? 0) ?>" data-name="<?= e((string) ($item['name'] ?? '')) ?>" data-unit-cost="<?= e((string) (float) ($item['unit_cost'] ?? 0)) ?>" data-stock-qty="<?= e((string) (float) ($item['stock_quantity'] ?? 0)) ?>" data-low-stock-threshold="<?= e((string) (float) ($item['low_stock_threshold'] ?? 0)) ?>" data-gasul-item="<?= $isGasul ? '1' : '0' ?>">
                                 <img src="<?= e($inventoryCardImageSrc($item)) ?>" alt="<?= e((string) ($item['name'] ?? 'Other')) ?>" class="rounded border mb-1" style="width:44px;height:44px;object-fit:cover;">
                                 <div class="small fw-semibold"><?= e((string) ($item['name'] ?? '')) ?></div>
                                 <div class="small text-muted">Price: <?= e(format_money((float) ($item['unit_cost'] ?? 0))) ?></div>
@@ -889,6 +911,10 @@ $stockQtyLabel = static function (float $qty): string {
     const addonFabQtyInput = document.getElementById('kioskAddonFabQtyInput');
     const addonBleachQtyInput = document.getElementById('kioskAddonBleachQtyInput');
     const addonOtherQtyInput = document.getElementById('kioskAddonOtherQtyInput');
+    const trackGasulHidden = document.getElementById('kioskTrackGasul');
+    const trackGasulToggle = document.getElementById('kioskTrackGasulToggle');
+    const kioskTrackGasulSettingEnabled = <?= $trackGasulUsage ? 'true' : 'false' ?>;
+    const kioskOwnerCanSetTrackGasul = <?= $isTenantAdmin ? 'true' : 'false' ?>;
     const foldNoBtn = document.getElementById('kioskFoldNoBtn');
     const foldYesBtn = document.getElementById('kioskFoldYesBtn');
     const serviceModeSection = document.getElementById('kioskServiceModeSection');
@@ -1238,6 +1264,12 @@ $stockQtyLabel = static function (float $qty): string {
 
     const selectedOrderTypeEarnsRewards = () => {
         const btn = document.querySelector('.kiosk-order-type-btn.kiosk-card-selected');
+        if (rewardOrderTypeCode) {
+            if (!btn) {
+                return String(orderTypeCode?.value || '').trim() === rewardOrderTypeCode;
+            }
+            return (btn.dataset.code || '').trim() === rewardOrderTypeCode;
+        }
         if (!btn) {
             return String(selectedServiceKind || '') === 'full_service';
         }
@@ -1255,10 +1287,30 @@ $stockQtyLabel = static function (float $qty): string {
         return Math.max(1, parseInt(numberOfLoadsInput?.value || '1', 10) || 1);
     };
 
+    const rewardEligibleLoadsForPreview = () => {
+        if (rewardOrderTypeCode) {
+            if (selfServiceOrderQuantities.size > 0) {
+                const qty = Array.from(selfServiceOrderQuantities.values()).reduce((sum, entry) => {
+                    if ((entry.code || '') !== rewardOrderTypeCode) return sum;
+                    return sum + Math.max(0, Number(entry.qty || 0));
+                }, 0);
+                return qty > 0 ? Math.max(1, qty) : 0;
+            }
+            const selectedCode = String(orderTypeCode?.value || '').trim();
+            if (selectedCode !== rewardOrderTypeCode) {
+                return 0;
+            }
+        } else if (!selectedOrderTypeEarnsRewards()) {
+            return 0;
+        }
+
+        return kioskLoadsForRewardPreview();
+    };
+
     const pendingRewardEarnForPreview = () => {
         if (serviceMode.value === 'free' || serviceMode.value === 'reward') return 0;
-        if (!selectedOrderTypeEarnsRewards()) return 0;
-        const loads = kioskLoadsForRewardPreview();
+        const loads = rewardEligibleLoadsForPreview();
+        if (loads <= 0) return 0;
         const mult = pointsPerDropoffLoad > 0 ? pointsPerDropoffLoad : 1;
         return loads * mult;
     };
@@ -1313,7 +1365,10 @@ $stockQtyLabel = static function (float $qty): string {
                 rewardStatus.textContent = `Reward available (${balance.toFixed(2)} count).`;
             } else {
                 const projected = projectedRewardBalance();
-                rewardStatus.textContent = `No reward available yet (${projected.toFixed(2)} / ${rewardThreshold.toFixed(2)}).`;
+                const hasProjectedGain = projected > balance + 1e-9;
+                rewardStatus.textContent = hasProjectedGain
+                    ? `No reward available yet (current: ${balance.toFixed(2)} / ${rewardThreshold.toFixed(2)}). After this paid order: ${projected.toFixed(2)} / ${rewardThreshold.toFixed(2)}.`
+                    : `No reward available yet (current: ${balance.toFixed(2)} / ${rewardThreshold.toFixed(2)}).`;
             }
         }
         syncSubmitButtonsByMode();
@@ -1652,6 +1707,8 @@ $stockQtyLabel = static function (float $qty): string {
 
     const getCurrentTotals = () => {
         const selfMode = isSelfServiceMode();
+        const rewardMode = serviceMode.value === 'reward';
+        const rewardServiceCode = String(rewardOrderTypeCode || '').trim();
         const stackedLoads = Array.from(selfServiceOrderQuantities.values()).reduce((sum, entry) => {
             return sum + Math.max(0, Number(entry.qty || 0));
         }, 0);
@@ -1674,7 +1731,7 @@ $stockQtyLabel = static function (float $qty): string {
         const addonFabBtn = document.querySelector(`.kiosk-addon-fab-btn[data-id="${addonFabId.value}"]`);
         const addonBleachBtn = document.querySelector(`.kiosk-addon-bleach-btn[data-id="${addonBleachId.value}"]`);
         const addonOtherBtn = document.querySelector(`.kiosk-addon-other-btn[data-id="${addonOtherId.value}"]`);
-        const addOnTotal = (serviceMode.value === 'free' || serviceMode.value === 'reward' || !allowAddonSupplies)
+        const addOnTotal = (serviceMode.value === 'free' || !allowAddonSupplies)
             ? 0
             : (
                 (parseFloat(addonDetQty.value || '0') || 0) * (parseFloat(addonDetBtn?.getAttribute('data-unit-cost') || '0') || 0)
@@ -1691,18 +1748,23 @@ $stockQtyLabel = static function (float $qty): string {
                     Number(entry.basePricePerLoad || entry.pricePerLoad || 0),
                     Number(entry.foldServiceAmount || 0)
                 );
+                if (rewardMode && rewardServiceCode !== '' && String(entry.code || '').trim() === rewardServiceCode) {
+                    return sum;
+                }
                 return sum + (qty * pricePerLoad);
             }, 0)
             : 0;
-        const baseSubtotal = (serviceMode.value === 'free' || serviceMode.value === 'reward')
+        const selectedCode = String(orderTypeCode?.value || '').trim();
+        const selectedIsRewardService = rewardMode && rewardServiceCode !== '' && selectedCode === rewardServiceCode;
+        const baseSubtotal = (serviceMode.value === 'free')
             ? 0
             : (hasStackedLoads
                 ? stackedSubtotal
                 : (selectedRequiredWeight
-                    ? (weightValue * effectivePricePerLoad(orderTypeCode?.value || '', selectedServiceKind, selectedPricePerLoad, selectedFoldServiceAmount))
-                    : (loadsLabel * effectivePricePerLoad(orderTypeCode?.value || '', selectedServiceKind, selectedPricePerLoad, selectedFoldServiceAmount))));
+                    ? (selectedIsRewardService ? 0 : (weightValue * effectivePricePerLoad(orderTypeCode?.value || '', selectedServiceKind, selectedPricePerLoad, selectedFoldServiceAmount)))
+                    : (selectedIsRewardService ? 0 : (loadsLabel * effectivePricePerLoad(orderTypeCode?.value || '', selectedServiceKind, selectedPricePerLoad, selectedFoldServiceAmount)))));
         const allowedWeightKg = selectedMaxWeightKg > 0 ? (selectedMaxWeightKg * loadsLabel) : 0;
-        const excessWeightKg = (selfMode || dropOffHasMultipleOrderTypes() || serviceMode.value === 'free' || serviceMode.value === 'reward' || selectedMaxWeightKg <= 0)
+        const excessWeightKg = (selfMode || dropOffHasMultipleOrderTypes() || serviceMode.value === 'free' || selectedIsRewardService || selectedMaxWeightKg <= 0)
             ? 0
             : Math.max(0, actualWeightValue - allowedWeightKg);
         const excessChargeUnits = excessWeightKg > 0 ? Math.ceil(excessWeightKg) : 0;
@@ -1881,13 +1943,16 @@ $stockQtyLabel = static function (float $qty): string {
                 throw new Error(message);
             }
             const totals = getCurrentTotals();
-            const isFreeOrReward = serviceMode.value === 'free' || serviceMode.value === 'reward';
+            const isFreeOrReward = serviceMode.value === 'free' || (serviceMode.value === 'reward' && totals.totalPrice <= 1e-9);
             const paymentLabel = isFreeOrReward ? 'Paid' : ((paymentTiming?.value || 'pay_later') === 'pay_now' ? 'Paid' : 'Unpaid');
+            const modeLabel = serviceMode.value === 'reward'
+                ? (totals.totalPrice > 1e-9 ? 'REWARDS WITH PAYMENT' : 'REWARD')
+                : ((serviceMode.value || 'regular').toUpperCase());
             const printPayload = {
                 referenceCode: String(data.reference_code || kioskReferenceCode || '').trim(),
                 customerName: selectedCustomerLabel || 'No customer selected',
                 orderType: selectedOrderLabel || 'Order',
-                modeLabel: (serviceMode.value || 'regular').toUpperCase(),
+                modeLabel,
                 paymentLabel,
                 isFreeOrReward,
                 totalPrice: totals.totalPrice,
@@ -1968,27 +2033,29 @@ $stockQtyLabel = static function (float $qty): string {
         const addonFabBtn = document.querySelector(`.kiosk-addon-fab-btn[data-id="${addonFabId.value}"]`);
         const addonBleachBtn = document.querySelector(`.kiosk-addon-bleach-btn[data-id="${addonBleachId.value}"]`);
         const addonOtherBtn = document.querySelector(`.kiosk-addon-other-btn[data-id="${addonOtherId.value}"]`);
-        if (allowAddonSupplies && serviceMode.value !== 'free' && serviceMode.value !== 'reward' && parseFloat(addonDetQty.value) > 0 && addonDetId.value) {
+        if (allowAddonSupplies && serviceMode.value !== 'free' && parseFloat(addonDetQty.value) > 0 && addonDetId.value) {
             const up = parseFloat(addonDetBtn?.getAttribute('data-unit-cost') || '0') || 0;
             addonParts.push(`Detergent: ${addonDetQty.value}× ${addonDetBtn?.getAttribute('data-name') || ''} · Price ${formatPeso(up)}`.trim());
         }
-        if (allowAddonSupplies && serviceMode.value !== 'free' && serviceMode.value !== 'reward' && parseFloat(addonFabQty.value) > 0 && addonFabId.value) {
+        if (allowAddonSupplies && serviceMode.value !== 'free' && parseFloat(addonFabQty.value) > 0 && addonFabId.value) {
             const up = parseFloat(addonFabBtn?.getAttribute('data-unit-cost') || '0') || 0;
             addonParts.push(`Fabcon: ${addonFabQty.value}× ${addonFabBtn?.getAttribute('data-name') || ''} · Price ${formatPeso(up)}`.trim());
         }
-        if (allowAddonSupplies && serviceMode.value !== 'free' && serviceMode.value !== 'reward' && parseFloat(addonBleachQty.value) > 0 && addonBleachId.value) {
+        if (allowAddonSupplies && serviceMode.value !== 'free' && parseFloat(addonBleachQty.value) > 0 && addonBleachId.value) {
             const up = parseFloat(addonBleachBtn?.getAttribute('data-unit-cost') || '0') || 0;
             addonParts.push(`Bleach: ${addonBleachQty.value}× ${addonBleachBtn?.getAttribute('data-name') || ''} · Price ${formatPeso(up)}`.trim());
         }
-        if (allowAddonSupplies && serviceMode.value !== 'free' && serviceMode.value !== 'reward' && parseFloat(addonOtherQty.value) > 0 && addonOtherId.value) {
+        if (allowAddonSupplies && serviceMode.value !== 'free' && parseFloat(addonOtherQty.value) > 0 && addonOtherId.value) {
             const up = parseFloat(addonOtherBtn?.getAttribute('data-unit-cost') || '0') || 0;
             addonParts.push(`Other: ${addonOtherQty.value}× ${addonOtherBtn?.getAttribute('data-name') || ''} · Price ${formatPeso(up)}`.trim());
         }
-        const summaryMode = rewardRedemption?.value === '1' ? 'REWARD (FREE)' : (serviceMode.value || 'regular').toUpperCase();
-        const paymentLabel = (serviceMode.value === 'free' || serviceMode.value === 'reward')
+        const totals = getCurrentTotals();
+        const summaryMode = rewardRedemption?.value === '1'
+            ? (totals.totalPrice > 1e-9 ? 'REWARDS WITH PAYMENT' : 'REWARD')
+            : (serviceMode.value || 'regular').toUpperCase();
+        const paymentLabel = (serviceMode.value === 'free' || (serviceMode.value === 'reward' && totals.totalPrice <= 1e-9))
             ? 'Paid'
             : (paymentTiming?.value === 'pay_now' ? 'Pay Now (Paid)' : 'Pay Later (Unpaid)');
-        const totals = getCurrentTotals();
         const loadsLabel = totals.loadsLabel;
         const weightValue = totals.weightValue;
         const actualWeightValue = totals.actualWeightValue;
@@ -2074,13 +2141,14 @@ $stockQtyLabel = static function (float $qty): string {
         syncRewardMode();
     };
     const syncSubmitButtonsByMode = () => {
-        const isFreeOrReward = serviceMode.value === 'free' || serviceMode.value === 'reward';
-        regularSubmitWrap?.classList.toggle('d-none', isFreeOrReward);
-        freeRewardSubmitWrap?.classList.toggle('d-none', !isFreeOrReward);
-        if (isFreeOrReward && paymentTiming) {
+        const totals = getCurrentTotals();
+        const noPaymentMode = serviceMode.value === 'free' || (serviceMode.value === 'reward' && totals.totalPrice <= 1e-9);
+        regularSubmitWrap?.classList.toggle('d-none', noPaymentMode);
+        freeRewardSubmitWrap?.classList.toggle('d-none', !noPaymentMode);
+        if (noPaymentMode && paymentTiming) {
             paymentTiming.value = 'pay_later';
         }
-        if (isFreeOrReward && paymentMethod) {
+        if (noPaymentMode && paymentMethod) {
             paymentMethod.value = 'pending';
         }
     };
@@ -2139,6 +2207,22 @@ $stockQtyLabel = static function (float $qty): string {
     };
 
     const validateStep = (step) => {
+        const getMissingRequiredSupplies = () => {
+            const missing = [];
+            if (inclusionQtyForKind('det') > 0 && !inclusionDet.value) missing.push('Detergent');
+            if (inclusionQtyForKind('fab') > 0 && !inclusionFab.value) missing.push('Fabcon');
+            if (inclusionQtyForKind('bleach') > 0 && !inclusionBleach.value) missing.push('Bleach');
+            return missing;
+        };
+        const firstMissingSupplyTarget = (missing) => {
+            if (!Array.isArray(missing) || missing.length === 0) {
+                return document.querySelector('.kiosk-supply-det-btn') || document.querySelector('.kiosk-supply-fab-btn') || document.querySelector('.kiosk-supply-bleach-btn');
+            }
+            if (missing.includes('Detergent')) return document.querySelector('.kiosk-supply-det-btn');
+            if (missing.includes('Fabcon')) return document.querySelector('.kiosk-supply-fab-btn');
+            if (missing.includes('Bleach')) return document.querySelector('.kiosk-supply-bleach-btn');
+            return document.querySelector('.kiosk-supply-det-btn') || document.querySelector('.kiosk-supply-fab-btn') || document.querySelector('.kiosk-supply-bleach-btn');
+        };
         if (step === 1 && !orderTypeCode.value) {
             const msg = isSelfServiceMode()
                 ? 'Please tap at least one order type for Self Service.'
@@ -2152,13 +2236,11 @@ $stockQtyLabel = static function (float $qty): string {
         }
         if (isSelfServiceMode()) return true;
         if (step === 2) {
-            const needsDet = inclusionQtyForKind('det') > 0;
-            const needsFab = inclusionQtyForKind('fab') > 0;
-            const needsBleach = inclusionQtyForKind('bleach') > 0;
-            if ((needsDet && !inclusionDet.value) || (needsFab && !inclusionFab.value) || (needsBleach && !inclusionBleach.value)) {
+            const missingSupplies = getMissingRequiredSupplies();
+            if (missingSupplies.length > 0) {
                 warnAndFocus(
-                    'Please select required service supplies.',
-                    document.querySelector('.kiosk-supply-det-btn') || document.querySelector('.kiosk-supply-fab-btn') || document.querySelector('.kiosk-supply-bleach-btn'),
+                    `Please select required service supplies: ${missingSupplies.join(', ')}.`,
+                    firstMissingSupplyTarget(missingSupplies),
                     document.getElementById('kioskSuppliesWrap')
                 );
                 return false;
@@ -2196,13 +2278,18 @@ $stockQtyLabel = static function (float $qty): string {
             warnCustomerRequired();
             return false;
         }
-        const needsDetBeforeSave = inclusionQtyForKind('det') > 0;
-        const needsFabBeforeSave = inclusionQtyForKind('fab') > 0;
-        const needsBleachBeforeSave = inclusionQtyForKind('bleach') > 0;
-        if ((needsDetBeforeSave && !inclusionDet.value) || (needsFabBeforeSave && !inclusionFab.value) || (needsBleachBeforeSave && !inclusionBleach.value)) {
+        const missingSuppliesBeforeSave = [];
+        if (inclusionQtyForKind('det') > 0 && !inclusionDet.value) missingSuppliesBeforeSave.push('Detergent');
+        if (inclusionQtyForKind('fab') > 0 && !inclusionFab.value) missingSuppliesBeforeSave.push('Fabcon');
+        if (inclusionQtyForKind('bleach') > 0 && !inclusionBleach.value) missingSuppliesBeforeSave.push('Bleach');
+        if (missingSuppliesBeforeSave.length > 0) {
+            let firstMissingTarget = document.querySelector('.kiosk-supply-det-btn') || document.querySelector('.kiosk-supply-fab-btn') || document.querySelector('.kiosk-supply-bleach-btn');
+            if (missingSuppliesBeforeSave.includes('Detergent')) firstMissingTarget = document.querySelector('.kiosk-supply-det-btn');
+            else if (missingSuppliesBeforeSave.includes('Fabcon')) firstMissingTarget = document.querySelector('.kiosk-supply-fab-btn');
+            else if (missingSuppliesBeforeSave.includes('Bleach')) firstMissingTarget = document.querySelector('.kiosk-supply-bleach-btn');
             warnAndFocus(
-                'Please select required service supplies before saving.',
-                document.querySelector('.kiosk-supply-det-btn') || document.querySelector('.kiosk-supply-fab-btn') || document.querySelector('.kiosk-supply-bleach-btn'),
+                `Please select required service supplies before saving: ${missingSuppliesBeforeSave.join(', ')}.`,
+                firstMissingTarget,
                 document.getElementById('kioskSuppliesWrap')
             );
             return false;
@@ -2225,6 +2312,31 @@ $stockQtyLabel = static function (float $qty): string {
                     'Actual weight is required for this service because a maximum weight limit is configured.',
                     actualWeightInput || serviceWeightInput,
                     actualWeightWrap || actualWeightInput || serviceWeightInput
+                );
+                return false;
+            }
+        }
+        const trackGasulEnabled = trackGasulToggle
+            ? trackGasulToggle.checked === true
+            : String(trackGasulHidden?.value || '0') === '1';
+        if (trackGasulEnabled) {
+            const gasulBtn = document.querySelector('.kiosk-addon-other-btn[data-gasul-item="1"]');
+            const gasulId = String(gasulBtn?.getAttribute('data-id') || '').trim();
+            const selectedOtherId = String(addonOtherId?.value || '').trim();
+            const selectedOtherQty = Math.max(0, parseFloat(addonOtherQty?.value || '0') || 0);
+            if (!gasulBtn || gasulId === '') {
+                warnAndFocus(
+                    'Gasul item is not configured in Inventory Stocks. Please add Gasul first.',
+                    document.getElementById('kioskTrackGasulToggle'),
+                    document.getElementById('kioskAddonOtherCards')
+                );
+                return false;
+            }
+            if (selectedOtherId !== gasulId || selectedOtherQty <= 0) {
+                warnAndFocus(
+                    'Track Gasul is ON. Please select Gasul in Add-on Other items.',
+                    gasulBtn,
+                    document.getElementById('kioskAddonOtherCards')
                 );
                 return false;
             }
@@ -2409,7 +2521,40 @@ $stockQtyLabel = static function (float $qty): string {
             if (nextQty > 0) {
                 selectedOrderLabel = card.textContent?.trim() || selectedOrderLabel;
                 selectedServiceKind = card.dataset.serviceKind || selectedServiceKind;
+                selectedSupplyBlock = card.dataset.supplyBlock || defaultSupplyBlockForKind(selectedServiceKind);
+                if (selectedSupplyBlock === 'none' && (selectedServiceKind === 'full_service' || selectedServiceKind === 'wash_only' || selectedServiceKind === 'rinse_only')) {
+                    selectedSupplyBlock = defaultSupplyBlockForKind(selectedServiceKind);
+                }
+                selectedDetergentQty = Math.max(0, parseFloat(card.dataset.detergentQty || '0') || 0);
+                selectedFabconQty = Math.max(0, parseFloat(card.dataset.fabconQty || '0') || 0);
+                selectedBleachQty = Math.max(0, parseFloat(card.dataset.bleachQty || '0') || 0);
+                const addonRaw = (card.getAttribute('data-show-addon-supplies') || '').trim();
+                if (addonRaw === '1') {
+                    selectedShowAddonSupplies = true;
+                } else if (addonRaw === '0') {
+                    selectedShowAddonSupplies = false;
+                } else {
+                    selectedShowAddonSupplies = defaultShowAddonForKind(selectedServiceKind);
+                }
+                selectedRequiredWeight = (card.dataset.requiredWeight || '0') === '1' || selectedServiceKind === 'dry_cleaning';
+                selectedFoldServiceAmount = Math.max(0, parseFloat(card.dataset.foldServiceAmount || '0') || 0);
+                selectedPricePerLoad = effectivePricePerLoad(
+                    code,
+                    selectedServiceKind,
+                    parseFloat(card.dataset.pricePerLoad || '0') || 0,
+                    selectedFoldServiceAmount
+                );
+                selectedMaxWeightKg = Math.max(0, parseFloat(card.dataset.maxWeightKg || '0') || 0);
+                selectedExcessWeightFeePerKg = Math.max(0, parseFloat(card.dataset.excessWeightFeePerKg || '0') || 0);
+                if (weightWrap) weightWrap.classList.toggle('d-none', !selectedRequiredWeight);
+                if (serviceWeightInput) {
+                    serviceWeightInput.required = selectedRequiredWeight;
+                    if (!selectedRequiredWeight) serviceWeightInput.value = '';
+                }
+                applyFoldDefaultForOrderType();
             }
+            computeMachineNeed();
+            computeSupplyStep();
             updateSummary();
         });
     });
@@ -2808,13 +2953,94 @@ $stockQtyLabel = static function (float $qty): string {
             }
         }
     }, 'btn-primary', 'btn-outline-primary', false);
+    let trackGasulPrefSaving = false;
+    let trackGasulPrefSeq = 0;
+    const saveTrackGasulUsagePreference = async (enabled) => {
+        if (!trackGasulToggle || trackGasulPrefSaving) return true;
+        trackGasulPrefSaving = true;
+        const reqSeq = ++trackGasulPrefSeq;
+        const previousDisabled = trackGasulToggle.disabled;
+        trackGasulToggle.disabled = true;
+        try {
+            const payload = new FormData();
+            payload.set('_token', csrfToken);
+            payload.set('track_gasul_usage', enabled ? '1' : '0');
+            const res = await fetch('<?= e(route('tenant.laundry-sales.track-gasul')) ?>', {
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    Accept: 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                credentials: 'same-origin',
+                body: payload,
+            });
+            const { data } = await parseJsonBody(res);
+            const success = !!(res.ok && data && (data.success === true || data.status === 'ok'));
+            if (!success) {
+                throw new Error((data && typeof data.message === 'string' && data.message.trim() !== '') ? data.message : 'Could not save Track Gasul Usage setting.');
+            }
+            return true;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Could not save Track Gasul Usage setting.';
+            if (typeof Swal !== 'undefined') {
+                await Swal.fire({ icon: 'warning', title: 'Setting not saved', text: message, confirmButtonColor: '#dc3545' });
+            } else {
+                showWarn(message);
+            }
+            return false;
+        } finally {
+            if (reqSeq === trackGasulPrefSeq && trackGasulToggle) {
+                trackGasulToggle.disabled = previousDisabled;
+            }
+            trackGasulPrefSaving = false;
+        }
+    };
+    const syncTrackGasulUI = () => {
+        const enabled = trackGasulToggle
+            ? (trackGasulToggle.checked === true)
+            : String(trackGasulHidden?.value || (kioskTrackGasulSettingEnabled ? '1' : '0')) === '1';
+        if (trackGasulHidden) {
+            trackGasulHidden.value = enabled ? '1' : '0';
+        }
+        const gasulBtns = Array.from(document.querySelectorAll('.kiosk-addon-other-btn[data-gasul-item="1"]'));
+        const selectedId = String(addonOtherId?.value || '').trim();
+        const selectedBtn = selectedId !== ''
+            ? document.querySelector(`.kiosk-addon-other-btn[data-id="${selectedId}"]`)
+            : null;
+        gasulBtns.forEach((btn) => {
+            btn.classList.toggle('d-none', !enabled);
+        });
+        if (!enabled && selectedBtn instanceof HTMLElement && selectedBtn.getAttribute('data-gasul-item') === '1') {
+            addonOtherId.value = '';
+            addonOtherQty.value = '0';
+            if (addonOtherQtyInput) addonOtherQtyInput.value = '';
+            setButtonState('.kiosk-addon-other-btn', null);
+        }
+        updateSummary();
+    };
+    trackGasulToggle?.addEventListener('change', async () => {
+        if (!kioskOwnerCanSetTrackGasul) {
+            trackGasulToggle.checked = !trackGasulToggle.checked;
+            return;
+        }
+        const enabled = trackGasulToggle.checked === true;
+        syncTrackGasulUI();
+        const saved = await saveTrackGasulUsagePreference(enabled);
+        if (!saved) {
+            trackGasulToggle.checked = !enabled;
+            syncTrackGasulUI();
+        }
+    });
+    syncTrackGasulUI();
 
     form?.addEventListener('submit', (e) => {
         if (!validateBeforeSubmit()) {
             e.preventDefault();
             return;
         }
-        if (serviceMode.value === 'free' || serviceMode.value === 'reward') {
+        const totals = getCurrentTotals();
+        if (serviceMode.value === 'free' || (serviceMode.value === 'reward' && totals.totalPrice <= 1e-9)) {
             e.preventDefault();
             if (paymentMethod) paymentMethod.value = 'pending';
             if (paymentTiming) paymentTiming.value = 'pay_later';

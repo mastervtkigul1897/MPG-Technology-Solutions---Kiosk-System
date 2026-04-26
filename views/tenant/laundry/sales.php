@@ -15,6 +15,7 @@ $isTenantAdmin = (($currentUser['role'] ?? '') === 'tenant_admin');
 $tenantScopeId = (int) ($currentUser['tenant_id'] ?? 0);
 $machineAssignmentEnabled = (bool) ($machine_assignment_enabled ?? true);
 $laundryStatusTrackingEnabled = (bool) ($laundry_status_tracking_enabled ?? true);
+$editableOrderDate = (bool) ($editable_order_date ?? false);
 $order_types_list = $order_types ?? [];
 $rewardConfig = is_array($reward_config ?? null) ? $reward_config : null;
 $rewardThreshold = $rewardConfig !== null ? max(1.0, (float) ($rewardConfig['minimum_points_to_redeem'] ?? $rewardConfig['reward_points_cost'] ?? 10)) : 0.0;
@@ -152,35 +153,70 @@ $machineOptionLabel = static function (array $machine): string {
 $machineOptionDisabled = static function (array $machine): bool {
     return ! empty($machine['credit_required']) && (float) ($machine['credit_balance'] ?? 0) <= 0;
 };
+$toDateTimeLocal = static function (string $raw): string {
+    $raw = trim($raw);
+    if ($raw === '') {
+        return '';
+    }
+    $ts = strtotime($raw);
+    if ($ts === false) {
+        return '';
+    }
+    return date('Y-m-d\TH:i', $ts);
+};
 ?>
 
-<div class="card mb-3">
-    <div class="card-body">
-        <div class="small fw-semibold text-secondary text-uppercase mb-2">Load Status Settings</div>
-        <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" class="d-flex flex-wrap gap-3 align-items-center">
-            <?= csrf_field() ?>
-            <input type="hidden" name="update_laundry_status_workflow" value="1">
-            <input type="hidden" name="laundry_status_tracking_enabled" value="0">
-            <div class="form-check mb-0">
-                <input
-                    class="form-check-input"
-                    type="checkbox"
-                    name="laundry_status_tracking_enabled"
-                    id="laundryStatusTrackingEnabled"
-                    value="1"
-                    <?= $laundryStatusTrackingEnabled ? 'checked' : '' ?>
-                    onchange="this.form.submit()"
-                >
-                <label class="form-check-label" for="laundryStatusTrackingEnabled">
-                    Enable laundry status workflow (Pending/Washing/Drying/Finished)
-                </label>
-            </div>
-            <div class="small text-muted">
-                ON: Pending → Washing - Drying → Unpaid → Paid. OFF: payment-only flow (Unpaid/Paid).
-            </div>
-        </form>
+<?php if ($isTenantAdmin): ?>
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="small fw-semibold text-secondary text-uppercase mb-2">Load Status Settings</div>
+            <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" class="d-flex flex-wrap gap-3 align-items-center">
+                <?= csrf_field() ?>
+                <input type="hidden" name="update_laundry_status_workflow" value="1">
+                <input type="hidden" name="laundry_status_tracking_enabled" value="0">
+                <div class="form-check mb-0">
+                    <input
+                        class="form-check-input"
+                        type="checkbox"
+                        name="laundry_status_tracking_enabled"
+                        id="laundryStatusTrackingEnabled"
+                        value="1"
+                        <?= $laundryStatusTrackingEnabled ? 'checked' : '' ?>
+                        onchange="this.form.submit()"
+                    >
+                    <label class="form-check-label" for="laundryStatusTrackingEnabled">
+                        Enable laundry status workflow (Pending/Washing/Drying/Finished)
+                    </label>
+                </div>
+                <div class="small text-muted">
+                    ON: Pending → Washing - Drying → Unpaid → Paid. OFF: payment-only flow (Unpaid/Paid).
+                </div>
+            </form>
+            <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" class="d-flex flex-wrap gap-3 align-items-center mt-2">
+                <?= csrf_field() ?>
+                <input type="hidden" name="update_editable_order_date" value="1">
+                <input type="hidden" name="editable_order_date" value="0">
+                <div class="form-check mb-0">
+                    <input
+                        class="form-check-input"
+                        type="checkbox"
+                        name="editable_order_date"
+                        id="editableOrderDate"
+                        value="1"
+                        <?= $editableOrderDate ? 'checked' : '' ?>
+                        onchange="this.form.submit()"
+                    >
+                    <label class="form-check-label" for="editableOrderDate">
+                        Editable Order Date &amp; Time
+                    </label>
+                </div>
+                <div class="small text-muted">
+                    ON: owner can edit transaction date/time directly in card/table; saves automatically after selection.
+                </div>
+            </form>
+        </div>
     </div>
-</div>
+<?php endif; ?>
 
 <div class="modal fade" id="laundryAddServiceModal" tabindex="-1" aria-labelledby="laundryAddServiceModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-scrollable modal-lg modal-dialog-centered">
@@ -496,6 +532,46 @@ $machineOptionDisabled = static function (array $machine): bool {
     .laundry-kanban-col {
         min-width: 0;
     }
+    .laundry-kanban-card .card-body {
+        min-width: 0;
+    }
+    .laundry-kanban-card-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .laundry-kanban-card-head-ref {
+        min-width: 0;
+        flex: 1 1 auto;
+        overflow-wrap: anywhere;
+    }
+    .laundry-kanban-card-head-actions {
+        min-width: 0;
+        max-width: 100%;
+        flex: 1 1 180px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 0.1rem;
+        text-align: end;
+    }
+    .laundry-kanban-date-input {
+        width: 100%;
+        min-width: 0;
+        max-width: 190px;
+    }
+    @media (max-width: 1399.98px) {
+        .laundry-kanban-card-head-actions {
+            flex-basis: 100%;
+            align-items: flex-start;
+            text-align: start;
+        }
+        .laundry-kanban-date-input {
+            max-width: 100%;
+        }
+    }
     @media (max-width: 1199.98px) {
         .laundry-kanban-board {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -676,10 +752,11 @@ $machineOptionDisabled = static function (array $machine): bool {
                                     ? (float) $rawTendered
                                     : (($isPaid && $pmRaw !== 'pending') ? (float) ($order['total_amount'] ?? 0) : 0.0);
                                 $serviceModeLabel = ! empty($order['is_reward'])
-                                    ? 'Reward'
+                                    ? (((float) ($order['total_amount'] ?? 0)) > 0 ? 'Rewards with Payment' : 'Reward')
                                     : (! empty($order['is_free']) ? 'Free' : 'Regular');
                                 $dragClass = $isDraggableCol ? 'laundry-kanban-card--draggable' : '';
                                 $createdAtDisplay = trim((string) ($order['created_at'] ?? ''));
+                                $createdAtLocal = $toDateTimeLocal($createdAtDisplay);
                                 ?>
                                 <div
                                     class="card mb-2 shadow-sm laundry-kanban-card border-0 <?= e($dragClass) ?>"
@@ -698,14 +775,25 @@ $machineOptionDisabled = static function (array $machine): bool {
                                     data-order-type-label="<?= e($typeDisp) ?>"
                                     data-service-mode-label="<?= e($serviceModeLabel) ?>"
                                     data-created-at="<?= e($createdAtDisplay) ?>"
+                                    data-date-update-url="<?= e(route('tenant.laundry-sales.date.update', ['id' => $oid])) ?>"
                                     data-payment-status="<?= e($paymentStatus) ?>"
                                 >
                                     <div class="card-body py-2 px-2">
-                                        <div class="d-flex justify-content-between align-items-start gap-1 mb-1">
-                                            <span class="fw-semibold font-monospace"><?= e($refDisplay) ?></span>
-                                            <div class="d-flex flex-column align-items-end gap-0 text-end">
+                                        <div class="laundry-kanban-card-head mb-1">
+                                            <span class="fw-semibold font-monospace laundry-kanban-card-head-ref"><?= e($refDisplay) ?></span>
+                                            <div class="laundry-kanban-card-head-actions">
                                                 <button type="button" class="btn btn-link btn-sm p-0 small text-decoration-none no-drag laundry-kanban-detail-trigger" data-detail-url="<?= e(route('tenant.laundry-sales.detail', ['id' => $oid])) ?>">View details</button>
-                                                <span class="small text-muted text-nowrap"><?= e((string) ($order['created_at'] ?? '')) ?></span>
+                                                <?php if ($isTenantAdmin && $editableOrderDate): ?>
+                                                    <input
+                                                        type="datetime-local"
+                                                        class="form-control form-control-sm no-drag js-order-date-input laundry-kanban-date-input"
+                                                        value="<?= e($createdAtLocal) ?>"
+                                                        data-order-id="<?= $oid ?>"
+                                                        data-update-url="<?= e(route('tenant.laundry-sales.date.update', ['id' => $oid])) ?>"
+                                                    >
+                                                <?php else: ?>
+                                                    <span class="small text-muted text-nowrap js-order-date-display" data-order-id="<?= $oid ?>"><?= e((string) ($order['created_at'] ?? '')) ?></span>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
                                         <div class="small fw-medium text-truncate" title="<?= e((string) ($order['customer_name'] ?? 'Walk-in')) ?>"><?= e((string) ($order['customer_name'] ?? 'Walk-in')) ?></div>
@@ -846,7 +934,7 @@ $machineOptionDisabled = static function (array $machine): bool {
                         $isOpenTicket = ($statusRaw === 'open_ticket');
                         $isPaidStage = $statusRaw === 'paid';
                         $modeDisplay = ! empty($order['is_reward'])
-                            ? 'Reward'
+                            ? (((float) ($order['total_amount'] ?? 0)) > 0 ? 'Rewards with Payment' : 'Reward')
                             : (! empty($order['is_free']) ? 'Free' : 'Regular');
                         $pmRaw = strtolower(trim((string) ($order['payment_method'] ?? '')));
                         $paymentLabel = $laundryPaymentMethodLabel($pmRaw);
@@ -867,6 +955,8 @@ $machineOptionDisabled = static function (array $machine): bool {
                         }
                         $otLabel = trim((string) ($order['order_type_label'] ?? ''));
                         $typeDisp = $otLabel !== '' ? $otLabel : ucwords(str_replace('_', ' ', (string) ($order['order_type'] ?? '')));
+                        $createdAtDisplay = trim((string) ($order['created_at'] ?? ''));
+                        $createdAtLocal = $toDateTimeLocal($createdAtDisplay);
                         ?>
                         <tr
                             class="laundry-sales-table-row"
@@ -882,11 +972,25 @@ $machineOptionDisabled = static function (array $machine): bool {
                             data-total="<?= e((string) (float) ($order['total_amount'] ?? 0)) ?>"
                             data-service-kind="<?= e((string) ($order['order_type_service_kind'] ?? 'full_service')) ?>"
                             data-payment-status="<?= e($paymentStatus) ?>"
+                            data-date-update-url="<?= e(route('tenant.laundry-sales.date.update', ['id' => $oid])) ?>"
                             style="cursor: pointer;"
                         >
                             <td class="small text-muted"><?= e((string) $tableRowNo) ?></td>
                             <td class="font-monospace"><?= e($refDisplay) ?></td>
-                            <td class="text-nowrap small"><?= e((string) ($order['created_at'] ?? '')) ?></td>
+                            <td class="text-nowrap small">
+                                <?php if ($isTenantAdmin && $editableOrderDate): ?>
+                                    <input
+                                        type="datetime-local"
+                                        class="form-control form-control-sm js-order-date-input"
+                                        value="<?= e($createdAtLocal) ?>"
+                                        data-order-id="<?= $oid ?>"
+                                        data-update-url="<?= e(route('tenant.laundry-sales.date.update', ['id' => $oid])) ?>"
+                                        style="min-width: 180px;"
+                                    >
+                                <?php else: ?>
+                                    <span class="js-order-date-display" data-order-id="<?= $oid ?>"><?= e((string) ($order['created_at'] ?? '')) ?></span>
+                                <?php endif; ?>
+                            </td>
                             <td><?= e((string) ($order['customer_name'] ?? 'Walk-in')) ?></td>
                             <td class="small"><?= e($typeDisp) ?></td>
                             <td class="small"><?= ! empty($order['include_fold_service']) ? 'Yes' : '—' ?></td>
@@ -1026,7 +1130,7 @@ $machineOptionDisabled = static function (array $machine): bool {
                     $isOpenTicket = ($statusRaw === 'open_ticket');
                     $isPaidStage = $statusRaw === 'paid';
                     $modeDisplay = ! empty($order['is_reward'])
-                        ? 'Reward'
+                        ? (((float) ($order['total_amount'] ?? 0)) > 0 ? 'Rewards with Payment' : 'Reward')
                         : (! empty($order['is_free']) ? 'Free' : 'Regular');
                     $pmRaw = strtolower(trim((string) ($order['payment_method'] ?? '')));
                     $paymentLabel = $laundryPaymentMethodLabel($pmRaw);
@@ -1868,6 +1972,7 @@ $machineOptionDisabled = static function (array $machine): bool {
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     const laundryStatusTrackingEnabled = <?= $laundryStatusTrackingEnabled ? 'true' : 'false' ?>;
     const machineAssignmentEnabled = <?= $machineAssignmentEnabled ? 'true' : 'false' ?>;
+    const ownerCanEditOrderDate = <?= ($isTenantAdmin && $editableOrderDate) ? 'true' : 'false' ?>;
 
     const viewSelect = document.getElementById('laundrySalesViewSelect');
     const kanbanWrap = document.getElementById('laundrySalesKanbanWrap');
@@ -2177,6 +2282,81 @@ $machineOptionDisabled = static function (array $machine): bool {
         }
         return { data, rawText };
     };
+
+    const refreshOrderDateDisplays = (orderId, displayValue, localValue) => {
+        const id = String(orderId || '').trim();
+        if (!id) return;
+        document.querySelectorAll(`.js-order-date-display[data-order-id="${id}"]`).forEach((el) => {
+            el.textContent = String(displayValue || '').trim();
+        });
+        document.querySelectorAll(`.js-order-date-input[data-order-id="${id}"]`).forEach((el) => {
+            if (el instanceof HTMLInputElement) {
+                el.value = String(localValue || '').trim();
+                el.dataset.savedValue = String(localValue || '').trim();
+            }
+        });
+        document.querySelectorAll(`[data-order-id="${id}"]`).forEach((el) => {
+            if (el instanceof HTMLElement) {
+                if (displayValue) {
+                    el.setAttribute('data-created-at', String(displayValue));
+                }
+                if (localValue) {
+                    el.setAttribute('data-created-at-local', String(localValue));
+                }
+            }
+        });
+    };
+
+    const wireOrderDateEditors = () => {
+        if (!ownerCanEditOrderDate) return;
+        document.querySelectorAll('.js-order-date-input').forEach((input) => {
+            if (!(input instanceof HTMLInputElement) || input.dataset.bound === '1') return;
+            input.dataset.bound = '1';
+            input.dataset.savedValue = input.value;
+            input.addEventListener('change', async () => {
+                const updateUrl = String(input.dataset.updateUrl || '').trim();
+                const orderId = String(input.dataset.orderId || '').trim();
+                const selected = String(input.value || '').trim();
+                if (!updateUrl || !orderId || !selected) {
+                    return;
+                }
+                const body = new URLSearchParams();
+                body.set('_token', csrfToken);
+                body.set('order_datetime', selected);
+                input.disabled = true;
+                const previousValue = String(input.dataset.savedValue || '').trim();
+                try {
+                    const res = await fetch(updateUrl, {
+                        method: 'POST',
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest',
+                            Accept: 'application/json',
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        },
+                        body,
+                        credentials: 'same-origin',
+                    });
+                    const { data } = await parseJsonBody(res);
+                    if (!res.ok || data.success !== true) {
+                        const fallback = !res.ok ? `Request failed (${res.status}).` : 'Could not update order date/time.';
+                        const msg = (typeof data.message === 'string' && data.message.trim()) ? data.message : fallback;
+                        input.value = previousValue;
+                        window.mpgAlert(msg, { title: 'Update failed', icon: 'error' });
+                        return;
+                    }
+                    const display = String(data.created_at || '').trim();
+                    const local = String(data.order_datetime_local || selected).trim();
+                    refreshOrderDateDisplays(orderId, display, local);
+                } catch {
+                    input.value = previousValue;
+                    window.mpgAlert('Network error while saving order date/time.', { title: 'Update failed', icon: 'error' });
+                } finally {
+                    input.disabled = false;
+                }
+            });
+        });
+    };
+    wireOrderDateEditors();
 
     const postAdvance = async (cardOrUrl, toStatus, options = {}) => {
         const url = typeof cardOrUrl === 'string'

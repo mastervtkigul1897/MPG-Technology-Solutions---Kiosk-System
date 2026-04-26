@@ -78,6 +78,7 @@ final class LaundryController
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
         $laundryStatusTrackingEnabled = $this->isLaundryStatusTrackingEnabled($pdo, $tenantId);
+        $editableOrderDate = $this->isEditableOrderDateEnabled($pdo, $tenantId);
         $transactionsScope = strtolower(trim((string) $request->input('tx_scope', 'today')));
         if (! in_array($transactionsScope, ['today', 'all'], true)) {
             $transactionsScope = 'today';
@@ -278,7 +279,7 @@ final class LaundryController
             $transactionsTotal = count($ordersRows);
         }
 
-        return view_page('Loads Status', 'tenant.laundry.sales', [
+        return view_page('Transactions', 'tenant.laundry.sales', [
             'customers' => $customerRows,
             'machines' => $machineRows,
             'detergent_items' => $detergentItems,
@@ -290,6 +291,7 @@ final class LaundryController
             'reward_config' => $this->fetchRewardConfigForRedemption($pdo, $tenantId),
             'machine_assignment_enabled' => $this->isMachineAssignmentEnabled($pdo, $tenantId),
             'laundry_status_tracking_enabled' => $laundryStatusTrackingEnabled,
+            'editable_order_date' => $editableOrderDate,
             'transactions_scope' => $transactionsScope,
             'transactions_mode' => $transactionsMode,
             'transactions_page' => $transactionsPage,
@@ -388,6 +390,7 @@ final class LaundryController
             'next_transaction_id' => $nextOrderId,
             'reference_preview' => $referencePreview,
             'free_customer_locked' => $freeCustomerLocked,
+            'track_gasul_usage' => $this->isBranchTrackGasulUsageEnabled($pdo, $tenantId),
         ]);
     }
 
@@ -401,10 +404,23 @@ final class LaundryController
         $redirectRoute = $origin === 'staff_portal'
             ? 'tenant.staff-portal.index'
             : 'tenant.laundry-sales.index';
-        if ((string) $request->input('update_laundry_status_workflow', '') === '1') {
-            $enabled = $request->boolean('laundry_status_tracking_enabled');
-            $this->persistLaundryStatusTrackingConfig($pdo, $tenantId, $enabled);
-            session_flash('success', 'Laundry status workflow setting updated.');
+        $updateWorkflow = (string) $request->input('update_laundry_status_workflow', '') === '1';
+        $updateOrderDateEdit = (string) $request->input('update_editable_order_date', '') === '1';
+        if ($updateWorkflow || $updateOrderDateEdit) {
+            $actor = Auth::user();
+            if (($actor['role'] ?? '') !== 'tenant_admin') {
+                session_flash('errors', ['Only the store owner can update this setting.']);
+                return redirect(route('tenant.laundry-sales.index'));
+            }
+            if ($updateWorkflow) {
+                $enabled = $request->boolean('laundry_status_tracking_enabled');
+                $this->persistLaundryStatusTrackingConfig($pdo, $tenantId, $enabled);
+            }
+            if ($updateOrderDateEdit) {
+                $enabled = $request->boolean('editable_order_date');
+                $this->persistEditableOrderDateConfig($pdo, $tenantId, $enabled);
+            }
+            session_flash('success', 'Sales settings updated.');
             return redirect(route('tenant.laundry-sales.index'));
         }
         $orderMode = strtolower(trim((string) $request->input('order_mode', 'drop_off')));
@@ -754,6 +770,7 @@ final class LaundryController
         $addonFabconId = max(0, (int) $request->input('addon_fabcon_item_id', 0));
         $addonBleachId = max(0, (int) $request->input('addon_bleach_item_id', 0));
         $addonOtherId = max(0, (int) $request->input('addon_other_item_id', 0));
+        $trackGasul = $this->isBranchTrackGasulUsageEnabled($pdo, $tenantId);
         $extraDetergentQty = max(0.0, (float) $request->input('detergent_qty', 0));
         $extraFabconQty = max(0.0, (float) $request->input('fabcon_qty', 0));
         $extraBleachQty = max(0.0, (float) $request->input('bleach_qty', 0));
@@ -768,6 +785,7 @@ final class LaundryController
             $addonBleachId = 0;
             $addonOtherId = 0;
             $extraOtherQty = 0.0;
+            $trackGasul = false;
         }
         if (! $usesCoreSupplies) {
             $inclusionDetergentId = 0;
@@ -819,6 +837,38 @@ final class LaundryController
         if ($serviceKind === 'fold_only') {
             // Fold-only orders always count as folding service for commission routing.
             $includeFoldService = true;
+        }
+        if ($serviceMode === 'reward' && $rewardConfig !== null) {
+            $rewardServiceCode = trim((string) ($rewardConfig['reward_order_type_code'] ?? ''));
+            $hasRewardServiceInSelection = false;
+            if ($orderMode === 'self_service' && $selfServiceLines !== []) {
+                foreach ($selfServiceLines as &$line) {
+                    $lineCode = trim((string) ($line['code'] ?? ''));
+                    if ($rewardServiceCode !== '' && $lineCode === $rewardServiceCode) {
+                        $line['price_per_load'] = 0.0;
+                        $hasRewardServiceInSelection = true;
+                    }
+                }
+                unset($line);
+            } elseif ($dropOffLines !== []) {
+                foreach ($dropOffLines as &$line) {
+                    $lineCode = trim((string) ($line['code'] ?? ''));
+                    if ($rewardServiceCode !== '' && $lineCode === $rewardServiceCode) {
+                        $line['price_per_load'] = 0.0;
+                        $hasRewardServiceInSelection = true;
+                    }
+                }
+                unset($line);
+            } else {
+                if ($rewardServiceCode !== '' && $orderTypeCode === $rewardServiceCode) {
+                    $pricePerLoad = 0.0;
+                    $hasRewardServiceInSelection = true;
+                }
+            }
+            if (! $hasRewardServiceInSelection) {
+                session_flash('errors', ['Reward mode only applies to the configured Reward service. Add the configured service to this order before saving.']);
+                return redirect(route($redirectRoute));
+            }
         }
 
         $basePrice = ($requiredWeight && $serviceWeight !== null)
@@ -892,7 +942,7 @@ final class LaundryController
         }
         $isFree = $serviceMode === 'free';
         $isReward = $serviceMode === 'reward';
-        if ($isFree || $isReward) {
+        if ($isFree) {
             $basePrice = 0.0;
             $addOnTotal = 0.0;
             $excessWeightKg = 0.0;
@@ -919,6 +969,7 @@ final class LaundryController
         $totalAmount = $serviceSubtotal + $addOnTotal;
         $discountAmount = 0.0;
         $totalAmountForPayment = $totalAmount;
+        $isRewardNoBalanceDue = $isReward && $totalAmountForPayment <= 1e-9;
 
         $deductionByItemId = [];
         if ($incDetItem !== null && $incDetQty > 0) {
@@ -964,20 +1015,34 @@ final class LaundryController
 
                 return redirect(route($redirectRoute));
             }
+            if ($trackGasul) {
+                $gasulItem = $this->findGasulOtherAddonItem($pdo, $tenantId);
+                if (! is_array($gasulItem)) {
+                    session_flash('errors', ['Track Gasul is enabled but Gasul item is not configured in Inventory Stocks.']);
+
+                    return redirect(route($redirectRoute));
+                }
+                $gasulId = (int) ($gasulItem['id'] ?? 0);
+                if ($gasulId < 1 || $addonOtherId !== $gasulId || $extraOtherQty <= 0) {
+                    session_flash('errors', ['Track Gasul is ON. Please select Gasul in Add-on Other items.']);
+
+                    return redirect(route($redirectRoute));
+                }
+            }
         }
 
         $isPaidNowRequest = $paymentTiming === 'pay_now';
-        if (! $isPaidNowRequest || $isFree || $isReward) {
+        if (! $isPaidNowRequest || $isFree || $isRewardNoBalanceDue) {
             $discountPercentage = 0.0;
         }
-        if (! $isFree && ! $isReward && $isPaidNowRequest) {
+        if (! $isFree && ! $isRewardNoBalanceDue && $isPaidNowRequest) {
             $discountAmount = round($totalAmount * ($discountPercentage / 100), 4);
             $totalAmountForPayment = round(max(0.0, $totalAmount - $discountAmount), 4);
         }
-        $initialPaymentStatus = ($isFree || $isReward || $isPaidNowRequest) ? 'paid' : 'unpaid';
+        $initialPaymentStatus = ($isFree || $isRewardNoBalanceDue || $isPaidNowRequest) ? 'paid' : 'unpaid';
         $initialPaymentMethod = $isFree
             ? 'free'
-            : ($isReward
+            : ($isRewardNoBalanceDue
                 ? 'reward'
                 : ($isPaidNowRequest
                     ? ($requestedPaymentMethod !== '' && $requestedPaymentMethod !== 'pending' ? $requestedPaymentMethod : 'cash')
@@ -999,7 +1064,7 @@ final class LaundryController
 
                 return redirect(route($redirectRoute));
             }
-        } elseif (! $isFree && ! $isReward && $isPaidNowRequest && $amountTendered + 1e-6 < $totalAmountForPayment) {
+        } elseif (! $isFree && ! $isRewardNoBalanceDue && $isPaidNowRequest && $amountTendered + 1e-6 < $totalAmountForPayment) {
             session_flash('errors', ['Amount paid must be at least the service total ('.number_format($totalAmountForPayment, 2, '.', '').').']);
 
             return redirect(route($redirectRoute));
@@ -1010,7 +1075,7 @@ final class LaundryController
         }
         $recordedAmountTendered = null;
         $recordedChangeAmount = null;
-        if (! $isFree && ! $isReward && $isPaidNowRequest) {
+        if (! $isFree && ! $isRewardNoBalanceDue && $isPaidNowRequest) {
             if ($initialPaymentMethod === 'split_payment') {
                 $amountTendered = round($splitCashAmount + $splitOnlineAmount, 4);
             }
@@ -1025,7 +1090,7 @@ final class LaundryController
         // - Workflow ON  -> regular flow starts at pending
         // - Workflow OFF -> direct payment-state flow (open_ticket/paid)
         // Free/Reward now maps directly to Paid (no Completed stage).
-        if ($isFree || $isReward) {
+        if ($isFree || $isRewardNoBalanceDue) {
             $initialLaundryStatus = 'paid';
         } elseif ($trackLaundryStatus) {
             $initialLaundryStatus = 'pending';
@@ -1133,7 +1198,7 @@ final class LaundryController
                 'INSERT INTO laundry_order_add_ons (tenant_id, order_id, item_name, quantity, unit_price, total_price)
                  VALUES (?, ?, ?, ?, ?, ?)'
             );
-            foreach (($isFree || $isReward) ? [] : $addOns as $entry) {
+            foreach (($isFree || $isRewardNoBalanceDue) ? [] : $addOns as $entry) {
                 if ($entry[1] <= 0) {
                     continue;
                 }
@@ -1171,8 +1236,10 @@ final class LaundryController
             }
             if (! $isFree && ! $isReward && $initialPaymentStatus === 'paid' && $customerId > 0) {
                 $this->applyRewardsCounter($pdo, $tenantId, $customerId, $otDef, $orderId, $userId, [
+                    'order_type' => (string) ($otDef['code'] ?? $orderTypeCode),
                     'wash_qty' => $washQty,
                     'dry_minutes' => $dryQty,
+                    'dry_qty' => $dryQty,
                 ]);
             }
             $this->persistBranchBluetoothPrintConfig($pdo, $tenantId, $enableBluetoothPrint);
@@ -1201,7 +1268,9 @@ final class LaundryController
         if ($orderTypeLabel === '') {
             $orderTypeLabel = ucwords(str_replace('_', ' ', $orderTypeCode));
         }
-        $serviceModeLabel = $isReward ? 'Reward' : ($isFree ? 'Free' : 'Regular');
+        $serviceModeLabel = $isReward
+            ? ($totalAmountForPayment > 1e-9 ? 'Rewards with Payment' : 'Reward')
+            : ($isFree ? 'Free' : 'Regular');
         $savedAt = date('Y-m-d H:i:s');
         if ($savedOrderId > 0) {
             try {
@@ -2932,6 +3001,101 @@ final class LaundryController
         ]);
     }
 
+    public function updateTrackGasulUsagePreference(Request $request): Response
+    {
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+        $actor = Auth::user();
+        if (($actor['role'] ?? '') !== 'tenant_admin') {
+            return json_response(['success' => false, 'message' => 'Only the store owner can update this setting.'], 403);
+        }
+        if ($tenantId < 1) {
+            return json_response(['success' => false, 'message' => 'Invalid tenant context.'], 422);
+        }
+        $enabled = $request->boolean('track_gasul_usage');
+        try {
+            $this->persistBranchTrackGasulUsageConfig($pdo, $tenantId, $enabled);
+        } catch (\Throwable) {
+            return json_response(['success' => false, 'message' => 'Could not save Track Gasul Usage setting.'], 500);
+        }
+
+        return json_response([
+            'success' => true,
+            'message' => 'Track Gasul Usage setting saved.',
+            'track_gasul_usage' => $enabled ? 1 : 0,
+        ]);
+    }
+
+    public function updateTransactionOrderDate(Request $request, string $id): Response
+    {
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+        $orderId = max(0, (int) $id);
+        $actor = Auth::user();
+        if (($actor['role'] ?? '') !== 'tenant_admin') {
+            return json_response(['success' => false, 'message' => 'Only the store owner can edit order date/time.'], 403);
+        }
+        if ($orderId < 1) {
+            return json_response(['success' => false, 'message' => 'Invalid transaction selected.'], 422);
+        }
+        if (! $this->isEditableOrderDateEnabled($pdo, $tenantId)) {
+            return json_response(['success' => false, 'message' => 'Editable Order Date is disabled.'], 422);
+        }
+
+        $raw = trim((string) $request->input('order_datetime', ''));
+        if ($raw === '') {
+            return json_response(['success' => false, 'message' => 'Date and time are required.'], 422);
+        }
+        $normalized = str_replace('T', ' ', $raw);
+        if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/', $normalized) === 1) {
+            $normalized .= ':00';
+        }
+        if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $normalized) !== 1) {
+            return json_response(['success' => false, 'message' => 'Invalid date/time format.'], 422);
+        }
+        $ts = strtotime($normalized);
+        if ($ts === false) {
+            return json_response(['success' => false, 'message' => 'Invalid date/time value.'], 422);
+        }
+        $safeValue = date('Y-m-d H:i:s', $ts);
+
+        $st = $pdo->prepare('SELECT id, reference_code, created_at FROM laundry_orders WHERE tenant_id = ? AND id = ? LIMIT 1');
+        $st->execute([$tenantId, $orderId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (! is_array($row)) {
+            return json_response(['success' => false, 'message' => 'Transaction not found.'], 404);
+        }
+
+        $pdo->prepare('UPDATE laundry_orders SET created_at = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ? LIMIT 1')
+            ->execute([$safeValue, $tenantId, $orderId]);
+
+        ActivityLogger::log(
+            $tenantId,
+            (int) ($actor['id'] ?? 0),
+            (string) ($actor['role'] ?? 'tenant_admin'),
+            'laundry_sales',
+            'update_order_datetime',
+            $request,
+            'Updated order date/time from Daily Sales.',
+            [
+                'order_id' => $orderId,
+                'reference_code' => (string) ($row['reference_code'] ?? ''),
+                'old_created_at' => (string) ($row['created_at'] ?? ''),
+                'new_created_at' => $safeValue,
+            ]
+        );
+
+        return json_response([
+            'success' => true,
+            'message' => 'Order date/time updated.',
+            'order_id' => $orderId,
+            'created_at' => $safeValue,
+            'order_datetime_local' => date('Y-m-d\TH:i', $ts),
+        ]);
+    }
+
     public function customersTransactions(Request $request, string $id): Response
     {
         $ctx = $this->baseContext();
@@ -3959,6 +4123,28 @@ final class LaundryController
         }
     }
 
+    private function persistEditableOrderDateConfig(PDO $pdo, int $tenantId, bool $enabled): void
+    {
+        if ($tenantId < 1 || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'editable_order_date')) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, editable_order_date, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE editable_order_date = VALUES(editable_order_date), updated_at = NOW()'
+        )->execute([$tenantId, $enabled ? 1 : 0]);
+    }
+
+    private function isEditableOrderDateEnabled(PDO $pdo, int $tenantId): bool
+    {
+        return $this->getBranchBoolConfig($pdo, $tenantId, 'editable_order_date', false);
+    }
+
+    private function isBranchTrackGasulUsageEnabled(PDO $pdo, int $tenantId): bool
+    {
+        return $this->getBranchBoolConfig($pdo, $tenantId, 'track_gasul_usage', false);
+    }
+
     private function isBranchBluetoothPrintEnabled(PDO $pdo, int $tenantId): bool
     {
         return $this->getBranchBoolConfig($pdo, $tenantId, 'enable_bluetooth_print', false);
@@ -4341,6 +4527,18 @@ final class LaundryController
         )->execute([$tenantId, $enabled ? 1 : 0]);
     }
 
+    private function persistBranchTrackGasulUsageConfig(PDO $pdo, int $tenantId, bool $enabled): void
+    {
+        if ($tenantId < 1 || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'track_gasul_usage')) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, track_gasul_usage, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE track_gasul_usage = VALUES(track_gasul_usage), updated_at = NOW()'
+        )->execute([$tenantId, $enabled ? 1 : 0]);
+    }
+
     private function getBranchIntConfig(PDO $pdo, int $tenantId, string $column, int $default): int
     {
         return max(0, (int) $this->getBranchScalarConfig($pdo, $tenantId, $column, $default));
@@ -4669,6 +4867,36 @@ final class LaundryController
         return max(1, max($w, $d));
     }
 
+    private function rewardLoadUnitsForConfiguredOrderType(PDO $pdo, int $tenantId, ?int $orderId, string $rewardOrderTypeCode, ?array $fallbackOrderRow): int
+    {
+        $code = trim($rewardOrderTypeCode);
+        if ($tenantId < 1 || $code === '') {
+            return 0;
+        }
+        if ($orderId !== null && $orderId > 0 && $this->hasTable($pdo, 'laundry_order_lines')) {
+            try {
+                $qty = (float) ($this->scalar(
+                    $pdo,
+                    'SELECT COALESCE(SUM(quantity), 0)
+                     FROM laundry_order_lines
+                     WHERE tenant_id = ? AND order_id = ? AND order_type_code = ?',
+                    [$tenantId, $orderId, $code]
+                ) ?: 0.0);
+                if ($qty > 0) {
+                    return max(1, (int) round($qty));
+                }
+            } catch (\Throwable) {
+                // Fallback below for older schemas or unavailable order lines.
+            }
+        }
+        $fallbackCode = strtolower(trim((string) ($fallbackOrderRow['order_type'] ?? '')));
+        if ($fallbackCode !== '' && $fallbackCode === strtolower($code)) {
+            return $this->rewardLoadUnitsFromOrderRow($fallbackOrderRow);
+        }
+
+        return 0;
+    }
+
     private function applyRewardsCounter(PDO $pdo, int $tenantId, ?int $customerId, ?array $orderType, ?int $orderId = null, ?int $actorUserId = null, ?array $orderRowForLoads = null): void
     {
         if ($customerId === null || $customerId < 1) {
@@ -4693,10 +4921,18 @@ final class LaundryController
         if (! is_array($cfg) || ! (bool) ($cfg['is_active'] ?? false)) {
             return;
         }
-        if (! $this->orderTypeEarnsRewardPoints($orderType)) {
-            return;
+        $rewardOrderTypeCode = trim((string) ($cfg['reward_order_type_code'] ?? ''));
+        if ($rewardOrderTypeCode !== '') {
+            $loadUnits = $this->rewardLoadUnitsForConfiguredOrderType($pdo, $tenantId, $orderId, $rewardOrderTypeCode, $orderRowForLoads);
+            if ($loadUnits < 1) {
+                return;
+            }
+        } else {
+            if (! $this->orderTypeEarnsRewardPoints($orderType)) {
+                return;
+            }
+            $loadUnits = $this->rewardLoadUnitsFromOrderRow($orderRowForLoads);
         }
-        $loadUnits = $this->rewardLoadUnitsFromOrderRow($orderRowForLoads);
         $perLoad = max(0.0, (float) ($cfg['points_per_dropoff_load'] ?? 1));
         $delta = round($perLoad * $loadUnits, 4);
         if ($delta <= 1e-9) {
@@ -4846,6 +5082,32 @@ final class LaundryController
         }
 
         return null;
+    }
+
+    private function findGasulOtherAddonItem(PDO $pdo, int $tenantId): ?array
+    {
+        if ($tenantId < 1) {
+            return null;
+        }
+        try {
+            $showItemInCondition = $this->hasColumn($pdo, 'laundry_inventory_items', 'show_item_in')
+                ? 'AND COALESCE(show_item_in, "both") IN ("addon", "both")'
+                : '';
+            $st = $pdo->prepare(
+                'SELECT id, name, category, unit_cost, stock_quantity
+                 FROM laundry_inventory_items
+                 WHERE tenant_id = ?
+                   AND category = "other"
+                   AND LOWER(TRIM(name)) = "gasul"
+                   '.$showItemInCondition.'
+                 LIMIT 1'
+            );
+            $st->execute([$tenantId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            return is_array($row) ? $row : null;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function formatInventoryQtyDisplay(float $q): string

@@ -268,6 +268,8 @@ final class LaundrySchema
                 tenant_id BIGINT UNSIGNED NOT NULL,
                 machine_assignment_enabled TINYINT(1) NOT NULL DEFAULT 0,
                 laundry_status_tracking_enabled TINYINT(1) NOT NULL DEFAULT 0,
+                editable_order_date TINYINT(1) NOT NULL DEFAULT 0,
+                track_gasul_usage TINYINT(1) NOT NULL DEFAULT 0,
                 fold_service_amount DECIMAL(16,4) NOT NULL DEFAULT 10,
                 fold_commission_target VARCHAR(20) NOT NULL DEFAULT "branch",
                 created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
@@ -402,6 +404,8 @@ final class LaundrySchema
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'activate_ot_incentives', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER commission_rate_per_load');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'enable_bluetooth_print', 'TINYINT(1) NOT NULL DEFAULT 0');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'laundry_status_tracking_enabled', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER machine_assignment_enabled');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'editable_order_date', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER laundry_status_tracking_enabled');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'track_gasul_usage', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER editable_order_date');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'created_by_user_id', 'BIGINT UNSIGNED DEFAULT NULL AFTER tenant_id');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'machine_id', 'BIGINT UNSIGNED DEFAULT NULL AFTER created_by_user_id');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'reference_code', 'VARCHAR(32) NULL DEFAULT NULL AFTER id');
