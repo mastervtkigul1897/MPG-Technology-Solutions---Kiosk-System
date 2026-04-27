@@ -13,6 +13,19 @@ $rewardOrderTypeCode = $rewardConfig !== null ? (string) ($rewardConfig['reward_
 $rewardPointsPerDropoffLoad = $rewardConfig !== null ? max(0.0, (float) ($rewardConfig['points_per_dropoff_load'] ?? 1)) : 0.0;
 $enableBluetoothPrint = ! empty($enable_bluetooth_print);
 $trackGasulUsage = ! empty($track_gasul_usage);
+$kioskAutomationSettings = is_array($kiosk_automation_settings ?? null) ? $kiosk_automation_settings : [];
+$kioskInclusionAutofillMode = (string) ($kioskAutomationSettings['inclusion_mode'] ?? 'off');
+if (!in_array($kioskInclusionAutofillMode, ['off', 'lock', 'editable'], true)) {
+    $kioskInclusionAutofillMode = 'off';
+}
+$kioskFoldAutofillMode = (string) ($kioskAutomationSettings['fold_mode'] ?? 'off');
+if (!in_array($kioskFoldAutofillMode, ['off', 'free_fold', 'fold_with_price'], true)) {
+    $kioskFoldAutofillMode = 'off';
+}
+$kioskAutofillOrderTypeCodes = array_values(array_filter(array_map(
+    static fn ($v): string => strtolower(trim((string) $v)),
+    is_array($kioskAutomationSettings['order_type_codes'] ?? null) ? $kioskAutomationSettings['order_type_codes'] : []
+), static fn (string $v): bool => $v !== ''));
 $isTenantAdmin = ((auth_user()['role'] ?? '') === 'tenant_admin');
 $inventoryCardImageSrc = static function (array $item): string {
     $name = trim((string) ($item['name'] ?? 'Item'));
@@ -318,6 +331,7 @@ $stockQtyLabel = static function (float $qty): string {
     <input type="hidden" name="fabcon_qty" id="kioskAddonFabconQty" value="0">
     <input type="hidden" name="bleach_qty" id="kioskAddonBleachQty" value="0">
     <input type="hidden" name="other_qty" id="kioskAddonOtherQty" value="0">
+    <input type="hidden" name="addon_other_lines" id="kioskAddonOtherLines" value="[]">
     <input type="hidden" name="track_gasul" id="kioskTrackGasul" value="<?= $trackGasulUsage ? '1' : '0' ?>">
     <input type="hidden" name="fold_service_qty" id="kioskFoldServiceQty" value="0">
 
@@ -325,7 +339,7 @@ $stockQtyLabel = static function (float $qty): string {
         <div class="card mb-3">
             <div class="card-body">
                 <div class="small fw-semibold text-secondary text-uppercase mb-2">Kiosk Settings</div>
-                <div class="form-check mb-0">
+                <div class="form-check mb-2">
                     <input class="form-check-input" type="checkbox" id="kioskTrackGasulToggle" value="1" <?= $trackGasulUsage ? 'checked' : '' ?>>
                     <label class="form-check-label" for="kioskTrackGasulToggle">
                         Track Gasul Usage
@@ -334,11 +348,60 @@ $stockQtyLabel = static function (float $qty): string {
                         ON: show Gasul in Add-on Other items and require selection before saving. OFF: Gasul is optional.
                     </div>
                 </div>
+                <hr class="my-2">
+                <div class="small fw-semibold mb-1">Inclusions automation</div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="kioskInclusionAutofillLock" value="1" <?= $kioskInclusionAutofillMode === 'lock' ? 'checked' : '' ?>>
+                    <label class="form-check-label" for="kioskInclusionAutofillLock">Auto fill inclusions and disable editing</label>
+                </div>
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="checkbox" id="kioskInclusionAutofillEditable" value="1" <?= $kioskInclusionAutofillMode === 'editable' ? 'checked' : '' ?>>
+                    <label class="form-check-label" for="kioskInclusionAutofillEditable">Auto fill inclusions but editing is permitted</label>
+                </div>
+                <div class="small fw-semibold mb-1">Fold automation</div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="kioskFoldAutofillFreeFold" value="1" <?= $kioskFoldAutofillMode === 'free_fold' ? 'checked' : '' ?>>
+                    <label class="form-check-label" for="kioskFoldAutofillFreeFold">Auto fill Free Fold</label>
+                </div>
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="checkbox" id="kioskFoldAutofillWithPrice" value="1" <?= $kioskFoldAutofillMode === 'fold_with_price' ? 'checked' : '' ?>>
+                    <label class="form-check-label" for="kioskFoldAutofillWithPrice">Auto fill Fold with Price</label>
+                </div>
+                <label class="form-label form-label-sm mb-1">Trigger order types</label>
+                <details class="mb-2 border rounded px-2 py-1" id="kioskAutofillOrderTypesDropdown">
+                    <summary class="small text-primary" style="cursor:pointer; user-select:none;">
+                        <span id="kioskAutofillOrderTypesSummary">Select order types</span>
+                    </summary>
+                    <div class="pt-2" style="max-height:220px; overflow:auto;">
+                        <?php foreach ($orderTypes as $ot): ?>
+                            <?php
+                            $codeOpt = strtolower(trim((string) ($ot['code'] ?? '')));
+                            $serviceKindOpt = strtolower(trim((string) ($ot['service_kind'] ?? '')));
+                            if ($codeOpt === '' || ($codeOpt !== 'drop_off' && $serviceKindOpt !== 'full_service')) {
+                                continue;
+                            }
+                            $labelOpt = (string) ($ot['label'] ?? $codeOpt);
+                            ?>
+                            <label class="d-flex align-items-center gap-2 py-1">
+                                <input
+                                    class="form-check-input mt-0 kiosk-autofill-order-type-check"
+                                    type="checkbox"
+                                    value="<?= e($codeOpt) ?>"
+                                    data-label="<?= e($labelOpt) ?>"
+                                    <?= in_array($codeOpt, $kioskAutofillOrderTypeCodes, true) ? 'checked' : '' ?>
+                                >
+                                <span><?= e($labelOpt) ?></span>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                </details>
+                <div class="small text-muted mb-2">Select order types that will trigger the kiosk automation rules above.</div>
+                <div class="small text-muted mb-2" id="kioskAutomationStatusHint">No unsaved changes.</div>
             </div>
         </div>
     <?php endif; ?>
 
-    <div class="small text-muted mb-2">Single-page mode: tap selections below, then submit via Pay Now or Pay Later.</div>
+    <div class="small text-muted mb-2">Single-page mode: tap selections below, then submit via Pay Now / Deposit or Pay Later.</div>
 
     <div class="card mb-3 kiosk-step" data-step="1">
         <div class="card-body">
@@ -346,9 +409,11 @@ $stockQtyLabel = static function (float $qty): string {
             <div class="d-flex flex-wrap gap-2 mb-3" role="group" aria-label="Order mode">
                 <button type="button" class="btn btn-primary kiosk-order-mode-btn kiosk-selectable-btn" data-mode="drop_off" id="kioskOrderModeDropOff">Drop Off</button>
                 <button type="button" class="btn btn-outline-secondary kiosk-order-mode-btn kiosk-selectable-btn" data-mode="self_service" id="kioskOrderModeSelfService">Self Service</button>
+                <button type="button" class="btn btn-outline-secondary kiosk-order-mode-btn kiosk-selectable-btn" data-mode="add_on_only" id="kioskOrderModeAddOnOnly">Add On Only</button>
             </div>
-            <h6 class="mb-2">Order type</h6>
-            <div class="d-flex flex-wrap gap-2 mb-3" id="kioskOrderTypeCards">
+            <div id="kioskOrderTypeSection">
+                <h6 class="mb-2">Order type</h6>
+                <div class="d-flex flex-wrap gap-2 mb-3" id="kioskOrderTypeCards">
                 <?php foreach ($orderTypes as $ot): ?>
                     <div class="kiosk-order-type-wrap">
                         <button
@@ -384,6 +449,7 @@ $stockQtyLabel = static function (float $qty): string {
                         </div>
                     </div>
                 <?php endforeach; ?>
+                </div>
             </div>
 
             <input type="hidden" id="kioskNumberOfLoads" name="number_of_loads" value="1">
@@ -626,7 +692,7 @@ $stockQtyLabel = static function (float $qty): string {
                 </label>
             </div>
             <div class="d-flex flex-wrap gap-2" role="group" aria-label="Payment timing" id="kioskRegularSubmitWrap">
-                <button type="submit" class="btn btn-outline-success kiosk-payment-timing-btn" data-timing="pay_now">Pay Now</button>
+                <button type="submit" class="btn btn-outline-success kiosk-payment-timing-btn" data-timing="pay_now">Pay Now / Deposit</button>
                 <button type="submit" class="btn btn-primary kiosk-payment-timing-btn" data-timing="pay_later">Pay Later</button>
             </div>
             <div class="d-none" id="kioskFreeRewardSubmitWrap">
@@ -697,7 +763,7 @@ $stockQtyLabel = static function (float $qty): string {
                         <div class="form-text" id="kioskDiscountAmountDisplay">Discount amount (minus): -₱0.00</div>
                     </div>
                     <div class="col-12">
-                        <label class="form-label mb-1" for="kioskAmountPaidInput">Amount paid</label>
+                        <label class="form-label mb-1" for="kioskAmountPaidInput">Amount to pay now (Deposit allowed)</label>
                         <input type="number" min="0" step="0.01" class="form-control" id="kioskAmountPaidInput" placeholder="0.00">
                     </div>
                     <div class="col-12">
@@ -907,12 +973,20 @@ $stockQtyLabel = static function (float $qty): string {
     const addonFabQty = document.getElementById('kioskAddonFabconQty');
     const addonBleachQty = document.getElementById('kioskAddonBleachQty');
     const addonOtherQty = document.getElementById('kioskAddonOtherQty');
+    const addonOtherLinesInput = document.getElementById('kioskAddonOtherLines');
     const addonDetQtyInput = document.getElementById('kioskAddonDetQtyInput');
     const addonFabQtyInput = document.getElementById('kioskAddonFabQtyInput');
     const addonBleachQtyInput = document.getElementById('kioskAddonBleachQtyInput');
     const addonOtherQtyInput = document.getElementById('kioskAddonOtherQtyInput');
     const trackGasulHidden = document.getElementById('kioskTrackGasul');
     const trackGasulToggle = document.getElementById('kioskTrackGasulToggle');
+    const kioskInclusionAutofillLock = document.getElementById('kioskInclusionAutofillLock');
+    const kioskInclusionAutofillEditable = document.getElementById('kioskInclusionAutofillEditable');
+    const kioskFoldAutofillFreeFold = document.getElementById('kioskFoldAutofillFreeFold');
+    const kioskFoldAutofillWithPrice = document.getElementById('kioskFoldAutofillWithPrice');
+    const kioskAutofillOrderTypeChecks = Array.from(document.querySelectorAll('.kiosk-autofill-order-type-check'));
+    const kioskAutofillOrderTypesSummary = document.getElementById('kioskAutofillOrderTypesSummary');
+    const kioskAutomationStatusHint = document.getElementById('kioskAutomationStatusHint');
     const kioskTrackGasulSettingEnabled = <?= $trackGasulUsage ? 'true' : 'false' ?>;
     const kioskOwnerCanSetTrackGasul = <?= $isTenantAdmin ? 'true' : 'false' ?>;
     const foldNoBtn = document.getElementById('kioskFoldNoBtn');
@@ -920,6 +994,8 @@ $stockQtyLabel = static function (float $qty): string {
     const serviceModeSection = document.getElementById('kioskServiceModeSection');
     const orderModeDropOffBtn = document.getElementById('kioskOrderModeDropOff');
     const orderModeSelfServiceBtn = document.getElementById('kioskOrderModeSelfService');
+    const orderModeAddOnOnlyBtn = document.getElementById('kioskOrderModeAddOnOnly');
+    const orderTypeSection = document.getElementById('kioskOrderTypeSection');
     const modeRegularBtn = document.getElementById('kioskModeRegular');
     const modeFreeBtn = document.getElementById('kioskModeFree');
     const modeRewardBtn = document.getElementById('kioskModeReward');
@@ -979,6 +1055,101 @@ $stockQtyLabel = static function (float $qty): string {
     let rewardPromptOpen = false;
     let rewardIntentCustomerId = '';
     const selfServiceOrderQuantities = new Map();
+    const addonOtherMultiSelections = new Map();
+    let addonOtherActiveId = '';
+    const syncAddonOtherHiddenFields = () => {
+        const payload = Array.from(addonOtherMultiSelections.entries()).map(([itemId, qty]) => ({
+            item_id: Number(itemId),
+            qty: Number(qty),
+        })).filter((line) => Number.isFinite(line.item_id) && line.item_id > 0 && Number.isFinite(line.qty) && line.qty > 0);
+        if (addonOtherLinesInput) {
+            addonOtherLinesInput.value = payload.length > 0 ? JSON.stringify(payload) : '[]';
+        }
+        const totalQty = payload.reduce((sum, line) => sum + line.qty, 0);
+        addonOtherQty.value = String(totalQty);
+        const activeQty = addonOtherActiveId !== '' ? Math.max(0, Number(addonOtherMultiSelections.get(addonOtherActiveId) || 0)) : 0;
+        addonOtherId.value = addonOtherActiveId;
+        if (addonOtherQtyInput) {
+            addonOtherQtyInput.value = activeQty > 0 ? String(activeQty) : '';
+        }
+    };
+    const syncAddonOtherCardsUI = () => {
+        document.querySelectorAll('.kiosk-addon-other-btn').forEach((btn) => {
+            const id = String(btn.getAttribute('data-id') || '').trim();
+            const qty = Math.max(0, Number(addonOtherMultiSelections.get(id) || 0));
+            const selected = qty > 0;
+            btn.classList.toggle('kiosk-card-selected', selected);
+            btn.classList.toggle('btn-primary', selected);
+            btn.classList.toggle('btn-outline-primary', !selected);
+            const badge = btn.querySelector('.kiosk-addon-qty-badge');
+            if (badge) {
+                badge.textContent = `Qty: ${qty}`;
+                badge.classList.toggle('d-none', !selected);
+            }
+        });
+        syncAddonOtherHiddenFields();
+    };
+    const getAddonOtherTotalAmount = () => {
+        let total = 0;
+        addonOtherMultiSelections.forEach((qty, itemId) => {
+            const btn = document.querySelector(`.kiosk-addon-other-btn[data-id="${String(itemId)}"]`);
+            const unit = Math.max(0, parseFloat(btn?.getAttribute('data-unit-cost') || '0') || 0);
+            total += Math.max(0, Number(qty || 0)) * unit;
+        });
+        return total;
+    };
+    let foldAutofillLockCode = '';
+    const kioskConfiguredInclusionMode = () => {
+        if (kioskInclusionAutofillLock?.checked) return 'lock';
+        if (kioskInclusionAutofillEditable?.checked) return 'editable';
+        return 'off';
+    };
+    const kioskConfiguredFoldMode = () => {
+        if (kioskFoldAutofillFreeFold?.checked) return 'free_fold';
+        if (kioskFoldAutofillWithPrice?.checked) return 'fold_with_price';
+        return 'off';
+    };
+    const selectedKioskAutofillTriggerCodes = () => {
+        return kioskAutofillOrderTypeChecks
+            .filter((input) => input instanceof HTMLInputElement && input.checked)
+            .map((input) => String(input.value || '').trim().toLowerCase())
+            .filter((code) => code !== '');
+    };
+    const refreshKioskAutofillOrderTypesSummary = () => {
+        if (!kioskAutofillOrderTypesSummary) return;
+        const checked = kioskAutofillOrderTypeChecks.filter((input) => input.checked);
+        if (checked.length < 1) {
+            kioskAutofillOrderTypesSummary.textContent = 'Select order types';
+            return;
+        }
+        if (checked.length === 1) {
+            const label = String(checked[0].getAttribute('data-label') || checked[0].value || '1 selected').trim();
+            kioskAutofillOrderTypesSummary.textContent = label;
+            return;
+        }
+        kioskAutofillOrderTypesSummary.textContent = `${checked.length} order types selected`;
+    };
+    const selectedDropOffOrderCodes = () => {
+        return Array.from(selfServiceOrderQuantities.entries())
+            .filter(([, entry]) => Math.max(0, Number(entry?.qty || 0)) > 0)
+            .map(([code]) => String(code || '').trim().toLowerCase())
+            .filter((code) => code !== '');
+    };
+    const shouldRequireGasulForCurrentOrder = () => {
+        const selectedCodes = selectedDropOffOrderCodes();
+        if (selectedCodes.length > 0) {
+            return selectedCodes.includes('drop_off') || selectedCodes.includes('dry_only');
+        }
+        const fallback = String(orderTypeCode?.value || '').trim().toLowerCase();
+        return fallback === 'drop_off' || fallback === 'dry_only';
+    };
+    const hasKioskAutofillTriggerMatch = () => {
+        const triggers = selectedKioskAutofillTriggerCodes();
+        if (triggers.length < 1) return false;
+        const selectedCodes = selectedDropOffOrderCodes();
+        if (selectedCodes.length < 1) return false;
+        return selectedCodes.some((code) => triggers.includes(code));
+    };
     const resolveOrderTypeBasePrice = (code, basePrice, foldServiceAmount) => {
         const normalizedCode = String(code || '').trim().toLowerCase();
         if (normalizedCode === 'fold_with_price') {
@@ -1033,7 +1204,9 @@ $stockQtyLabel = static function (float $qty): string {
         const customerMode = (customerSelection?.value || '').trim();
         return customerMode === 'saved' || customerMode === 'walk_in';
     };
-    const isSelfServiceMode = () => (orderModeInput?.value || 'drop_off') === 'self_service';
+    const currentOrderMode = () => String(orderModeInput?.value || 'drop_off').trim().toLowerCase();
+    const isSelfServiceMode = () => currentOrderMode() === 'self_service';
+    const isAddOnOnlyMode = () => currentOrderMode() === 'add_on_only';
     const normalizeShowInOrderMode = (raw) => {
         const v = String(raw || '').trim().toLowerCase();
         return (v === 'drop_off' || v === 'self_service' || v === 'both') ? v : 'both';
@@ -1043,11 +1216,11 @@ $stockQtyLabel = static function (float $qty): string {
         return showMode === 'both' || showMode === mode;
     };
     const syncOrderTypeVisibilityByMode = () => {
-        const currentMode = isSelfServiceMode() ? 'self_service' : 'drop_off';
+        const currentMode = isSelfServiceMode() ? 'self_service' : (isAddOnOnlyMode() ? 'add_on_only' : 'drop_off');
         const selectedCode = String(orderTypeCode?.value || '').trim();
         let hasVisibleSelected = false;
         document.querySelectorAll('.kiosk-order-type-btn').forEach((btn) => {
-            const visible = isOrderTypeVisibleForMode(btn, currentMode);
+            const visible = currentMode === 'add_on_only' ? false : isOrderTypeVisibleForMode(btn, currentMode);
             const wrap = btn.closest('.kiosk-order-type-wrap');
             wrap?.classList.toggle('d-none', !visible);
             if (!visible) {
@@ -1423,7 +1596,26 @@ $stockQtyLabel = static function (float $qty): string {
             applyRewardRedemption();
         }
     };
+    const buildOrderTypeEntryFromCard = (card, code) => ({
+        code,
+        label: card.textContent?.trim() || code,
+        serviceKind: card.dataset.serviceKind || 'full_service',
+        basePricePerLoad: parseFloat(card.dataset.pricePerLoad || '0') || 0,
+        foldServiceAmount: Math.max(0, parseFloat(card.dataset.foldServiceAmount || '0') || 0),
+        pricePerLoad: effectivePricePerLoad(
+            code,
+            card.dataset.serviceKind || 'full_service',
+            parseFloat(card.dataset.pricePerLoad || '0') || 0,
+            parseFloat(card.dataset.foldServiceAmount || '0') || 0
+        ),
+        detergentQty: Math.max(0, parseFloat(card.dataset.detergentQty || '0') || 0),
+        fabconQty: Math.max(0, parseFloat(card.dataset.fabconQty || '0') || 0),
+        bleachQty: Math.max(0, parseFloat(card.dataset.bleachQty || '0') || 0),
+        showAddonSupplies: ((card.getAttribute('data-show-addon-supplies') || '').trim() === '1'),
+        qty: 0,
+    });
     const syncSelfServiceOrderQtyUI = () => {
+        applyConfiguredFoldAutofill();
         const lines = [];
         let firstCode = '';
         let firstLabel = '';
@@ -1434,8 +1626,12 @@ $stockQtyLabel = static function (float $qty): string {
             const wrap = btn.closest('.kiosk-order-type-wrap');
             const adjustWrap = wrap?.querySelector('.kiosk-order-type-adjust');
             const decrementBtn = wrap?.querySelector('.kiosk-order-type-adjust-btn[data-action="decrement"]');
+            const incrementBtn = wrap?.querySelector('.kiosk-order-type-adjust-btn[data-action="increment"]');
             const entry = selfServiceOrderQuantities.get(code);
             const qty = Math.max(0, Number(entry?.qty || 0));
+            const foldAutofillLocked = !isSelfServiceMode() && code === foldAutofillLockCode;
+            btn.disabled = foldAutofillLocked;
+            btn.classList.toggle('disabled', foldAutofillLocked);
             btn.classList.toggle('kiosk-card-selected', qty > 0);
             if (qtyInfo) {
                 qtyInfo.classList.toggle('d-none', qty <= 0);
@@ -1446,7 +1642,12 @@ $stockQtyLabel = static function (float $qty): string {
                 adjustWrap.classList.remove('d-none');
             }
             if (decrementBtn instanceof HTMLButtonElement) {
-                decrementBtn.disabled = qty <= 0;
+                decrementBtn.disabled = qty <= 0 || foldAutofillLocked;
+                decrementBtn.classList.toggle('disabled', foldAutofillLocked);
+            }
+            if (incrementBtn instanceof HTMLButtonElement) {
+                incrementBtn.disabled = foldAutofillLocked;
+                incrementBtn.classList.toggle('disabled', foldAutofillLocked);
             }
             if (qty > 0) {
                 if (firstCode === '') {
@@ -1484,8 +1685,9 @@ $stockQtyLabel = static function (float $qty): string {
     };
     const applyOrderModeUI = () => {
         const selfMode = isSelfServiceMode();
+        const addOnOnlyMode = isAddOnOnlyMode();
         document.querySelectorAll('.kiosk-dropoff-only').forEach((el) => {
-            el.classList.toggle('d-none', selfMode);
+            el.classList.toggle('d-none', selfMode || addOnOnlyMode);
         });
         document.querySelectorAll('.self-service-only').forEach((el) => {
             el.classList.toggle('d-none', !selfMode);
@@ -1493,9 +1695,11 @@ $stockQtyLabel = static function (float $qty): string {
         document.querySelectorAll('.kiosk-order-type-adjust').forEach((el) => {
             el.classList.remove('d-none');
         });
-        customerSection?.classList.remove('d-none');
-        serviceModeSection?.classList.toggle('opacity-75', selfMode);
-        if (selfMode) {
+        customerSection?.classList.toggle('d-none', addOnOnlyMode);
+        orderTypeSection?.classList.toggle('d-none', addOnOnlyMode);
+        serviceModeSection?.classList.toggle('d-none', addOnOnlyMode);
+        serviceModeSection?.classList.toggle('opacity-75', selfMode || addOnOnlyMode);
+        if (selfMode || addOnOnlyMode) {
             serviceMode.value = 'regular';
             clearRewardRedemption();
             modeFreeBtn?.setAttribute('disabled', 'disabled');
@@ -1503,7 +1707,7 @@ $stockQtyLabel = static function (float $qty): string {
             modeFreeBtn?.classList.add('disabled');
             modeRewardBtn?.classList.add('disabled');
             setButtonState('.kiosk-service-mode-btn', modeRegularBtn, 'btn-primary', 'btn-outline-secondary');
-            if (customerSelection && customerSelection.value === '') customerSelection.value = 'walk_in';
+            if (customerSelection) customerSelection.value = 'walk_in';
         } else {
             modeFreeBtn?.removeAttribute('disabled');
             modeRewardBtn?.removeAttribute('disabled');
@@ -1519,6 +1723,34 @@ $stockQtyLabel = static function (float $qty): string {
     };
     const syncFoldQtyVisibility = () => {
         const foldEnabled = (foldService?.value || '0') === '1';
+        const autoFoldQty = foldAutofillLockCode !== ''
+            ? Math.max(0, Number(selfServiceOrderQuantities.get(foldAutofillLockCode)?.qty || 0))
+            : 0;
+        const lockFoldControls = autoFoldQty > 0;
+        if (lockFoldControls) {
+            if (foldQtyInput) foldQtyInput.value = String(autoFoldQty);
+            if (foldService) foldService.value = '1';
+            setButtonState('#kioskFoldNoBtn, #kioskFoldYesBtn', foldYesBtn);
+        }
+        if (foldNoBtn) {
+            foldNoBtn.disabled = lockFoldControls;
+            foldNoBtn.classList.toggle('disabled', lockFoldControls);
+        }
+        if (foldYesBtn) {
+            foldYesBtn.disabled = lockFoldControls;
+            foldYesBtn.classList.toggle('disabled', lockFoldControls);
+        }
+        if (foldQtyDecBtn) {
+            foldQtyDecBtn.disabled = lockFoldControls;
+            foldQtyDecBtn.classList.toggle('disabled', lockFoldControls);
+        }
+        if (foldQtyIncBtn) {
+            foldQtyIncBtn.disabled = lockFoldControls;
+            foldQtyIncBtn.classList.toggle('disabled', lockFoldControls);
+        }
+        if (foldQtyInput) {
+            foldQtyInput.readOnly = lockFoldControls;
+        }
         if (foldQtyWrap) {
             foldQtyWrap.classList.toggle('d-none', !foldEnabled);
         }
@@ -1528,6 +1760,61 @@ $stockQtyLabel = static function (float $qty): string {
         if (!foldEnabled && foldQtyInput) {
             foldQtyInput.value = '0';
         }
+    };
+    const applyConfiguredInclusionAutofill = () => {
+        const mode = kioskConfiguredInclusionMode();
+        const shouldApply = mode !== 'off' && hasKioskAutofillTriggerMatch();
+        const applyKind = (kind, selector, hiddenInput) => {
+            const buttons = Array.from(document.querySelectorAll(selector));
+            const qtyNeed = inclusionQtyForKind(kind);
+            if (shouldApply && qtyNeed > 0) {
+                const firstBtn = buttons[0] || null;
+                if (firstBtn) {
+                    hiddenInput.value = String(firstBtn.getAttribute('data-id') || '');
+                    setButtonState(selector, firstBtn);
+                }
+            }
+            const lockControls = shouldApply && mode === 'lock';
+            buttons.forEach((btn) => {
+                btn.disabled = lockControls;
+                btn.classList.toggle('disabled', lockControls);
+            });
+            document.querySelectorAll(`.kiosk-inclusion-qty-btn[data-target="${kind}"]`).forEach((btn) => {
+                btn.disabled = lockControls;
+                btn.classList.toggle('disabled', lockControls);
+            });
+        };
+        if (!isSelfServiceMode()) {
+            applyKind('det', '.kiosk-supply-det-btn', inclusionDet);
+            applyKind('fab', '.kiosk-supply-fab-btn', inclusionFab);
+            applyKind('bleach', '.kiosk-supply-bleach-btn', inclusionBleach);
+        }
+    };
+    const applyConfiguredFoldAutofill = () => {
+        foldAutofillLockCode = '';
+        if (isSelfServiceMode()) return;
+        const mode = kioskConfiguredFoldMode();
+        if (mode === 'off' || !hasKioskAutofillTriggerMatch()) {
+            return;
+        }
+        const triggerCodes = selectedKioskAutofillTriggerCodes();
+        let sourceQty = 0;
+        selfServiceOrderQuantities.forEach((entry, code) => {
+            const normalized = String(code || '').trim().toLowerCase();
+            if (normalized === mode) return;
+            if (!triggerCodes.includes(normalized)) return;
+            sourceQty += Math.max(0, Number(entry?.qty || 0));
+        });
+        if (sourceQty <= 0) {
+            selfServiceOrderQuantities.delete(mode);
+            return;
+        }
+        const targetCard = document.querySelector(`.kiosk-order-type-btn[data-code="${mode}"]`);
+        if (!(targetCard instanceof HTMLButtonElement)) return;
+        const prev = selfServiceOrderQuantities.get(mode) || buildOrderTypeEntryFromCard(targetCard, mode);
+        prev.qty = sourceQty;
+        selfServiceOrderQuantities.set(mode, prev);
+        foldAutofillLockCode = mode;
     };
     const syncAddonQtyBadge = (selector, selectedId, qty) => {
         document.querySelectorAll(selector).forEach((btn) => {
@@ -1548,12 +1835,36 @@ $stockQtyLabel = static function (float $qty): string {
         });
     };
     const switchOrderMode = (mode) => {
-        const normalized = mode === 'self_service' ? 'self_service' : 'drop_off';
+        const normalized = mode === 'self_service'
+            ? 'self_service'
+            : (mode === 'add_on_only' ? 'add_on_only' : 'drop_off');
         if (orderModeInput) orderModeInput.value = normalized;
+        if (normalized === 'add_on_only') {
+            selfServiceOrderQuantities.clear();
+            if (selfServiceLinesInput) selfServiceLinesInput.value = '';
+            if (orderTypeCode) orderTypeCode.value = '';
+            selectedOrderLabel = '';
+            selectedServiceKind = 'other';
+            selectedSupplyBlock = 'none';
+            selectedDetergentQty = 0;
+            selectedFabconQty = 0;
+            selectedBleachQty = 0;
+            selectedShowAddonSupplies = true;
+            selectedRequiredWeight = false;
+            selectedPricePerLoad = 0;
+            selectedFoldServiceAmount = 0;
+            selectedMaxWeightKg = 0;
+            selectedExcessWeightFeePerKg = 0;
+            if (serviceWeightInput) serviceWeightInput.value = '';
+            if (actualWeightInput) actualWeightInput.value = '';
+        }
         if (normalized !== 'drop_off') {
             clearRewardRedemption();
         }
-        setButtonState('.kiosk-order-mode-btn', normalized === 'self_service' ? orderModeSelfServiceBtn : orderModeDropOffBtn, 'btn-primary', 'btn-outline-secondary');
+        const targetModeBtn = normalized === 'self_service'
+            ? orderModeSelfServiceBtn
+            : (normalized === 'add_on_only' ? orderModeAddOnOnlyBtn : orderModeDropOffBtn);
+        setButtonState('.kiosk-order-mode-btn', targetModeBtn, 'btn-primary', 'btn-outline-secondary');
         applyOrderModeUI();
         syncOrderTypeVisibilityByMode();
         syncSelfServiceOrderQtyUI();
@@ -1563,6 +1874,14 @@ $stockQtyLabel = static function (float $qty): string {
     const recomputeVisibleSteps = () => {
         steps.forEach((el) => {
             const step = String(el.getAttribute('data-step') || '').trim();
+            if (isAddOnOnlyMode()) {
+                if (step === '3' || step === '6') {
+                    el.classList.remove('d-none');
+                } else {
+                    el.classList.add('d-none');
+                }
+                return;
+            }
             if (isSelfServiceMode() && step === '2') {
                 el.classList.add('d-none');
                 return;
@@ -1574,17 +1893,21 @@ $stockQtyLabel = static function (float $qty): string {
             }
             if (step === '3') {
                 // Show Add-ons section only when selected order type enables it.
-                const showAddons = isSelfServiceMode()
+                const showAddons = isAddOnOnlyMode()
+                    ? true
+                    : (isSelfServiceMode()
                     ? true
                     : (dropOffHasStackedOrderTypes()
                         ? Array.from(selfServiceOrderQuantities.values()).some((entry) => !!entry.showAddonSupplies)
-                        : !!selectedShowAddonSupplies);
+                        : !!selectedShowAddonSupplies));
                 el.classList.toggle('d-none', !showAddons);
                 if (!showAddons) {
                     addonDetId.value = '';
                     addonFabId.value = '';
                     addonBleachId.value = '';
                     addonOtherId.value = '';
+                    addonOtherMultiSelections.clear();
+                    addonOtherActiveId = '';
                     addonDetQty.value = '0';
                     addonFabQty.value = '0';
                     addonBleachQty.value = '0';
@@ -1596,7 +1919,7 @@ $stockQtyLabel = static function (float $qty): string {
                     setButtonState('.kiosk-addon-det-btn', null);
                     setButtonState('.kiosk-addon-fab-btn', null);
                     setButtonState('.kiosk-addon-bleach-btn', null);
-                    setButtonState('.kiosk-addon-other-btn', null);
+                    syncAddonOtherCardsUI();
                 }
                 return;
             }
@@ -1707,13 +2030,14 @@ $stockQtyLabel = static function (float $qty): string {
 
     const getCurrentTotals = () => {
         const selfMode = isSelfServiceMode();
+        const addOnOnlyMode = isAddOnOnlyMode();
         const rewardMode = serviceMode.value === 'reward';
         const rewardServiceCode = String(rewardOrderTypeCode || '').trim();
         const stackedLoads = Array.from(selfServiceOrderQuantities.values()).reduce((sum, entry) => {
             return sum + Math.max(0, Number(entry.qty || 0));
         }, 0);
-        const hasStackedLoads = stackedLoads > 0;
-        const allowAddonSupplies = selfMode
+        const hasStackedLoads = !addOnOnlyMode && stackedLoads > 0;
+        const allowAddonSupplies = (selfMode || addOnOnlyMode)
             ? true
             : (hasStackedLoads
                 ? Array.from(selfServiceOrderQuantities.values()).some((entry) => !!entry.showAddonSupplies)
@@ -1721,9 +2045,11 @@ $stockQtyLabel = static function (float $qty): string {
         const loadsLabel = hasStackedLoads
             ? Math.max(1, stackedLoads)
             : Math.max(1, parseInt(numberOfLoadsInput?.value || '1', 10) || 1);
-        const foldQty = selfMode
+        const foldQty = addOnOnlyMode
+            ? 0
+            : (selfMode
             ? Math.max(0, parseInt(foldQtyInput?.value || '0', 10) || 0)
-            : ((foldService?.value || '0') === '1' ? Math.max(1, loadsLabel) : 0);
+            : ((foldService?.value || '0') === '1' ? Math.max(1, loadsLabel) : 0));
         const foldTotal = foldQty * getSelectedFoldServiceAmount();
         const weightValue = Math.max(0, parseFloat(serviceWeightInput?.value || '0') || 0);
         const actualWeightValue = Math.max(0, parseFloat(actualWeightInput?.value || '0') || 0);
@@ -1737,7 +2063,7 @@ $stockQtyLabel = static function (float $qty): string {
                 (parseFloat(addonDetQty.value || '0') || 0) * (parseFloat(addonDetBtn?.getAttribute('data-unit-cost') || '0') || 0)
                 + (parseFloat(addonFabQty.value || '0') || 0) * (parseFloat(addonFabBtn?.getAttribute('data-unit-cost') || '0') || 0)
                 + (parseFloat(addonBleachQty.value || '0') || 0) * (parseFloat(addonBleachBtn?.getAttribute('data-unit-cost') || '0') || 0)
-                + (parseFloat(addonOtherQty.value || '0') || 0) * (parseFloat(addonOtherBtn?.getAttribute('data-unit-cost') || '0') || 0)
+                + getAddonOtherTotalAmount()
             );
         const stackedSubtotal = hasStackedLoads
             ? Array.from(selfServiceOrderQuantities.values()).reduce((sum, entry) => {
@@ -1756,7 +2082,7 @@ $stockQtyLabel = static function (float $qty): string {
             : 0;
         const selectedCode = String(orderTypeCode?.value || '').trim();
         const selectedIsRewardService = rewardMode && rewardServiceCode !== '' && selectedCode === rewardServiceCode;
-        const baseSubtotal = (serviceMode.value === 'free')
+        const baseSubtotal = (addOnOnlyMode || serviceMode.value === 'free')
             ? 0
             : (hasStackedLoads
                 ? stackedSubtotal
@@ -1944,7 +2270,7 @@ $stockQtyLabel = static function (float $qty): string {
             }
             const totals = getCurrentTotals();
             const isFreeOrReward = serviceMode.value === 'free' || (serviceMode.value === 'reward' && totals.totalPrice <= 1e-9);
-            const paymentLabel = isFreeOrReward ? 'Paid' : ((paymentTiming?.value || 'pay_later') === 'pay_now' ? 'Paid' : 'Unpaid');
+            const paymentLabel = isFreeOrReward ? 'Paid' : ((paymentTiming?.value || 'pay_later') === 'pay_now' ? 'Deposit / Full' : 'Unpaid');
             const modeLabel = serviceMode.value === 'reward'
                 ? (totals.totalPrice > 1e-9 ? 'REWARDS WITH PAYMENT' : 'REWARD')
                 : ((serviceMode.value || 'regular').toUpperCase());
@@ -2000,9 +2326,11 @@ $stockQtyLabel = static function (float $qty): string {
 
     const updateSummary = () => {
         syncInventorySelectionAvailability();
+        syncKioskAutomationHintState();
+        applyConfiguredInclusionAutofill();
         syncInclusionQtyBadges();
         const selfMode = isSelfServiceMode();
-        const allowAddonSupplies = selfMode
+        const allowAddonSupplies = (selfMode || isAddOnOnlyMode())
             ? true
             : (dropOffHasStackedOrderTypes()
                 ? Array.from(selfServiceOrderQuantities.values()).some((entry) => !!entry.showAddonSupplies)
@@ -2015,12 +2343,12 @@ $stockQtyLabel = static function (float $qty): string {
         addonDetQty.value = String(Math.max(0, parseFloat(addonDetQtyInput?.value || '0') || 0));
         addonFabQty.value = String(Math.max(0, parseFloat(addonFabQtyInput?.value || '0') || 0));
         addonBleachQty.value = String(Math.max(0, parseFloat(addonBleachQtyInput?.value || '0') || 0));
-        addonOtherQty.value = String(Math.max(0, parseFloat(addonOtherQtyInput?.value || '0') || 0));
+        addonOtherQty.value = String(Array.from(addonOtherMultiSelections.values()).reduce((sum, qty) => sum + Math.max(0, Number(qty || 0)), 0));
         syncPersistentSelectionHighlights();
         syncAddonQtyBadge('.kiosk-addon-det-btn', addonDetId.value, parseFloat(addonDetQty.value) || 0);
         syncAddonQtyBadge('.kiosk-addon-fab-btn', addonFabId.value, parseFloat(addonFabQty.value) || 0);
         syncAddonQtyBadge('.kiosk-addon-bleach-btn', addonBleachId.value, parseFloat(addonBleachQty.value) || 0);
-        syncAddonQtyBadge('.kiosk-addon-other-btn', addonOtherId.value, parseFloat(addonOtherQty.value) || 0);
+        syncAddonOtherCardsUI();
         const supplyLabelParts = [];
         const detBtn = document.querySelector(`.kiosk-supply-det-btn[data-id="${inclusionDet.value}"]`);
         const fabBtn = document.querySelector(`.kiosk-supply-fab-btn[data-id="${inclusionFab.value}"]`);
@@ -2032,7 +2360,6 @@ $stockQtyLabel = static function (float $qty): string {
         const addonDetBtn = document.querySelector(`.kiosk-addon-det-btn[data-id="${addonDetId.value}"]`);
         const addonFabBtn = document.querySelector(`.kiosk-addon-fab-btn[data-id="${addonFabId.value}"]`);
         const addonBleachBtn = document.querySelector(`.kiosk-addon-bleach-btn[data-id="${addonBleachId.value}"]`);
-        const addonOtherBtn = document.querySelector(`.kiosk-addon-other-btn[data-id="${addonOtherId.value}"]`);
         if (allowAddonSupplies && serviceMode.value !== 'free' && parseFloat(addonDetQty.value) > 0 && addonDetId.value) {
             const up = parseFloat(addonDetBtn?.getAttribute('data-unit-cost') || '0') || 0;
             addonParts.push(`Detergent: ${addonDetQty.value}× ${addonDetBtn?.getAttribute('data-name') || ''} · Price ${formatPeso(up)}`.trim());
@@ -2045,17 +2372,19 @@ $stockQtyLabel = static function (float $qty): string {
             const up = parseFloat(addonBleachBtn?.getAttribute('data-unit-cost') || '0') || 0;
             addonParts.push(`Bleach: ${addonBleachQty.value}× ${addonBleachBtn?.getAttribute('data-name') || ''} · Price ${formatPeso(up)}`.trim());
         }
-        if (allowAddonSupplies && serviceMode.value !== 'free' && parseFloat(addonOtherQty.value) > 0 && addonOtherId.value) {
-            const up = parseFloat(addonOtherBtn?.getAttribute('data-unit-cost') || '0') || 0;
-            addonParts.push(`Other: ${addonOtherQty.value}× ${addonOtherBtn?.getAttribute('data-name') || ''} · Price ${formatPeso(up)}`.trim());
-        }
+        addonOtherMultiSelections.forEach((qty, itemId) => {
+            if (!(allowAddonSupplies && serviceMode.value !== 'free' && qty > 0)) return;
+            const btn = document.querySelector(`.kiosk-addon-other-btn[data-id="${String(itemId)}"]`);
+            const up = parseFloat(btn?.getAttribute('data-unit-cost') || '0') || 0;
+            addonParts.push(`Other: ${qty}× ${btn?.getAttribute('data-name') || ''} · Price ${formatPeso(up)}`.trim());
+        });
         const totals = getCurrentTotals();
         const summaryMode = rewardRedemption?.value === '1'
             ? (totals.totalPrice > 1e-9 ? 'REWARDS WITH PAYMENT' : 'REWARD')
             : (serviceMode.value || 'regular').toUpperCase();
         const paymentLabel = (serviceMode.value === 'free' || (serviceMode.value === 'reward' && totals.totalPrice <= 1e-9))
             ? 'Paid'
-            : (paymentTiming?.value === 'pay_now' ? 'Pay Now (Paid)' : 'Pay Later (Unpaid)');
+            : (paymentTiming?.value === 'pay_now' ? 'Pay Now / Deposit' : 'Pay Later (Unpaid)');
         const loadsLabel = totals.loadsLabel;
         const weightValue = totals.weightValue;
         const actualWeightValue = totals.actualWeightValue;
@@ -2182,6 +2511,8 @@ $stockQtyLabel = static function (float $qty): string {
             addonFabId.value = '';
             addonBleachId.value = '';
             addonOtherId.value = '';
+            addonOtherMultiSelections.clear();
+            addonOtherActiveId = '';
             addonDetQty.value = '0';
             addonFabQty.value = '0';
             addonBleachQty.value = '0';
@@ -2196,7 +2527,7 @@ $stockQtyLabel = static function (float $qty): string {
             setButtonState('.kiosk-addon-det-btn', null);
             setButtonState('.kiosk-addon-fab-btn', null);
             setButtonState('.kiosk-addon-bleach-btn', null);
-            setButtonState('.kiosk-addon-other-btn', null);
+            syncAddonOtherCardsUI();
         }
         recomputeVisibleSteps();
     };
@@ -2251,7 +2582,22 @@ $stockQtyLabel = static function (float $qty): string {
 
     const validateBeforeSubmit = () => {
         updateSummary();
+        if (isAddOnOnlyMode()) {
+            const hasAnyAddon = (parseFloat(addonDetQty.value || '0') || 0) > 0
+                || (parseFloat(addonFabQty.value || '0') || 0) > 0
+                || (parseFloat(addonBleachQty.value || '0') || 0) > 0
+                || (parseFloat(addonOtherQty.value || '0') || 0) > 0;
+            if (!hasAnyAddon) {
+                warnAndFocus(
+                    'Please select at least one add-on item.',
+                    document.querySelector('.kiosk-addon-det-btn, .kiosk-addon-fab-btn, .kiosk-addon-bleach-btn, .kiosk-addon-other-btn'),
+                    document.querySelector('.kiosk-step[data-step="3"]')
+                );
+                return false;
+            }
+        }
         if (!orderTypeCode.value) {
+            if (isAddOnOnlyMode()) return true;
             const msg = isSelfServiceMode()
                 ? 'Please tap at least one order type for Self Service.'
                 : 'Please select an order type.';
@@ -2319,11 +2665,12 @@ $stockQtyLabel = static function (float $qty): string {
         const trackGasulEnabled = trackGasulToggle
             ? trackGasulToggle.checked === true
             : String(trackGasulHidden?.value || '0') === '1';
-        if (trackGasulEnabled) {
+        if (trackGasulEnabled && shouldRequireGasulForCurrentOrder()) {
             const gasulBtn = document.querySelector('.kiosk-addon-other-btn[data-gasul-item="1"]');
             const gasulId = String(gasulBtn?.getAttribute('data-id') || '').trim();
-            const selectedOtherId = String(addonOtherId?.value || '').trim();
-            const selectedOtherQty = Math.max(0, parseFloat(addonOtherQty?.value || '0') || 0);
+            const selectedOtherQty = gasulId !== ''
+                ? Math.max(0, Number(addonOtherMultiSelections.get(gasulId) || 0))
+                : 0;
             if (!gasulBtn || gasulId === '') {
                 warnAndFocus(
                     'Gasul item is not configured in Inventory Stocks. Please add Gasul first.',
@@ -2332,7 +2679,7 @@ $stockQtyLabel = static function (float $qty): string {
                 );
                 return false;
             }
-            if (selectedOtherId !== gasulId || selectedOtherQty <= 0) {
+            if (selectedOtherQty <= 0) {
                 warnAndFocus(
                     'Track Gasul is ON. Please select Gasul in Add-on Other items.',
                     gasulBtn,
@@ -2409,6 +2756,7 @@ $stockQtyLabel = static function (float $qty): string {
         btn.addEventListener('click', () => {
             const code = String(btn.dataset.code || '').trim();
             if (code === '') return;
+            if (!isSelfServiceMode() && foldAutofillLockCode !== '' && code === foldAutofillLockCode) return;
             orderTypeCode.value = btn.dataset.code || '';
             selectedOrderLabel = btn.textContent?.trim() || '';
             selectedServiceKind = btn.dataset.serviceKind || 'full_service';
@@ -2483,6 +2831,7 @@ $stockQtyLabel = static function (float $qty): string {
             if (!(card instanceof HTMLButtonElement)) return;
             const code = String(card.dataset.code || '').trim();
             if (code === '') return;
+            if (!isSelfServiceMode() && foldAutofillLockCode !== '' && code === foldAutofillLockCode) return;
             const action = String(btn.getAttribute('data-action') || 'increment');
             const prev = selfServiceOrderQuantities.get(code) || {
                 code,
@@ -2565,6 +2914,25 @@ $stockQtyLabel = static function (float $qty): string {
             bleach: addonBleachQtyInput,
             other: addonOtherQtyInput,
         };
+        if (target === 'other') {
+            const activeId = String(addonOtherActiveId || '');
+            if (activeId === '') return;
+            const btn = document.querySelector(`.kiosk-addon-other-btn[data-id="${activeId}"]`);
+            const stock = Math.max(0, parseFloat(btn?.getAttribute('data-stock-qty') || '0') || 0);
+            const current = Math.max(0, Number(addonOtherMultiSelections.get(activeId) || 0));
+            const next = action === 'decrement'
+                ? Math.max(0, current - 1)
+                : Math.min(stock, current + 1);
+            if (next > 0) addonOtherMultiSelections.set(activeId, next);
+            else addonOtherMultiSelections.delete(activeId);
+            if (!addonOtherMultiSelections.has(activeId)) {
+                const first = addonOtherMultiSelections.keys().next();
+                addonOtherActiveId = first.done ? '' : String(first.value);
+            }
+            syncAddonOtherCardsUI();
+            updateSummary();
+            return;
+        }
         const input = map[target] || null;
         if (!input) return;
         const current = Math.max(0, parseFloat(input.value || '0') || 0);
@@ -2938,24 +3306,68 @@ $stockQtyLabel = static function (float $qty): string {
             }
         }
     }, 'btn-primary', 'btn-outline-primary', false);
-    bindCardChoice('.kiosk-addon-other-btn', (btn) => {
-        const nextId = btn ? (btn.getAttribute('data-id') || '') : '';
-        const sameSelected = nextId !== '' && addonOtherId.value === nextId;
-        addonOtherId.value = nextId;
-        if (addonOtherQtyInput) {
-            if (!btn) {
-                addonOtherQtyInput.value = '';
-            } else if (sameSelected) {
-                const currentQty = Math.max(0, parseFloat(addonOtherQtyInput.value || '0') || 0);
-                addonOtherQtyInput.value = String(currentQty + 1);
-            } else {
-                addonOtherQtyInput.value = '1';
+    document.querySelectorAll('.kiosk-addon-other-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const itemId = String(btn.getAttribute('data-id') || '').trim();
+            if (itemId === '') return;
+            const stock = Math.max(0, parseFloat(btn.getAttribute('data-stock-qty') || '0') || 0);
+            const currentQty = Math.max(0, Number(addonOtherMultiSelections.get(itemId) || 0));
+            if (currentQty >= stock && stock > 0) {
+                void showWarn('Selected other add-on stock is not enough for the current quantity.');
+                return;
             }
-        }
-    }, 'btn-primary', 'btn-outline-primary', false);
+            addonOtherMultiSelections.set(itemId, Math.max(1, currentQty + 1));
+            addonOtherActiveId = itemId;
+            syncAddonOtherCardsUI();
+            updateSummary();
+        });
+    });
     let trackGasulPrefSaving = false;
     let trackGasulPrefSeq = 0;
-    const saveTrackGasulUsagePreference = async (enabled) => {
+    let kioskAutomationAutosaveTimer = null;
+    const setKioskAutomationStatusHint = (message, tone = 'muted') => {
+        if (!kioskAutomationStatusHint) return;
+        kioskAutomationStatusHint.textContent = message;
+        kioskAutomationStatusHint.classList.remove('text-muted', 'text-success', 'text-danger');
+        if (tone === 'success') {
+            kioskAutomationStatusHint.classList.add('text-success');
+            return;
+        }
+        if (tone === 'danger') {
+            kioskAutomationStatusHint.classList.add('text-danger');
+            return;
+        }
+        kioskAutomationStatusHint.classList.add('text-muted');
+    };
+    const queueKioskAutomationAutosave = () => {
+        if (!kioskOwnerCanSetTrackGasul) return;
+        if (kioskAutomationAutosaveTimer) {
+            window.clearTimeout(kioskAutomationAutosaveTimer);
+        }
+        setKioskAutomationStatusHint('Saving changes...', 'muted');
+        kioskAutomationAutosaveTimer = window.setTimeout(async () => {
+            kioskAutomationAutosaveTimer = null;
+            const enabled = trackGasulToggle?.checked === true;
+            const saved = await saveTrackGasulUsagePreference(enabled, true);
+            if (saved) {
+                setKioskAutomationStatusHint('Settings saved automatically.', 'success');
+                updateSummary();
+                return;
+            }
+            setKioskAutomationStatusHint('Autosave failed. Click "Save kiosk settings".', 'danger');
+        }, 320);
+    };
+    const syncKioskAutomationHintState = () => {
+        if (!kioskAutomationStatusHint) return;
+        const inclusionMode = kioskConfiguredInclusionMode();
+        const foldMode = kioskConfiguredFoldMode();
+        const hasAutomation = inclusionMode !== 'off' || foldMode !== 'off';
+        const triggerCount = selectedKioskAutofillTriggerCodes().length;
+        if (hasAutomation && triggerCount < 1) {
+            setKioskAutomationStatusHint('Select at least one trigger order type to activate automation.', 'danger');
+        }
+    };
+    const saveTrackGasulUsagePreference = async (enabled, includeKioskAutomation = false) => {
         if (!trackGasulToggle || trackGasulPrefSaving) return true;
         trackGasulPrefSaving = true;
         const reqSeq = ++trackGasulPrefSeq;
@@ -2965,6 +3377,15 @@ $stockQtyLabel = static function (float $qty): string {
             const payload = new FormData();
             payload.set('_token', csrfToken);
             payload.set('track_gasul_usage', enabled ? '1' : '0');
+            if (includeKioskAutomation) {
+                payload.set('kiosk_inclusion_autofill_lock', kioskInclusionAutofillLock?.checked ? '1' : '0');
+                payload.set('kiosk_inclusion_autofill_editable', kioskInclusionAutofillEditable?.checked ? '1' : '0');
+                payload.set('kiosk_fold_autofill_free_fold', kioskFoldAutofillFreeFold?.checked ? '1' : '0');
+                payload.set('kiosk_fold_autofill_fold_with_price', kioskFoldAutofillWithPrice?.checked ? '1' : '0');
+                selectedKioskAutofillTriggerCodes().forEach((code) => {
+                    payload.append('kiosk_autofill_order_type_codes[]', code);
+                });
+            }
             const res = await fetch('<?= e(route('tenant.laundry-sales.track-gasul')) ?>', {
                 method: 'POST',
                 headers: {
@@ -3004,21 +3425,41 @@ $stockQtyLabel = static function (float $qty): string {
             trackGasulHidden.value = enabled ? '1' : '0';
         }
         const gasulBtns = Array.from(document.querySelectorAll('.kiosk-addon-other-btn[data-gasul-item="1"]'));
-        const selectedId = String(addonOtherId?.value || '').trim();
-        const selectedBtn = selectedId !== ''
-            ? document.querySelector(`.kiosk-addon-other-btn[data-id="${selectedId}"]`)
-            : null;
         gasulBtns.forEach((btn) => {
             btn.classList.toggle('d-none', !enabled);
         });
-        if (!enabled && selectedBtn instanceof HTMLElement && selectedBtn.getAttribute('data-gasul-item') === '1') {
-            addonOtherId.value = '';
-            addonOtherQty.value = '0';
-            if (addonOtherQtyInput) addonOtherQtyInput.value = '';
-            setButtonState('.kiosk-addon-other-btn', null);
+        if (!enabled) {
+            const gasulIds = gasulBtns.map((btn) => String(btn.getAttribute('data-id') || '').trim()).filter((id) => id !== '');
+            gasulIds.forEach((id) => addonOtherMultiSelections.delete(id));
+            if (addonOtherActiveId !== '' && !addonOtherMultiSelections.has(addonOtherActiveId)) {
+                const first = addonOtherMultiSelections.keys().next();
+                addonOtherActiveId = first.done ? '' : String(first.value);
+            }
+            syncAddonOtherCardsUI();
         }
         updateSummary();
     };
+    const enforceExclusiveChecks = (left, right) => {
+        left?.addEventListener('change', () => {
+            if (left.checked && right) right.checked = false;
+            updateSummary();
+            queueKioskAutomationAutosave();
+        });
+        right?.addEventListener('change', () => {
+            if (right.checked && left) left.checked = false;
+            updateSummary();
+            queueKioskAutomationAutosave();
+        });
+    };
+    enforceExclusiveChecks(kioskInclusionAutofillLock, kioskInclusionAutofillEditable);
+    enforceExclusiveChecks(kioskFoldAutofillFreeFold, kioskFoldAutofillWithPrice);
+    kioskAutofillOrderTypeChecks.forEach((input) => {
+        input.addEventListener('change', () => {
+            refreshKioskAutofillOrderTypesSummary();
+            updateSummary();
+            queueKioskAutomationAutosave();
+        });
+    });
     trackGasulToggle?.addEventListener('change', async () => {
         if (!kioskOwnerCanSetTrackGasul) {
             trackGasulToggle.checked = !trackGasulToggle.checked;
@@ -3032,6 +3473,8 @@ $stockQtyLabel = static function (float $qty): string {
             syncTrackGasulUI();
         }
     });
+    setKioskAutomationStatusHint('No unsaved changes.', 'muted');
+    refreshKioskAutofillOrderTypesSummary();
     syncTrackGasulUI();
 
     form?.addEventListener('submit', (e) => {
@@ -3114,19 +3557,24 @@ $stockQtyLabel = static function (float $qty): string {
                 showWarn('Select an online payment method for Split Payment.');
                 return;
             }
-            if (Math.abs((cashAmount + onlineAmount) - expectedTotal) > 0.009) {
-                showWarn(`Split total must equal the transaction total (₱${expectedTotal.toFixed(2)}).`);
+            const splitTotal = cashAmount + onlineAmount;
+            if (cashAmount <= 0.000001 && (splitTotal - expectedTotal) > 0.009) {
+                showWarn(`Split payment cannot exceed total without cash change (₱${expectedTotal.toFixed(2)}).`);
+                return;
+            }
+            if (splitTotal <= 0) {
+                showWarn('Enter a split payment amount greater than 0.');
                 return;
             }
             if (splitCashAmountHidden) splitCashAmountHidden.value = cashAmount.toFixed(2);
             if (splitOnlineAmountHidden) splitOnlineAmountHidden.value = onlineAmount.toFixed(2);
             if (splitOnlineMethodHidden) splitOnlineMethodHidden.value = onlineMethod;
-            if (amountTenderedHidden) amountTenderedHidden.value = (cashAmount + onlineAmount).toFixed(2);
-            if (changeAmountHidden) changeAmountHidden.value = Math.max(0, (cashAmount + onlineAmount) - dueAmount).toFixed(2);
+            if (amountTenderedHidden) amountTenderedHidden.value = splitTotal.toFixed(2);
+            if (changeAmountHidden) changeAmountHidden.value = Math.max(0, splitTotal - dueAmount).toFixed(2);
         } else {
             const paidAmount = Math.max(0, parseFloat(amountPaidInput?.value || '0') || 0);
-            if (paidAmount + 1e-9 < dueAmount) {
-                showWarn(`Amount paid must be at least the total amount (₱${dueAmount.toFixed(2)}).`);
+            if (paidAmount <= 0) {
+                showWarn('Enter an amount paid greater than 0.');
                 return;
             }
             if (amountTenderedHidden) amountTenderedHidden.value = paidAmount.toFixed(2);

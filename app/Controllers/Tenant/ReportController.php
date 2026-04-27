@@ -203,6 +203,7 @@ final class ReportController
         $inventoryOutTotals = $this->fetchInventoryOutTotals($pdo, $tenantId, $rangeStart, $rangeEnd);
         $inventoryLedgerRows = $this->fetchInventoryLedgerRows($pdo, $tenantId, $rangeStart, $rangeEnd);
         $machineCreditLedgerRows = $this->fetchMachineCreditLedgerRows($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $machineIdleRows = $this->fetchMachineIdleRows($pdo, $tenantId, $rangeStart, $rangeEnd);
 
         $stTop = $pdo->prepare(
             'SELECT c.name, COUNT(o.id) AS frequency, COALESCE(SUM(o.total_amount),0) AS total_spending
@@ -315,6 +316,7 @@ final class ReportController
                 'total_items_out_total' => (float) ($inventoryOutTotals['total_qty'] ?? 0.0),
                 'inventory_ledger_rows' => $inventoryLedgerRows,
                 'machine_credit_ledger_rows' => $machineCreditLedgerRows,
+                'machine_idle_rows' => $machineIdleRows,
             ],
             'chart' => $chartSeries,
             'top_customers' => $topCustomers,
@@ -363,9 +365,340 @@ final class ReportController
             [$from, $to] = [$to, $from];
         }
 
+        $dailyOutsData = $this->fetchDailyOutsData($pdo, $tenantId, $from, $to);
+
+        return json_response([
+            'success' => true,
+            'from' => $from,
+            'to' => $to,
+            'data' => $dailyOutsData['data'],
+            'inventory_out' => $dailyOutsData['inventory_out'],
+            'inventory_out_inclusion' => $dailyOutsData['inventory_out_inclusion'],
+            'inventory_out_addon' => $dailyOutsData['inventory_out_addon'],
+        ]);
+    }
+
+    public function exportExcel(Request $request): Response
+    {
+        $user = Auth::user();
+        if (! $user || ($user['role'] ?? '') !== 'tenant_admin') {
+            return new Response('Forbidden', 403);
+        }
+
+        $tenantId = (int) ($user['tenant_id'] ?? 0);
+        $pdo = App::db();
+        LaundrySchema::ensure($pdo);
+        $today = date('Y-m-d');
+        [$from, $to] = $this->resolveReportRange($request, $today);
         $rangeStart = $from.' 00:00:00';
         $rangeEnd = $to.' 23:59:59';
 
+        $foldServiceAmount = $this->getBranchFoldServiceAmount($pdo, $tenantId);
+        $foldCommissionTarget = $this->getBranchFoldCommissionTarget($pdo, $tenantId);
+        $salesTotal = $this->scalarSum(
+            $pdo,
+            "SELECT COALESCE(SUM(total_amount),0)
+             FROM laundry_orders
+             WHERE tenant_id = ?
+               AND created_at BETWEEN ? AND ?
+               AND COALESCE(is_void, 0) = 0
+               AND status <> 'void'
+               AND (
+                   status = 'paid'
+                   OR (status = 'completed' AND payment_status = 'paid')
+               )",
+            [$tenantId, $rangeStart, $rangeEnd]
+        );
+        $discountsTotal = 0.0;
+        if ($this->hasLaundryOrdersDiscountAmount($pdo)) {
+            $discountsTotal = $this->scalarSum(
+                $pdo,
+                "SELECT COALESCE(SUM(discount_amount),0)
+                 FROM laundry_orders
+                 WHERE tenant_id = ?
+                   AND created_at BETWEEN ? AND ?
+                   AND COALESCE(is_void, 0) = 0
+                   AND status <> 'void'
+                   AND (
+                       status = 'paid'
+                       OR (status = 'completed' AND payment_status = 'paid')
+                   )",
+                [$tenantId, $rangeStart, $rangeEnd]
+            );
+        }
+        $foldOrdersCount = (int) $this->scalarSum(
+            $pdo,
+            "SELECT COUNT(*)
+             FROM laundry_orders
+             WHERE tenant_id = ?
+               AND include_fold_service = 1
+               AND created_at BETWEEN ? AND ?
+               AND COALESCE(is_void, 0) = 0
+               AND status <> 'void'
+               AND COALESCE(is_free, 0) = 0
+               AND COALESCE(is_reward, 0) = 0
+               AND (
+                   status = 'paid'
+                   OR (status = 'completed' AND payment_status = 'paid')
+               )",
+            [$tenantId, $rangeStart, $rangeEnd]
+        );
+        $foldAmountTotal = $foldCommissionTarget === 'branch' ? ($foldServiceAmount * $foldOrdersCount) : 0.0;
+        $grossSalesTotal = $salesTotal + $discountsTotal + $foldAmountTotal;
+        $refundsTotal = 0.0;
+        $manualExpensesTotal = $this->scalarSum(
+            $pdo,
+            "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE tenant_id = ? AND type = 'manual' AND created_at BETWEEN ? AND ?",
+            [$tenantId, $rangeStart, $rangeEnd]
+        );
+        $expensesTotal = $manualExpensesTotal;
+        $netSalesTotal = $grossSalesTotal - $refundsTotal - $discountsTotal - $expensesTotal;
+        $grossProfit = $netSalesTotal;
+        $isTodayOnly = ($from === $to && $from === $today);
+
+        $st = $pdo->prepare(
+            "SELECT
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'cash' THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split') THEN COALESCE(split_cash_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS cash_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'card' THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                             AND LOWER(TRIM(COALESCE(split_online_method, ''))) = 'card' THEN COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS card_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'gcash' THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                             AND LOWER(TRIM(COALESCE(split_online_method, ''))) = 'gcash' THEN COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS gcash_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'paymaya' THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                             AND LOWER(TRIM(COALESCE(split_online_method, ''))) = 'paymaya' THEN COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS paymaya_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('online_banking', 'online banking') THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                             AND LOWER(TRIM(COALESCE(split_online_method, ''))) = 'online_banking' THEN COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS online_banking_total,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) = 'qr_payment' THEN total_amount
+                        WHEN LOWER(TRIM(COALESCE(payment_method, 'cash'))) IN ('split_payment', 'split')
+                             AND LOWER(TRIM(COALESCE(split_online_method, ''))) = 'qr_payment' THEN COALESCE(split_online_amount, 0)
+                        ELSE 0
+                    END
+                ), 0) AS qr_payment_total
+             FROM laundry_orders
+             WHERE tenant_id = ?
+               AND created_at BETWEEN ? AND ?
+               AND COALESCE(is_void, 0) = 0
+               AND status <> 'void'
+               AND (
+                   status = 'paid'
+                   OR (status = 'completed' AND payment_status = 'paid')
+               )"
+        );
+        $st->execute([$tenantId, $rangeStart, $rangeEnd]);
+        $paymentRow = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+        $paymentsByMethod = [
+            'cash' => (float) ($paymentRow['cash_total'] ?? 0),
+            'card' => (float) ($paymentRow['card_total'] ?? 0),
+            'gcash' => (float) ($paymentRow['gcash_total'] ?? 0),
+            'paymaya' => (float) ($paymentRow['paymaya_total'] ?? 0),
+            'online_banking' => (float) ($paymentRow['online_banking_total'] ?? 0),
+            'qr_payment' => (float) ($paymentRow['qr_payment_total'] ?? 0),
+        ];
+
+        $orderTypeTotals = $this->fetchOrderTypeTotals($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $inventoryOutTotals = $this->fetchInventoryOutTotals($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $serviceModeSummary = $this->fetchServiceModeSummary($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $inventoryLedgerRows = $this->fetchInventoryLedgerRows($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $machineCreditLedgerRows = $this->fetchMachineCreditLedgerRows($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $machineIdleRows = $this->fetchMachineIdleRows($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $dailyOutsData = $this->fetchDailyOutsData($pdo, $tenantId, $from, $to);
+        $chartSeries = $this->buildChartSeries($pdo, $tenantId, $from, $to);
+
+        $stTop = $pdo->prepare(
+            'SELECT c.name, COUNT(o.id) AS frequency, COALESCE(SUM(o.total_amount),0) AS total_spending
+             FROM laundry_customers c
+             LEFT JOIN laundry_orders o ON o.customer_id = c.id AND o.tenant_id = c.tenant_id
+                AND COALESCE(o.is_void, 0) = 0
+                AND o.status <> "void"
+                AND (
+                    o.status = "paid"
+                    OR (o.status = "completed" AND o.payment_status = "paid")
+                ) AND o.created_at BETWEEN ? AND ?
+             WHERE c.tenant_id = ?
+             GROUP BY c.id
+             ORDER BY frequency DESC, total_spending DESC, c.name ASC
+             LIMIT 10'
+        );
+        $stTop->execute([$rangeStart, $rangeEnd, $tenantId]);
+        $topCustomers = $stTop->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $stBday = $pdo->prepare('SELECT name, birthday FROM laundry_customers WHERE tenant_id = ? AND birthday IS NOT NULL');
+        $stBday->execute([$tenantId]);
+        $birthdaysInRange = [];
+        $rangeFromMd = date('m-d', strtotime($from) ?: time());
+        $rangeToMd = date('m-d', strtotime($to) ?: time());
+        foreach ($stBday->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $birthday = (string) ($row['birthday'] ?? '');
+            if ($birthday === '' || strtotime($birthday) === false) {
+                continue;
+            }
+            $md = date('m-d', strtotime($birthday));
+            $inRange = $rangeFromMd <= $rangeToMd
+                ? ($md >= $rangeFromMd && $md <= $rangeToMd)
+                : ($md >= $rangeFromMd || $md <= $rangeToMd);
+            if ($inRange) {
+                $birthdaysInRange[] = $row;
+            }
+        }
+
+        $sheetRows = [];
+        $sheetRows['Sales amounts'] = [
+            ['Metric', 'Value'],
+            ['Range from', $from],
+            ['Range to', $to],
+            ['Gross sales', $grossSalesTotal],
+            ['Refunds', $refundsTotal],
+            ['Discounts', $discountsTotal],
+            ['Fold amount', $foldAmountTotal],
+            ['Expenses', $expensesTotal],
+            ['Net sales', $netSalesTotal],
+            ['Gross profit', $grossProfit],
+        ];
+        $sheetRows['Payments'] = [
+            ['Payment method', 'Amount'],
+            ['Cash '.($isTodayOnly ? 'today' : '(selected range)'), $paymentsByMethod['cash']],
+            ['Card '.($isTodayOnly ? 'today' : '(selected range)'), $paymentsByMethod['card']],
+            ['GCash '.($isTodayOnly ? 'today' : '(selected range)'), $paymentsByMethod['gcash']],
+            ['PayMaya '.($isTodayOnly ? 'today' : '(selected range)'), $paymentsByMethod['paymaya']],
+            ['Online banking '.($isTodayOnly ? 'today' : '(selected range)'), $paymentsByMethod['online_banking']],
+            ['QR payment '.($isTodayOnly ? 'today' : '(selected range)'), $paymentsByMethod['qr_payment']],
+        ];
+
+        $sheetRows['Order type totals'] = [['Order type', 'Total ordered']];
+        foreach ($orderTypeTotals as $row) {
+            $sheetRows['Order type totals'][] = [(string) ($row['label'] ?? $row['code'] ?? 'Order type'), (float) ($row['qty'] ?? 0)];
+        }
+        $sheetRows['Top customers'] = [['Customer', 'Visits', 'Spending']];
+        foreach ($topCustomers as $row) {
+            $sheetRows['Top customers'][] = [(string) ($row['name'] ?? ''), (int) ($row['frequency'] ?? 0), (float) ($row['total_spending'] ?? 0)];
+        }
+        $sheetRows['Birthdays'] = [['Customer', 'Birthday']];
+        foreach ($birthdaysInRange as $row) {
+            $sheetRows['Birthdays'][] = [(string) ($row['name'] ?? ''), (string) ($row['birthday'] ?? '')];
+        }
+        $sheetRows['Inventory totals'] = [
+            ['Metric', 'Qty out'],
+            ['Inclusion items out', (float) ($inventoryOutTotals['inclusion_qty'] ?? 0)],
+            ['Add-on items out', (float) ($inventoryOutTotals['addon_qty'] ?? 0)],
+            ['Total items out', (float) ($inventoryOutTotals['total_qty'] ?? 0)],
+        ];
+        $sheetRows['Services sold'] = [['Service type', 'Qty sold', 'Amount']];
+        foreach ($dailyOutsData['data'] as $row) {
+            $sheetRows['Services sold'][] = [(string) ($row['product_name'] ?? ''), (float) ($row['qty'] ?? 0), (float) ($row['line_amount'] ?? 0)];
+        }
+        $sheetRows['Daily sales'] = [['Date', 'Sales', 'Expenses', 'Net']];
+        $dailyDates = array_values((array) ($chartSeries['dates'] ?? []));
+        $dailySales = array_values((array) ($chartSeries['sales'] ?? []));
+        $dailyExpenses = array_values((array) ($chartSeries['expenses'] ?? []));
+        $dailyNet = array_values((array) ($chartSeries['profit'] ?? []));
+        $nDaily = count($dailyDates);
+        for ($i = 0; $i < $nDaily; $i++) {
+            $sheetRows['Daily sales'][] = [
+                (string) ($dailyDates[$i] ?? ''),
+                (float) ($dailySales[$i] ?? 0),
+                (float) ($dailyExpenses[$i] ?? 0),
+                (float) ($dailyNet[$i] ?? 0),
+            ];
+        }
+        $sheetRows['Inventory items out'] = [['Item name', 'Qty out', 'Amount']];
+        foreach ($dailyOutsData['inventory_out'] as $row) {
+            $sheetRows['Inventory items out'][] = [(string) ($row['item_name'] ?? ''), (float) ($row['qty_out'] ?? 0), (float) ($row['amount_out'] ?? 0)];
+        }
+        $sheetRows['Inclusion items out'] = [['Item name', 'Qty out']];
+        foreach ($dailyOutsData['inventory_out_inclusion'] as $row) {
+            $sheetRows['Inclusion items out'][] = [(string) ($row['item_name'] ?? ''), (float) ($row['qty_out'] ?? 0)];
+        }
+        $sheetRows['Addon items out'] = [['Item name', 'Qty out']];
+        foreach ($dailyOutsData['inventory_out_addon'] as $row) {
+            $sheetRows['Addon items out'][] = [(string) ($row['item_name'] ?? ''), (float) ($row['qty_out'] ?? 0)];
+        }
+        $sheetRows['Items by service mode'] = [['Service mode', 'Count']];
+        foreach ($serviceModeSummary as $row) {
+            $sheetRows['Items by service mode'][] = [(string) ($row['label'] ?? ''), (int) ($row['count'] ?? 0)];
+        }
+        $sheetRows['Inventory ledger'] = [['Item', 'Opening', 'Stock In', 'Stock Out', 'Closing', 'Stocks left']];
+        foreach ($inventoryLedgerRows as $row) {
+            $closing = (float) ($row['closing'] ?? 0);
+            $sheetRows['Inventory ledger'][] = [
+                (string) ($row['item_name'] ?? ''),
+                (float) ($row['opening'] ?? 0),
+                (float) ($row['stock_in'] ?? 0),
+                (float) ($row['stock_out'] ?? 0),
+                $closing,
+                $closing,
+            ];
+        }
+        $sheetRows['Machine credits ledger'] = [['Machine', 'Opening', 'Restock', 'Usage (Out)', 'Closing']];
+        foreach ($machineCreditLedgerRows as $row) {
+            $sheetRows['Machine credits ledger'][] = [
+                (string) ($row['machine_label'] ?? ''),
+                (float) ($row['opening'] ?? 0),
+                (float) ($row['restock'] ?? 0),
+                (float) ($row['usage'] ?? 0),
+                (float) ($row['closing'] ?? 0),
+            ];
+        }
+        $sheetRows['Machine idle time'] = [['Machine', 'Idle hours', 'Idle gaps', 'Longest idle (hours)', 'Longest idle range', 'Usage logs']];
+        foreach ($machineIdleRows as $row) {
+            $sheetRows['Machine idle time'][] = [
+                (string) ($row['machine_label'] ?? ''),
+                (float) ($row['idle_hours'] ?? 0),
+                (int) ($row['idle_gaps'] ?? 0),
+                (float) ($row['longest_idle_hours'] ?? 0),
+                (string) ($row['longest_idle_range'] ?? ''),
+                (int) ($row['usage_logs'] ?? 0),
+            ];
+        }
+
+        $xml = $this->buildSpreadsheetXml($sheetRows);
+        $filename = 'reports-'.$from.'-to-'.$to.'.xls';
+        return new Response($xml, 200, [
+            'Content-Type' => 'application/vnd.ms-excel; charset=UTF-8',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+            'Cache-Control' => 'no-cache, no-store, must-revalidate',
+            'Pragma' => 'no-cache',
+            'Expires' => '0',
+        ]);
+    }
+
+    /**
+     * @return array{data:list<array<string,mixed>>,inventory_out:list<array<string,mixed>>,inventory_out_inclusion:list<array<string,mixed>>,inventory_out_addon:list<array<string,mixed>>}
+     */
+    private function fetchDailyOutsData(PDO $pdo, int $tenantId, string $from, string $to): array
+    {
+        $rangeStart = $from.' 00:00:00';
+        $rangeEnd = $to.' 23:59:59';
         $st = $pdo->prepare(
             "SELECT order_type AS service_type,
                     COUNT(*) AS qty,
@@ -393,7 +726,6 @@ final class ReportController
                 'line_amount' => round_money((float) ($row['line_amount'] ?? 0)),
             ];
         }
-
         $inventoryOutMap = [];
         $inclusionOutMap = [];
         $addonOutMap = [];
@@ -402,13 +734,12 @@ final class ReportController
             if ($label === '') {
                 return;
             }
-            if (!isset($map[$label])) {
+            if (! isset($map[$label])) {
                 $map[$label] = ['item_name' => $label, 'qty_out' => 0.0, 'amount_out' => 0.0];
             }
             $map[$label]['qty_out'] += $qty;
             $map[$label]['amount_out'] += $amount;
         };
-
         $inclusionQueries = [
             ['col' => 'o.inclusion_detergent_item_id', 'fallback' => 'Detergent'],
             ['col' => 'o.inclusion_fabcon_item_id', 'fallback' => 'Fabric conditioner'],
@@ -439,21 +770,10 @@ final class ReportController
                 $itemName = (string) ($row['item_name'] ?? '');
                 $qtyOut = (float) ($row['qty_out'] ?? 0);
                 $amountOut = (float) ($row['amount_out'] ?? 0);
-                $addInventoryOut(
-                    $inventoryOutMap,
-                    $itemName,
-                    $qtyOut,
-                    $amountOut
-                );
-                $addInventoryOut(
-                    $inclusionOutMap,
-                    $itemName,
-                    $qtyOut,
-                    $amountOut
-                );
+                $addInventoryOut($inventoryOutMap, $itemName, $qtyOut, $amountOut);
+                $addInventoryOut($inclusionOutMap, $itemName, $qtyOut, $amountOut);
             }
         }
-
         $addonSt = $pdo->prepare(
             "SELECT COALESCE(NULLIF(TRIM(ao.item_name), ''), 'Add-on item') AS item_name,
                     COALESCE(SUM(ao.quantity),0) AS qty_out,
@@ -475,54 +795,71 @@ final class ReportController
             $itemName = (string) ($row['item_name'] ?? '');
             $qtyOut = (float) ($row['qty_out'] ?? 0);
             $amountOut = (float) ($row['amount_out'] ?? 0);
-            $addInventoryOut(
-                $inventoryOutMap,
-                $itemName,
-                $qtyOut,
-                $amountOut
-            );
-            $addInventoryOut(
-                $addonOutMap,
-                $itemName,
-                $qtyOut,
-                $amountOut
-            );
+            $addInventoryOut($inventoryOutMap, $itemName, $qtyOut, $amountOut);
+            $addInventoryOut($addonOutMap, $itemName, $qtyOut, $amountOut);
         }
-
         $inventoryOutRows = array_values($inventoryOutMap);
         $inclusionOutRows = array_values($inclusionOutMap);
         $addonOutRows = array_values($addonOutMap);
-        usort($inventoryOutRows, static function (array $a, array $b): int {
-            $qtyCmp = (float) ($b['qty_out'] ?? 0) <=> (float) ($a['qty_out'] ?? 0);
-            if ($qtyCmp !== 0) {
-                return $qtyCmp;
-            }
-            return strcmp((string) ($a['item_name'] ?? ''), (string) ($b['item_name'] ?? ''));
-        });
-        usort($inclusionOutRows, static function (array $a, array $b): int {
-            $qtyCmp = (float) ($b['qty_out'] ?? 0) <=> (float) ($a['qty_out'] ?? 0);
-            if ($qtyCmp !== 0) {
-                return $qtyCmp;
-            }
-            return strcmp((string) ($a['item_name'] ?? ''), (string) ($b['item_name'] ?? ''));
-        });
-        usort($addonOutRows, static function (array $a, array $b): int {
-            $qtyCmp = (float) ($b['qty_out'] ?? 0) <=> (float) ($a['qty_out'] ?? 0);
-            if ($qtyCmp !== 0) {
-                return $qtyCmp;
-            }
-            return strcmp((string) ($a['item_name'] ?? ''), (string) ($b['item_name'] ?? ''));
-        });
-
-        return json_response([
-            'success' => true,
-            'from' => $from,
-            'to' => $to,
+        $sortRows = static function (array $rows): array {
+            usort($rows, static function (array $a, array $b): int {
+                $qtyCmp = (float) ($b['qty_out'] ?? 0) <=> (float) ($a['qty_out'] ?? 0);
+                if ($qtyCmp !== 0) {
+                    return $qtyCmp;
+                }
+                return strcmp((string) ($a['item_name'] ?? ''), (string) ($b['item_name'] ?? ''));
+            });
+            return $rows;
+        };
+        return [
             'data' => $rows,
-            'inventory_out' => $inventoryOutRows,
-            'inventory_out_inclusion' => $inclusionOutRows,
-            'inventory_out_addon' => $addonOutRows,
-        ]);
+            'inventory_out' => $sortRows($inventoryOutRows),
+            'inventory_out_inclusion' => $sortRows($inclusionOutRows),
+            'inventory_out_addon' => $sortRows($addonOutRows),
+        ];
+    }
+
+    /** @param array<string,list<list<mixed>>> $sheetRows */
+    private function buildSpreadsheetXml(array $sheetRows): string
+    {
+        $sheetsXml = '';
+        $sheetIndex = 1;
+        foreach ($sheetRows as $sheetName => $rows) {
+            $safeName = preg_replace('/[\x00-\x1F:\*\\\?\/\[\]]+/', ' ', $sheetName) ?? 'Sheet '.$sheetIndex;
+            $safeName = trim(substr($safeName, 0, 31));
+            if ($safeName === '') {
+                $safeName = 'Sheet '.$sheetIndex;
+            }
+            $rowsXml = '';
+            foreach ($rows as $rIdx => $row) {
+                $cellsXml = '';
+                foreach ($row as $cell) {
+                    $isNumeric = is_int($cell) || is_float($cell);
+                    $type = $isNumeric ? 'Number' : 'String';
+                    $value = $isNumeric
+                        ? (string) (is_float($cell) ? round_money($cell) : $cell)
+                        : htmlspecialchars((string) $cell, ENT_XML1 | ENT_QUOTES, 'UTF-8');
+                    $style = $rIdx === 0 ? ' ss:StyleID="header"' : '';
+                    $cellsXml .= '<Cell'.$style.'><Data ss:Type="'.$type.'">'.$value.'</Data></Cell>';
+                }
+                $rowsXml .= '<Row>'.$cellsXml.'</Row>';
+            }
+            $sheetsXml .= '<Worksheet ss:Name="'.htmlspecialchars($safeName, ENT_XML1 | ENT_QUOTES, 'UTF-8').'">'
+                .'<Table>'.$rowsXml.'</Table></Worksheet>';
+            $sheetIndex++;
+        }
+        return '<?xml version="1.0" encoding="UTF-8"?>'
+            .'<?mso-application progid="Excel.Sheet"?>'
+            .'<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"'
+            .' xmlns:o="urn:schemas-microsoft-com:office:office"'
+            .' xmlns:x="urn:schemas-microsoft-com:office:excel"'
+            .' xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"'
+            .' xmlns:html="http://www.w3.org/TR/REC-html40">'
+            .'<Styles>'
+            .'<Style ss:ID="header"><Font ss:Bold="1"/></Style>'
+            .'</Styles>'
+            .$sheetsXml
+            .'</Workbook>';
     }
 
     private function scalarSum(PDO $pdo, string $sql, array $params): float
@@ -919,6 +1256,132 @@ final class ReportController
         }
 
         return $rows;
+    }
+
+    /**
+     * @return list<array{machine_label:string,machine_code:string,idle_hours:float,idle_gaps:int,longest_idle_hours:float,longest_idle_range:string,usage_logs:int}>
+     */
+    private function fetchMachineIdleRows(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
+    {
+        try {
+            $st = $pdo->prepare(
+                'SELECT id, machine_label, machine_code, machine_kind
+                 FROM laundry_machines
+                 WHERE tenant_id = ?
+                 ORDER BY machine_kind ASC, machine_label ASC, machine_code ASC, id ASC'
+            );
+            $st->execute([$tenantId]);
+            $machines = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            if ($machines === []) {
+                return [];
+            }
+
+            $usageByMachine = [];
+            $usageQueries = [
+                ['machine_col' => 'washer_machine_id', 'minutes_expr' => 'COALESCE(o.wash_qty, 0) * 30'],
+                ['machine_col' => 'dryer_machine_id', 'minutes_expr' => 'COALESCE(o.dry_minutes, 0)'],
+                ['machine_col' => 'machine_id', 'minutes_expr' => 'COALESCE(o.wash_qty, 0) * 30 + COALESCE(o.dry_minutes, 0)'],
+            ];
+
+            foreach ($usageQueries as $cfg) {
+                $q = $pdo->prepare(
+                    "SELECT o.{$cfg['machine_col']} AS machine_id, o.created_at,
+                            {$cfg['minutes_expr']} AS usage_minutes
+                     FROM laundry_orders o
+                     WHERE o.tenant_id = ?
+                       AND o.created_at BETWEEN ? AND ?
+                       AND o.{$cfg['machine_col']} IS NOT NULL
+                       AND o.{$cfg['machine_col']} > 0
+                       AND COALESCE(o.is_void, 0) = 0
+                       AND o.status <> 'void'
+                       AND (
+                           o.status = 'paid'
+                           OR (o.status = 'completed' AND o.payment_status = 'paid')
+                           OR o.status = 'open_ticket'
+                           OR o.status = 'washing_drying'
+                           OR o.status = 'running'
+                           OR o.status = 'pending'
+                       )
+                     ORDER BY o.created_at ASC, o.id ASC"
+                );
+                $q->execute([$tenantId, $rangeStart, $rangeEnd]);
+                foreach ($q->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                    $machineId = (int) ($row['machine_id'] ?? 0);
+                    if ($machineId < 1) {
+                        continue;
+                    }
+                    $createdAt = (string) ($row['created_at'] ?? '');
+                    $startTs = strtotime($createdAt);
+                    if ($createdAt === '' || $startTs === false) {
+                        continue;
+                    }
+                    $usageMinutes = max(0.0, (float) ($row['usage_minutes'] ?? 0));
+                    if ($usageMinutes <= 0.000001) {
+                        $usageMinutes = 1.0;
+                    }
+                    $endTs = $startTs + (int) round($usageMinutes * 60);
+                    $usageByMachine[$machineId][] = [
+                        'start_ts' => $startTs,
+                        'end_ts' => $endTs,
+                    ];
+                }
+            }
+
+            $rangeStartTs = strtotime($rangeStart);
+            $rangeEndTs = strtotime($rangeEnd);
+            if ($rangeStartTs === false || $rangeEndTs === false || $rangeEndTs < $rangeStartTs) {
+                return [];
+            }
+
+            $rows = [];
+            foreach ($machines as $machine) {
+                $machineId = (int) ($machine['id'] ?? 0);
+                $events = $usageByMachine[$machineId] ?? [];
+                usort($events, static fn (array $a, array $b): int => ($a['start_ts'] <=> $b['start_ts']) ?: ($a['end_ts'] <=> $b['end_ts']));
+                $idleSeconds = 0;
+                $idleGaps = 0;
+                $longestIdle = 0;
+                $longestRange = '';
+                $cursor = $rangeStartTs;
+                foreach ($events as $event) {
+                    $start = max($rangeStartTs, (int) ($event['start_ts'] ?? $rangeStartTs));
+                    $end = min($rangeEndTs, max($start, (int) ($event['end_ts'] ?? $start)));
+                    if ($start > $cursor) {
+                        $gap = $start - $cursor;
+                        $idleSeconds += $gap;
+                        $idleGaps++;
+                        if ($gap > $longestIdle) {
+                            $longestIdle = $gap;
+                            $longestRange = date('Y-m-d H:i', $cursor).' -> '.date('Y-m-d H:i', $start);
+                        }
+                    }
+                    if ($end > $cursor) {
+                        $cursor = $end;
+                    }
+                }
+                if ($cursor < $rangeEndTs) {
+                    $gap = $rangeEndTs - $cursor;
+                    $idleSeconds += $gap;
+                    $idleGaps++;
+                    if ($gap > $longestIdle) {
+                        $longestIdle = $gap;
+                        $longestRange = date('Y-m-d H:i', $cursor).' -> '.date('Y-m-d H:i', $rangeEndTs);
+                    }
+                }
+                $rows[] = [
+                    'machine_label' => (string) ($machine['machine_label'] ?? ''),
+                    'machine_code' => (string) ($machine['machine_code'] ?? ''),
+                    'idle_hours' => round($idleSeconds / 3600, 2),
+                    'idle_gaps' => $idleGaps,
+                    'longest_idle_hours' => round($longestIdle / 3600, 2),
+                    'longest_idle_range' => $longestRange,
+                    'usage_logs' => count($events),
+                ];
+            }
+            return $rows;
+        } catch (\Throwable) {
+            return [];
+        }
     }
 
     private function hasLaundryOrdersDiscountAmount(PDO $pdo): bool

@@ -897,10 +897,41 @@ body.app-theme.laundry-luxe .water-decor {
     pointer-events: none;
 }
 
+body.app-theme.laundry-luxe .water-decor::before,
+body.app-theme.laundry-luxe .water-decor::after {
+    content: "";
+    position: absolute;
+    left: -10%;
+    right: -10%;
+    height: 34vh;
+    border-radius: 45% 55% 50% 50%;
+    pointer-events: none;
+    will-change: transform;
+}
+
+body.app-theme.laundry-luxe .water-decor::before {
+    bottom: -18vh;
+    background:
+        radial-gradient(120% 90% at 50% 8%, rgba(214, 246, 255, 0.28) 0%, rgba(214, 246, 255, 0.1) 30%, rgba(214, 246, 255, 0) 56%),
+        linear-gradient(180deg, rgba(19, 130, 193, 0.2) 0%, rgba(19, 130, 193, 0.08) 58%, rgba(19, 130, 193, 0) 100%);
+    animation: sea-wave-swell-lite 16s ease-in-out infinite;
+}
+
+body.app-theme.laundry-luxe .water-decor::after {
+    bottom: -20vh;
+    background:
+        radial-gradient(120% 88% at 52% 16%, rgba(178, 236, 255, 0.2) 0%, rgba(178, 236, 255, 0.08) 34%, rgba(178, 236, 255, 0) 62%),
+        linear-gradient(180deg, rgba(7, 95, 161, 0.18) 0%, rgba(7, 95, 161, 0.07) 60%, rgba(7, 95, 161, 0) 100%);
+    animation: sea-wave-swell-lite 22s ease-in-out infinite reverse;
+}
+
 body.app-theme.laundry-luxe .water-decor .bubble {
-    background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 1), rgba(193, 236, 255, 0.62) 58%, rgba(99, 201, 245, 0.2) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.72);
-    box-shadow: inset 0 1px 8px rgba(255, 255, 255, 0.75), 0 14px 30px rgba(33, 136, 186, 0.28);
+    background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 1), rgba(162, 225, 255, 0.9) 56%, rgba(46, 170, 232, 0.52) 100%);
+    border: 2px solid rgba(94, 191, 241, 0.9);
+    box-shadow:
+        inset 0 2px 12px rgba(255, 255, 255, 0.92),
+        0 0 0 2px rgba(175, 230, 255, 0.62),
+        0 20px 38px rgba(15, 106, 168, 0.46);
     animation-name: luxe-bubble-rise;
     animation-timing-function: ease-in;
     opacity: 1;
@@ -913,10 +944,23 @@ body.app-theme.laundry-luxe .water-decor .bubble-4 { width: 36px; height: 36px; 
 body.app-theme.laundry-luxe .water-decor .bubble-5 { width: 52px; height: 52px; left: 91%; animation-duration: 18s; animation-delay: 2.2s; }
 
 @keyframes luxe-bubble-rise {
-    0% { transform: translate3d(0, 0, 0) scale(0.9); opacity: 0.35; }
+    0% { transform: translate3d(0, 0, 0) scale(0.9); opacity: 0.78; }
     10% { opacity: 1; }
-    70% { opacity: 0.85; }
-    100% { transform: translate3d(-24px, -115vh, 0) scale(1.24); opacity: 0.35; }
+    70% { opacity: 0.98; }
+    100% { transform: translate3d(-24px, -115vh, 0) scale(1.24); opacity: 0.78; }
+}
+
+@keyframes sea-wave-swell-lite {
+    0% { transform: translate3d(-2%, 0, 0) scaleX(1); }
+    50% { transform: translate3d(2%, -0.8vh, 0) scaleX(1.03); }
+    100% { transform: translate3d(-2%, 0, 0) scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.app-theme.laundry-luxe .water-decor::before,
+    body.app-theme.laundry-luxe .water-decor::after {
+        animation: none !important;
+    }
 }
 
 body.app-theme.laundry-luxe .app-shell {

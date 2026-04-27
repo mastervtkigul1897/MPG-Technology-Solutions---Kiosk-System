@@ -18,6 +18,7 @@ final class AuthController
 {
     private const FREE_PLAN_CODE = 'free_access';
     private const FREE_PLANS = ['trial', 'free', 'free_trial', self::FREE_PLAN_CODE];
+    private static ?bool $usersLastLoginColumnExists = null;
 
     private static function normalizeSlug(string $value): string
     {
@@ -168,6 +169,24 @@ final class AuthController
         ]);
     }
 
+    private static function hasUsersLastLoginColumn(PDO $pdo): bool
+    {
+        if (self::$usersLastLoginColumnExists === true) {
+            return true;
+        }
+        try {
+            $chk = $pdo->query("SHOW COLUMNS FROM `users` LIKE 'last_login_at'");
+            $exists = $chk !== false && $chk->fetch(PDO::FETCH_ASSOC) !== false;
+            if ($exists) {
+                self::$usersLastLoginColumnExists = true;
+            }
+
+            return $exists;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     public function showLogin(Request $request): Response
     {
         return view_guest('Login', 'auth.login', ['status' => session_flash('status')]);
@@ -275,12 +294,20 @@ final class AuthController
         }
 
         Auth::login((int) $user['id']);
-
-        if (($user['role'] ?? '') !== 'super_admin' && empty($user['email_verified_at'])) {
-            session_flash('status', 'Please verify your email address to continue.');
-            return redirect(url('/email/verification-notice'));
+        if (self::hasUsersLastLoginColumn($pdo)) {
+            try {
+                $pdo->prepare('UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE id = ? LIMIT 1')
+                    ->execute([(int) $user['id']]);
+            } catch (\Throwable) {
+                // Keep login successful even if telemetry update fails.
+            }
         }
 
+        $sessionUser = Auth::user();
+        if (Auth::isEmailVerificationEnforced($sessionUser)) {
+            session_flash('status', 'Email verification is now required to continue. Please verify your email address.');
+            return redirect(url('/email/verification-notice'));
+        }
         $tidRaw = $user['tenant_id'] ?? null;
         $tenantIdForLog = ($tidRaw !== null && $tidRaw !== '' && (int) $tidRaw > 0) ? (int) $tidRaw : null;
         ActivityLogger::log(
@@ -294,7 +321,6 @@ final class AuthController
             ['email' => (string) ($user['email'] ?? ''), 'role' => $role]
         );
 
-        $sessionUser = Auth::user();
         if (Auth::isTenantInactive($sessionUser)) {
             return redirect(url('/subscription-ended'));
         }
@@ -418,12 +444,12 @@ final class AuthController
             Auth::login($userId);
             try {
                 EmailVerificationService::sendVerificationForUserId($pdo, $userId);
-                session_flash('status', 'Your 7-day trial account was created. Please verify your email to continue.');
+                session_flash('status', 'Your 7-day trial account was created. You can use the system now, but please verify your email within '.Auth::emailVerificationGraceDays().' days.');
             } catch (\Throwable) {
-                session_flash('errors', ['Your trial account was created, but the verification email could not be sent. Please check the mail settings and resend the verification email.']);
+                session_flash('errors', ['Your trial account was created. You can use the system now, but please verify your email within '.Auth::emailVerificationGraceDays().' days. Verification email could not be sent automatically; use resend verification link from inside the app.']);
             }
 
-            return redirect(url('/email/verification-notice'));
+            return redirect(url('/dashboard'));
         } catch (\Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();

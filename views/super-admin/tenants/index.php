@@ -87,6 +87,7 @@
                     <th>Subscription starts</th>
                     <th>Subscription ends</th>
                     <th>Store owner email</th>
+                    <th>Last login</th>
                     <th>Status</th>
                     <th class="text-end">Actions</th>
                 </tr>
@@ -178,8 +179,8 @@
     const isMobile = window.matchMedia('(max-width: 767.98px)').matches;
     const isTablet = window.matchMedia('(max-width: 991.98px)').matches;
     const hiddenByViewport = isMobile
-        ? [1, 3, 4, 5, 6, 7, 9]
-        : (isTablet ? [3, 4, 6, 7] : []);
+        ? [1, 3, 4, 5, 6, 7, 9, 10]
+        : (isTablet ? [3, 4, 6, 7, 10] : []);
 
     initServerDataTable('#tenantsTable', {
         printButton: true,
@@ -198,8 +199,9 @@
             { targets: 7, responsivePriority: 99 },
             { targets: 8, responsivePriority: 4 },
             { targets: 9, responsivePriority: 100 },
-            { targets: 10, responsivePriority: 3 },
-            { targets: 11, orderable: false, searchable: false, responsivePriority: 5 },
+            { targets: 10, responsivePriority: 6 },
+            { targets: 11, responsivePriority: 3 },
+            { targets: 12, orderable: false, searchable: false, responsivePriority: 5 },
             { targets: hiddenByViewport, visible: false },
         ],
         columns: [
@@ -213,6 +215,7 @@
             { data: 'starts' },
             { data: 'expires' },
             { data: 'owner_email' },
+            { data: 'last_login' },
             { data: 'status' },
             { data: 'actions' },
         ],

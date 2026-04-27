@@ -10,6 +10,7 @@ final class Auth
 {
     private const FREE_PLAN_CODES = ['trial', 'free', 'free_trial', 'free_access'];
     private const FREE_TRIAL_DAYS = 7;
+    private const EMAIL_VERIFICATION_GRACE_DAYS = 5;
     /** Cached only when column exists (true), so we re-check after DB migrations without restarting PHP. */
     private static ?bool $modulePermissionsColumnExists = null;
     private static ?bool $tenantBranchColumnsReady = null;
@@ -98,8 +99,8 @@ final class Auth
         $hasStaffTypeCol = self::hasUsersStaffTypeColumn();
         $staffTypeSelect = $hasStaffTypeCol ? 'staff_type' : "'full_time' AS staff_type";
         $sql = $hasModsCol
-            ? "SELECT id, name, email, password, role, {$staffTypeSelect}, tenant_id, module_permissions, email_verified_at FROM users WHERE id = ? LIMIT 1"
-            : "SELECT id, name, email, password, role, {$staffTypeSelect}, tenant_id, email_verified_at FROM users WHERE id = ? LIMIT 1";
+            ? "SELECT id, name, email, password, role, {$staffTypeSelect}, tenant_id, module_permissions, email_verified_at, created_at FROM users WHERE id = ? LIMIT 1"
+            : "SELECT id, name, email, password, role, {$staffTypeSelect}, tenant_id, email_verified_at, created_at FROM users WHERE id = ? LIMIT 1";
         $st = $pdo->prepare($sql);
         $st->execute([(int) $id]);
         $u = $st->fetch(PDO::FETCH_ASSOC);
@@ -588,6 +589,71 @@ final class Auth
         }
 
         return ! self::isTenantFreePlanRestricted($user);
+    }
+
+    public static function emailVerificationGraceDays(): int
+    {
+        return self::EMAIL_VERIFICATION_GRACE_DAYS;
+    }
+
+    public static function emailVerificationGraceEndsAt(?array $user): ?int
+    {
+        if (! $user) {
+            return null;
+        }
+        if (($user['role'] ?? '') === 'super_admin') {
+            return null;
+        }
+        if (! empty($user['email_verified_at'])) {
+            return null;
+        }
+        $createdRaw = trim((string) ($user['created_at'] ?? ''));
+        if ($createdRaw === '') {
+            return null;
+        }
+        $createdTs = strtotime($createdRaw);
+        if ($createdTs === false) {
+            return null;
+        }
+        $endsAt = strtotime('+'.self::EMAIL_VERIFICATION_GRACE_DAYS.' days', $createdTs);
+        if ($endsAt === false) {
+            return null;
+        }
+
+        return $endsAt;
+    }
+
+    public static function isEmailVerificationEnforced(?array $user): bool
+    {
+        if (! $user) {
+            return false;
+        }
+        if (($user['role'] ?? '') === 'super_admin' || ! empty($user['email_verified_at'])) {
+            return false;
+        }
+        $graceEndsAt = self::emailVerificationGraceEndsAt($user);
+        if ($graceEndsAt === null) {
+            return true;
+        }
+
+        return time() >= $graceEndsAt;
+    }
+
+    public static function emailVerificationGraceDaysRemaining(?array $user): ?int
+    {
+        if (! $user) {
+            return null;
+        }
+        if (($user['role'] ?? '') === 'super_admin' || ! empty($user['email_verified_at'])) {
+            return null;
+        }
+        $graceEndsAt = self::emailVerificationGraceEndsAt($user);
+        if ($graceEndsAt === null) {
+            return 0;
+        }
+        $seconds = max(0, $graceEndsAt - time());
+
+        return (int) ceil($seconds / 86400);
     }
 
     private static function resolveActiveTenantId(int $baseTenantId): int

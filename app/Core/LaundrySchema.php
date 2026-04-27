@@ -270,6 +270,9 @@ final class LaundrySchema
                 laundry_status_tracking_enabled TINYINT(1) NOT NULL DEFAULT 0,
                 editable_order_date TINYINT(1) NOT NULL DEFAULT 0,
                 track_gasul_usage TINYINT(1) NOT NULL DEFAULT 0,
+                kiosk_inclusion_autofill_mode VARCHAR(20) NOT NULL DEFAULT "off",
+                kiosk_fold_autofill_mode VARCHAR(20) NOT NULL DEFAULT "off",
+                kiosk_autofill_order_type_codes TEXT NULL,
                 fold_service_amount DECIMAL(16,4) NOT NULL DEFAULT 10,
                 fold_commission_target VARCHAR(20) NOT NULL DEFAULT "branch",
                 created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
@@ -406,6 +409,9 @@ final class LaundrySchema
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'laundry_status_tracking_enabled', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER machine_assignment_enabled');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'editable_order_date', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER laundry_status_tracking_enabled');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'track_gasul_usage', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER editable_order_date');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'kiosk_inclusion_autofill_mode', 'VARCHAR(20) NOT NULL DEFAULT "off" AFTER track_gasul_usage');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'kiosk_fold_autofill_mode', 'VARCHAR(20) NOT NULL DEFAULT "off" AFTER kiosk_inclusion_autofill_mode');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'kiosk_autofill_order_type_codes', 'TEXT NULL AFTER kiosk_fold_autofill_mode');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'created_by_user_id', 'BIGINT UNSIGNED DEFAULT NULL AFTER tenant_id');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'machine_id', 'BIGINT UNSIGNED DEFAULT NULL AFTER created_by_user_id');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'reference_code', 'VARCHAR(32) NULL DEFAULT NULL AFTER id');

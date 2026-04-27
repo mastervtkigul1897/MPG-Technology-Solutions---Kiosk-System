@@ -250,7 +250,7 @@ final class CheckoutService
         self::ensureTransactionsPaymentSchema($pdo);
         $pdo->beginTransaction();
         try {
-            $st = $pdo->prepare('SELECT id, total_amount, status FROM transactions WHERE tenant_id = ? AND id = ? FOR UPDATE');
+            $st = $pdo->prepare('SELECT id, total_amount, status, amount_paid FROM transactions WHERE tenant_id = ? AND id = ? FOR UPDATE');
             $st->execute([$tenantId, $pendingTransactionId]);
             $tx = $st->fetch(PDO::FETCH_ASSOC);
             if (! $tx) {
@@ -259,11 +259,16 @@ final class CheckoutService
             if ((string) ($tx['status'] ?? '') !== 'pending') {
                 throw new RuntimeException('This transaction is no longer pending.');
             }
-            $total = (float) ($tx['total_amount'] ?? 0);
-            if ($amountTendered < $total) {
-                throw new RuntimeException('Cash received is less than total.');
+            $total = max(0.0, (float) ($tx['total_amount'] ?? 0));
+            if ($amountTendered <= 0.0) {
+                throw new RuntimeException('Enter an amount paid greater than 0.');
             }
-            $change = $amountTendered - $total;
+            $alreadyPaidRaw = max(0.0, (float) ($tx['amount_paid'] ?? 0));
+            $alreadyPaid = min($alreadyPaidRaw, $total);
+            $newPaidTotal = min($total, $alreadyPaid + $amountTendered);
+            $remainingBalance = max(0.0, $total - $newPaidTotal);
+            $isFullyPaid = $remainingBalance <= 0.000001;
+            $change = $isFullyPaid ? max(0.0, ($alreadyPaid + $amountTendered) - $total) : 0.0;
 
             $st = $pdo->prepare('SELECT product_id, quantity, flavor_ingredient_id FROM transaction_items WHERE tenant_id = ? AND transaction_id = ?');
             $st->execute([$tenantId, $pendingTransactionId]);
@@ -279,14 +284,24 @@ final class CheckoutService
                 throw new RuntimeException('Pending transaction has no items.');
             }
 
-            // Deduct stock & movements now, but do not create a new transaction row.
-            $this->runDeductStockForItems($pdo, $tenantId, $userId, $pendingTransactionId, $items, 'sale');
+            // Deduct stock only once (first collected payment).
+            if ($alreadyPaid <= 0.000001) {
+                $this->runDeductStockForItems($pdo, $tenantId, $userId, $pendingTransactionId, $items, 'sale');
+            }
 
             $pdo->prepare(
                 "UPDATE transactions
-                 SET status = 'completed', user_id = ?, amount_tendered = ?, change_amount = ?, updated_at = NOW()
+                 SET status = ?, user_id = ?, amount_paid = ?, amount_tendered = ?, change_amount = ?, updated_at = NOW()
                  WHERE tenant_id = ? AND id = ?"
-            )->execute([$userId, $amountTendered, $change, $tenantId, $pendingTransactionId]);
+            )->execute([
+                $isFullyPaid ? 'completed' : 'pending',
+                $userId,
+                $newPaidTotal,
+                $newPaidTotal,
+                $change,
+                $tenantId,
+                $pendingTransactionId,
+            ]);
 
             $pdo->commit();
 

@@ -79,10 +79,15 @@ $voidedToday = [];
 foreach ($ordersList as $_o) {
     $st = (string) ($_o['status'] ?? '');
     $ps = (string) ($_o['payment_status'] ?? 'unpaid');
+    $orderMode = strtolower(trim((string) ($_o['order_mode'] ?? '')));
     $isVoid = ! empty($_o['is_void']) || $st === 'void';
     if ($isVoid) {
         $voidedToday[] = $_o;
         continue;
+    }
+    if ($orderMode === 'add_on_only') {
+        $st = ($ps === 'paid') ? 'paid' : 'open_ticket';
+        $_o['status'] = $st;
     }
     if (! $laundryStatusTrackingEnabled && in_array($st, ['pending', 'washing_drying', 'running'], true)) {
         // Workflow OFF mode only uses Unpaid/Paid for board display.
@@ -747,10 +752,14 @@ $toDateTimeLocal = static function (string $raw): string {
                                 $paymentLabel = $laundryPaymentMethodLabel($pmRaw);
                                 $paymentStatus = (string) ($order['payment_status'] ?? 'unpaid');
                                 $isPaid = $paymentStatus === 'paid';
+                                $orderTotalAmount = max(0.0, (float) ($order['total_amount'] ?? 0));
+                                $orderModeRaw = strtolower(trim((string) ($order['order_mode'] ?? '')));
                                 $rawTendered = $order['amount_tendered'] ?? null;
-                                $tenderedForDisplay = ($rawTendered !== null && $rawTendered !== '')
+                                $tenderedForDisplayRaw = ($rawTendered !== null && $rawTendered !== '')
                                     ? (float) $rawTendered
-                                    : (($isPaid && $pmRaw !== 'pending') ? (float) ($order['total_amount'] ?? 0) : 0.0);
+                                    : (($isPaid && $pmRaw !== 'pending') ? $orderTotalAmount : 0.0);
+                                $paidForDisplay = min($orderTotalAmount, max(0.0, $tenderedForDisplayRaw));
+                                $balanceForDisplay = max(0.0, $orderTotalAmount - $paidForDisplay);
                                 $serviceModeLabel = ! empty($order['is_reward'])
                                     ? (((float) ($order['total_amount'] ?? 0)) > 0 ? 'Rewards with Payment' : 'Reward')
                                     : (! empty($order['is_free']) ? 'Free' : 'Regular');
@@ -769,6 +778,8 @@ $toDateTimeLocal = static function (string $raw): string {
                                     data-is-free="<?= ! empty($order['is_free']) ? '1' : '0' ?>"
                                     data-is-reward="<?= ! empty($order['is_reward']) ? '1' : '0' ?>"
                                     data-total="<?= e((string) (float) ($order['total_amount'] ?? 0)) ?>"
+                                    data-paid-total="<?= e((string) $paidForDisplay) ?>"
+                                    data-balance="<?= e((string) $balanceForDisplay) ?>"
                                     data-service-kind="<?= e((string) ($order['order_type_service_kind'] ?? 'full_service')) ?>"
                                     data-reference-code="<?= e($refDisplay) ?>"
                                     data-customer-name="<?= e((string) ($order['customer_name'] ?? 'Walk-in')) ?>"
@@ -777,6 +788,7 @@ $toDateTimeLocal = static function (string $raw): string {
                                     data-created-at="<?= e($createdAtDisplay) ?>"
                                     data-date-update-url="<?= e(route('tenant.laundry-sales.date.update', ['id' => $oid])) ?>"
                                     data-payment-status="<?= e($paymentStatus) ?>"
+                                    data-order-mode="<?= e($orderModeRaw) ?>"
                                 >
                                     <div class="card-body py-2 px-2">
                                         <div class="laundry-kanban-card-head mb-1">
@@ -809,7 +821,10 @@ $toDateTimeLocal = static function (string $raw): string {
                                         </div>
                                         <div class="d-flex justify-content-between align-items-center small">
                                             <span class="text-muted">Total</span>
-                                            <span class="fw-semibold font-monospace"><?= e(format_money((float) ($order['total_amount'] ?? 0))) ?></span>
+                                            <span class="fw-semibold font-monospace"><?= e(format_money($orderTotalAmount)) ?></span>
+                                        </div>
+                                        <div class="small text-muted">
+                                            Paid <?= e(format_money($paidForDisplay)) ?> · Balance <?= e(format_money($balanceForDisplay)) ?>
                                         </div>
                                         <?php if ($colKey === 'pending' || $colKey === 'paid' || $isTenantAdmin): ?>
                                             <div class="mt-1 pt-1 border-top d-flex align-items-center gap-2 flex-wrap">
@@ -824,8 +839,8 @@ $toDateTimeLocal = static function (string $raw): string {
                                         <?php if ($colKey === 'paid'): ?>
                                             <div class="small mt-1 pt-1 border-top">
                                                 <span class="text-muted"><?= e($paymentLabel) ?></span>
-                                                <?php if ($isPaid && $pmRaw !== 'pending' && $tenderedForDisplay > 0): ?>
-                                                    <div class="text-muted">Tendered <?= e(format_money($tenderedForDisplay)) ?>
+                                                <?php if ($isPaid && $pmRaw !== 'pending' && $paidForDisplay > 0): ?>
+                                                    <div class="text-muted">Tendered <?= e(format_money($paidForDisplay)) ?>
                                                         <?php if (isset($order['change_amount']) && (float) $order['change_amount'] > 0): ?>
                                                             · Change <?= e(format_money((float) $order['change_amount'])) ?>
                                                         <?php endif; ?>
@@ -923,7 +938,12 @@ $toDateTimeLocal = static function (string $raw): string {
                         }
                         $paymentStatus = (string) ($order['payment_status'] ?? 'paid');
                         $isPaid = $paymentStatus === 'paid';
+                        $orderTotalAmount = max(0.0, (float) ($order['total_amount'] ?? 0));
+                        $orderModeRaw = strtolower(trim((string) ($order['order_mode'] ?? '')));
                         $statusRaw = (string) ($order['status'] ?? '');
+                        if ($orderModeRaw === 'add_on_only' && $statusRaw !== 'void' && empty($order['is_void'])) {
+                            $statusRaw = $isPaid ? 'paid' : 'open_ticket';
+                        }
                         if (! $laundryStatusTrackingEnabled && in_array($statusRaw, ['pending', 'washing_drying', 'running'], true)) {
                             // Workflow OFF should behave as Unpaid/Paid only.
                             $statusRaw = $isPaid ? 'paid' : 'open_ticket';
@@ -939,9 +959,11 @@ $toDateTimeLocal = static function (string $raw): string {
                         $pmRaw = strtolower(trim((string) ($order['payment_method'] ?? '')));
                         $paymentLabel = $laundryPaymentMethodLabel($pmRaw);
                         $rawTendered = $order['amount_tendered'] ?? null;
-                        $tenderedForDisplay = ($rawTendered !== null && $rawTendered !== '')
+                        $tenderedForDisplayRaw = ($rawTendered !== null && $rawTendered !== '')
                             ? (float) $rawTendered
-                            : (($isPaid && $pmRaw !== 'pending') ? (float) ($order['total_amount'] ?? 0) : 0.0);
+                            : (($isPaid && $pmRaw !== 'pending') ? $orderTotalAmount : 0.0);
+                        $paidForDisplay = min($orderTotalAmount, max(0.0, $tenderedForDisplayRaw));
+                        $balanceForDisplay = max(0.0, $orderTotalAmount - $paidForDisplay);
                         if (! $laundryStatusTrackingEnabled) {
                             $statusExport = $isVoid
                                 ? 'VOID'
@@ -970,8 +992,11 @@ $toDateTimeLocal = static function (string $raw): string {
                             data-is-free="<?= ! empty($order['is_free']) ? '1' : '0' ?>"
                             data-is-reward="<?= ! empty($order['is_reward']) ? '1' : '0' ?>"
                             data-total="<?= e((string) (float) ($order['total_amount'] ?? 0)) ?>"
+                            data-paid-total="<?= e((string) $paidForDisplay) ?>"
+                            data-balance="<?= e((string) $balanceForDisplay) ?>"
                             data-service-kind="<?= e((string) ($order['order_type_service_kind'] ?? 'full_service')) ?>"
                             data-payment-status="<?= e($paymentStatus) ?>"
+                            data-order-mode="<?= e($orderModeRaw) ?>"
                             data-date-update-url="<?= e(route('tenant.laundry-sales.date.update', ['id' => $oid])) ?>"
                             style="cursor: pointer;"
                         >
@@ -1004,7 +1029,7 @@ $toDateTimeLocal = static function (string $raw): string {
                             <td class="small"><?= e($modeDisplay) ?></td>
                             <td class="text-end small"><?= e(format_money((float) ($order['subtotal'] ?? 0))) ?></td>
                             <td class="text-end small"><?= e(format_money((float) ($order['add_on_total'] ?? 0))) ?></td>
-                            <td class="text-end small fw-semibold"><?= e(format_money((float) ($order['total_amount'] ?? 0))) ?></td>
+                            <td class="text-end small fw-semibold"><?= e(format_money($orderTotalAmount)) ?></td>
                             <td class="text-center text-nowrap small">
                                 <?php if (! $laundryStatusTrackingEnabled && ! $isVoid && ! $isPaid): ?>
                                     <button type="button" class="btn btn-outline-success btn-sm py-0 laundry-table-action-pay">Paid</button>
@@ -1028,16 +1053,11 @@ $toDateTimeLocal = static function (string $raw): string {
                                 <?php endif; ?>
                             </td>
                             <td class="small">
-                                <?php if ($isPaid && $pmRaw !== 'pending'): ?>
-                                    <?= e($paymentLabel) ?>
-                                    <?php if ($tenderedForDisplay > 0): ?>
-                                        · Tendered <?= e(format_money($tenderedForDisplay)) ?>
-                                        <?php if (isset($order['change_amount']) && (float) $order['change_amount'] > 0): ?>
-                                            · Change <?= e(format_money((float) $order['change_amount'])) ?>
-                                        <?php endif; ?>
-                                    <?php endif; ?>
-                                <?php else: ?>
-                                    Unpaid
+                                <?= e($isPaid && $pmRaw !== 'pending' ? $paymentLabel : 'Unpaid') ?>
+                                · Paid <?= e(format_money($paidForDisplay)) ?>
+                                · Balance <?= e(format_money($balanceForDisplay)) ?>
+                                <?php if ($isPaid && isset($order['change_amount']) && (float) $order['change_amount'] > 0): ?>
+                                    · Change <?= e(format_money((float) $order['change_amount'])) ?>
                                 <?php endif; ?>
                             </td>
                         </tr>
@@ -1120,6 +1140,10 @@ $toDateTimeLocal = static function (string $raw): string {
                     $paymentStatus = (string) ($order['payment_status'] ?? 'paid');
                     $isPaid = $paymentStatus === 'paid';
                     $statusRaw = (string) ($order['status'] ?? '');
+                    $orderModeRaw = strtolower(trim((string) ($order['order_mode'] ?? '')));
+                    if ($orderModeRaw === 'add_on_only' && $statusRaw !== 'void' && empty($order['is_void'])) {
+                        $statusRaw = $isPaid ? 'paid' : 'open_ticket';
+                    }
                     if (! $laundryStatusTrackingEnabled && in_array($statusRaw, ['pending', 'washing_drying', 'running'], true)) {
                         // Export table should match OFF workflow labels too.
                         $statusRaw = $isPaid ? 'paid' : 'open_ticket';
@@ -1134,10 +1158,13 @@ $toDateTimeLocal = static function (string $raw): string {
                         : (! empty($order['is_free']) ? 'Free' : 'Regular');
                     $pmRaw = strtolower(trim((string) ($order['payment_method'] ?? '')));
                     $paymentLabel = $laundryPaymentMethodLabel($pmRaw);
+                    $orderTotalAmount = max(0.0, (float) ($order['total_amount'] ?? 0));
                     $rawTendered = $order['amount_tendered'] ?? null;
-                    $tenderedForDisplay = ($rawTendered !== null && $rawTendered !== '')
+                    $tenderedForDisplayRaw = ($rawTendered !== null && $rawTendered !== '')
                         ? (float) $rawTendered
-                        : (($isPaid && $pmRaw !== 'pending') ? (float) ($order['total_amount'] ?? 0) : 0.0);
+                        : (($isPaid && $pmRaw !== 'pending') ? $orderTotalAmount : 0.0);
+                    $paidForDisplay = min($orderTotalAmount, max(0.0, $tenderedForDisplayRaw));
+                    $balanceForDisplay = max(0.0, $orderTotalAmount - $paidForDisplay);
                     $statusExport = $isVoid
                         ? 'VOID'
                         : ($isPending
@@ -1157,18 +1184,13 @@ $toDateTimeLocal = static function (string $raw): string {
                         <td><?= e($modeDisplay) ?></td>
                         <td class="text-end"><?= e(format_money((float) ($order['subtotal'] ?? 0))) ?></td>
                         <td class="text-end"><?= e(format_money((float) ($order['add_on_total'] ?? 0))) ?></td>
-                        <td class="text-end fw-semibold"><?= e(format_money((float) ($order['total_amount'] ?? 0))) ?></td>
+                        <td class="text-end fw-semibold"><?= e(format_money($orderTotalAmount)) ?></td>
                         <td>
-                            <?php if ($isPaid && $pmRaw !== 'pending'): ?>
-                                <?= e($paymentLabel) ?>
-                                <?php if ($tenderedForDisplay > 0): ?>
-                                    · Tendered <?= e(format_money($tenderedForDisplay)) ?>
-                                    <?php if (isset($order['change_amount']) && (float) $order['change_amount'] > 0): ?>
-                                        · Change <?= e(format_money((float) $order['change_amount'])) ?>
-                                    <?php endif; ?>
-                                <?php endif; ?>
-                            <?php else: ?>
-                                Unpaid
+                            <?= e($isPaid && $pmRaw !== 'pending' ? $paymentLabel : 'Unpaid') ?>
+                            · Paid <?= e(format_money($paidForDisplay)) ?>
+                            · Balance <?= e(format_money($balanceForDisplay)) ?>
+                            <?php if ($isPaid && isset($order['change_amount']) && (float) $order['change_amount'] > 0): ?>
+                                · Change <?= e(format_money((float) $order['change_amount'])) ?>
                             <?php endif; ?>
                         </td>
                     </tr>
@@ -1185,8 +1207,8 @@ $toDateTimeLocal = static function (string $raw): string {
             <?= csrf_field() ?>
             <div class="modal-header border-bottom-0 pb-0">
                 <div>
-                    <h5 class="modal-title" id="laundryPayModalLabel">Record payment</h5>
-                    <p class="small text-muted mb-0">Select method, enter amount paid, and watch the live change text.</p>
+                    <h5 class="modal-title" id="laundryPayModalLabel">Record payment / deposit</h5>
+                    <p class="small text-muted mb-0">Select method, enter amount to pay now (partial or full), and watch the live change text.</p>
                 </div>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
@@ -1245,8 +1267,9 @@ $toDateTimeLocal = static function (string $raw): string {
                     <div class="form-text" id="laundryPayDiscountInfo">Discount amount (minus): -₱0.00</div>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label fw-medium" for="laundryPayTendered">Amount paid (tendered)</label>
+                    <label class="form-label fw-medium" for="laundryPayTendered">Amount to pay now</label>
                     <input type="number" class="form-control form-control-lg font-monospace" name="amount_tendered" id="laundryPayTendered" min="0" step="0.01" required placeholder="0.00">
+                    <div class="form-text">You can enter a partial payment. Remaining balance can be paid later.</div>
                 </div>
                 <div class="border rounded-3 p-3 mb-3 d-none" id="laundryPaySplitWrap">
                     <div class="fw-semibold small text-uppercase text-muted mb-2">Split breakdown</div>
@@ -1274,7 +1297,7 @@ $toDateTimeLocal = static function (string $raw): string {
                     <div class="form-text mt-2" id="laundryPaySplitInfo">Split total: ₱0.00</div>
                 </div>
                 <div class="rounded-3 border p-3 bg-body-tertiary bg-opacity-25 mb-3">
-                    <div class="small text-muted mb-0">Service Total Amount</div>
+                    <div class="small text-muted mb-0">Remaining balance to collect</div>
                     <div class="fs-5 fw-semibold font-monospace" id="laundryPayDueDisplay">₱0.00</div>
                 </div>
                 <div class="rounded-3 border p-3 bg-body-tertiary bg-opacity-25">
@@ -1284,7 +1307,7 @@ $toDateTimeLocal = static function (string $raw): string {
             </div>
             <div class="modal-footer border-top-0 pt-0">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="submit" class="btn btn-primary">Confirm payment</button>
+                <button type="submit" class="btn btn-primary">Confirm payment / deposit</button>
             </div>
         </form>
     </div>
@@ -2541,7 +2564,7 @@ $toDateTimeLocal = static function (string $raw): string {
             }
         } else {
             tenderedEl.readOnly = false;
-            tenderedEl.min = String(totalDue.toFixed(2));
+            tenderedEl.min = '0';
             if (splitCashEl) splitCashEl.value = '0';
             if (splitOnlineAmountEl) splitOnlineAmountEl.value = '0';
             if (splitOnlineMethodEl) {
@@ -2616,7 +2639,9 @@ $toDateTimeLocal = static function (string $raw): string {
         if (!payModalReady || !card) return;
         paySourceEl = card;
         form.action = card.getAttribute('data-pay-url') || '';
-        baseTotal = parseFloat(card.getAttribute('data-total') || '0') || 0;
+        const cardBalance = Math.max(0, parseFloat(card.getAttribute('data-balance') || '0') || 0);
+        const cardTotal = Math.max(0, parseFloat(card.getAttribute('data-total') || '0') || 0);
+        baseTotal = cardBalance > 0 ? cardBalance : cardTotal;
         if (discountPercentageEl) discountPercentageEl.value = '0';
         if (splitCashEl) splitCashEl.value = '0';
         if (splitOnlineAmountEl) splitOnlineAmountEl.value = '0';
@@ -2666,9 +2691,12 @@ $toDateTimeLocal = static function (string $raw): string {
             const splitCash = Math.max(0, parseFloat(splitCashEl?.value || '0') || 0);
             const splitOnline = Math.max(0, parseFloat(splitOnlineAmountEl?.value || '0') || 0);
             const splitTotal = splitCash + splitOnline;
-            const diff = Math.abs(splitTotal - totalDue);
-            if (splitTotal <= 0 || diff > 0.01) {
-                showProcessError(`Split total must match the amount due (${money(totalDue)}).`);
+            if (splitTotal <= 0) {
+                showProcessError('Enter split payment amounts greater than 0.');
+                return;
+            }
+            if (splitCash <= 0.000001 && (splitTotal - totalDue) > 0.01) {
+                showProcessError(`Split payment cannot exceed due (${money(totalDue)}) unless there is a cash part for change.`);
                 return;
             }
         }
@@ -2704,30 +2732,34 @@ $toDateTimeLocal = static function (string $raw): string {
                 confirmButtonColor: '#198754',
             });
         }
+        const nextPaymentStatus = String(data.payment_status || 'paid').trim() || 'paid';
+        const nextStatus = String(data.status || (nextPaymentStatus === 'paid' ? 'paid' : 'open_ticket')).trim();
         if (sourceEl instanceof HTMLTableRowElement) {
-            sourceEl.setAttribute('data-payment-status', 'paid');
-            sourceEl.setAttribute('data-status', 'paid');
+            sourceEl.setAttribute('data-payment-status', nextPaymentStatus);
+            sourceEl.setAttribute('data-status', nextStatus);
             const paymentCell = sourceEl.children[10];
             if (paymentCell instanceof HTMLElement) {
-                paymentCell.textContent = 'Paid';
+                paymentCell.textContent = nextPaymentStatus === 'paid' ? 'Paid' : 'Unpaid';
             }
             updateTableRowStatusUI(sourceEl);
         } else {
             if (sourceEl instanceof HTMLElement) {
-                sourceEl.setAttribute('data-payment-status', 'paid');
+                sourceEl.setAttribute('data-payment-status', nextPaymentStatus);
+                sourceEl.setAttribute('data-status', nextStatus);
+                const targetListId = nextPaymentStatus === 'paid' ? 'kanban-paid' : 'kanban-open_ticket';
+                const targetList = document.getElementById(targetListId);
+                if (targetList) {
+                    targetList.appendChild(sourceEl);
+                    ensureEmptyPlaceholder(targetList);
+                }
                 const paidList = document.getElementById('kanban-paid');
-                if (paidList) {
-                    paidList.appendChild(sourceEl);
-                    ensureEmptyPlaceholder(paidList);
-                }
                 const openTicketList = document.getElementById('kanban-open_ticket');
-                if (openTicketList) {
-                    ensureEmptyPlaceholder(openTicketList);
-                }
+                if (paidList) ensureEmptyPlaceholder(paidList);
+                if (openTicketList) ensureEmptyPlaceholder(openTicketList);
                 const paymentBadge = sourceEl.querySelector('.small.mb-1 .badge');
                 if (paymentBadge instanceof HTMLElement) {
-                    paymentBadge.className = 'badge bg-success';
-                    paymentBadge.textContent = 'Paid';
+                    paymentBadge.className = nextPaymentStatus === 'paid' ? 'badge bg-success' : 'badge bg-warning text-dark';
+                    paymentBadge.textContent = nextPaymentStatus === 'paid' ? 'Paid' : 'Unpaid';
                 }
             } else {
                 sourceEl?.remove?.();
@@ -2962,10 +2994,13 @@ $toDateTimeLocal = static function (string $raw): string {
         }
 
         const tendered = o.amount_tendered;
+        const orderTotal = Math.max(0, parseFloat(o.total_amount || 0) || 0);
+        const paidAmt = Math.min(orderTotal, Math.max(0, parseFloat(tendered || 0) || 0));
+        const balanceAmt = Math.max(0, orderTotal - paidAmt);
         const chg = o.change_amount;
         const paidBlock = (String(o.payment_status) === 'paid')
-            ? `<dt class="col-sm-4 text-muted">Payment</dt><dd class="col-sm-8">${escapeHtml(paymentMethodLabel(o.payment_method))}${tendered != null && tendered !== '' ? ` · Tendered ${money(parseFloat(tendered))}` : ''}${parseFloat(chg) > 0 ? ` · Change ${money(parseFloat(chg))}` : ''}</dd>`
-            : '<dt class="col-sm-4 text-muted">Payment</dt><dd class="col-sm-8 text-muted">Unpaid</dd>';
+            ? `<dt class="col-sm-4 text-muted">Payment</dt><dd class="col-sm-8">${escapeHtml(paymentMethodLabel(o.payment_method))} · Paid ${money(paidAmt)} · Balance ${money(balanceAmt)}${parseFloat(chg) > 0 ? ` · Change ${money(parseFloat(chg))}` : ''}</dd>`
+            : `<dt class="col-sm-4 text-muted">Payment</dt><dd class="col-sm-8 text-muted">Unpaid · Paid ${money(paidAmt)} · Balance ${money(balanceAmt)}</dd>`;
 
         return `
             <div class="row g-2 small">

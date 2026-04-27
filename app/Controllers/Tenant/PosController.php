@@ -582,16 +582,57 @@ final class PosController
             $splitPaymentsRaw = is_array($decoded) ? $decoded : [];
         }
         $splitPayments = self::normalizeSplitPayments($splitPaymentsRaw);
-        if ($amountTendered < 0 && $paymentMethod !== 'split') {
-            return json_response(['success' => false, 'message' => 'Amount received is required.'], 422);
+        if ($amountTendered <= 0 && $paymentMethod !== 'split') {
+            return json_response(['success' => false, 'message' => 'Enter an amount paid greater than 0.'], 422);
         }
 
         $pdo = App::db();
         try {
+            $stPending = $pdo->prepare('SELECT total_amount, amount_paid FROM transactions WHERE tenant_id = ? AND id = ? AND status = ? LIMIT 1');
+            $stPending->execute([$tenantId, $pendingId, 'pending']);
+            $pendingRow = $stPending->fetch(PDO::FETCH_ASSOC) ?: null;
+            if (! $pendingRow) {
+                throw new RuntimeException('Pending transaction not found.');
+            }
+            $pendingTotal = max(0.0, (float) ($pendingRow['total_amount'] ?? 0));
+            $pendingPaid = min($pendingTotal, max(0.0, (float) ($pendingRow['amount_paid'] ?? 0)));
+            $pendingRemaining = max(0.0, $pendingTotal - $pendingPaid);
+            $entryAmount = $paymentMethod === 'split'
+                ? array_reduce($splitPayments, static fn (float $sum, array $r): float => $sum + (float) ($r['amount'] ?? 0), 0.0)
+                : $amountTendered;
+            if ($entryAmount <= 0.0) {
+                throw new RuntimeException('Enter an amount paid greater than 0.');
+            }
+            if ($paymentMethod !== 'cash' && $entryAmount - $pendingRemaining > 1e-9) {
+                throw new RuntimeException('Payment amount cannot exceed remaining balance for non-cash methods.');
+            }
+            if ($paymentMethod === 'split') {
+                $hasCash = false;
+                foreach ($splitPayments as $row) {
+                    if (($row['method'] ?? '') === 'cash') {
+                        $hasCash = true;
+                        break;
+                    }
+                }
+                if (! $hasCash && $entryAmount - $pendingRemaining > 1e-9) {
+                    throw new RuntimeException('Split payment cannot exceed remaining balance unless there is a cash part for change.');
+                }
+            }
             $txId = (new CheckoutService())->payPending($tenantId, (int) $user['id'], $pendingId, $amountTendered);
             // Store payment method/paid/change similarly to checkout.
             try {
-                self::applyPaymentMeta($pdo, $tenantId, $txId, $paymentMethod, $amountTendered, $splitPayments);
+                if ($paymentMethod === 'split') {
+                    $pdo->prepare('UPDATE transactions SET payment_method = ?, payment_breakdown_json = ?, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
+                        ->execute([
+                            'split',
+                            json_encode($splitPayments, JSON_UNESCAPED_UNICODE),
+                            $tenantId,
+                            $txId,
+                        ]);
+                } else {
+                    $pdo->prepare('UPDATE transactions SET payment_method = ?, payment_breakdown_json = NULL, updated_at = NOW() WHERE tenant_id = ? AND id = ?')
+                        ->execute([$paymentMethod, $tenantId, $txId]);
+                }
             } catch (\Throwable $e) {
                 if ($paymentMethod === 'split') {
                     return json_response(['success' => false, 'message' => $e->getMessage()], 422);
@@ -601,10 +642,27 @@ final class PosController
             return json_response(['success' => false, 'message' => $e->getMessage()], 422);
         }
 
+        $stAfter = $pdo->prepare('SELECT total_amount, amount_paid, status FROM transactions WHERE tenant_id = ? AND id = ? LIMIT 1');
+        $stAfter->execute([$tenantId, $txId]);
+        $after = $stAfter->fetch(PDO::FETCH_ASSOC) ?: [];
+        $grandTotal = max(0.0, (float) ($after['total_amount'] ?? 0));
+        $paidTotal = min($grandTotal, max(0.0, (float) ($after['amount_paid'] ?? 0)));
+        $remainingBalance = max(0.0, $grandTotal - $paidTotal);
+        $isFullyPaid = $remainingBalance <= 0.000001;
         TenantReceiptFields::ensure($pdo);
         $receipt = self::buildReceiptPayload($pdo, $tenantId, $txId);
 
-        return json_response(['success' => true, 'receipt' => $receipt]);
+        return json_response([
+            'success' => true,
+            'receipt' => $receipt,
+            'status' => $isFullyPaid ? 'completed' : 'pending',
+            'payment_status' => $isFullyPaid ? 'paid' : 'unpaid',
+            'paid_total' => $paidTotal,
+            'remaining_balance' => $remainingBalance,
+            'message' => $isFullyPaid
+                ? 'Payment completed.'
+                : ('Deposit recorded. Remaining balance: '.number_format($remainingBalance, 2, '.', '').'.'),
+        ]);
     }
 
     /** @return array<string, mixed> */

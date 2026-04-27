@@ -51,9 +51,14 @@ $premiumBadge = '<span class="badge text-bg-warning text-dark ms-2">Premium</spa
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 d-print-none">
     <div class="small text-muted">Record / audit: print the summary below.</div>
-    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="window.print()">
-        <i class="fa-solid fa-print me-1"></i>Print report summary
-    </button>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary btn-sm" href="<?= e(url('/tenant/reports/export-excel?from='.$rangeFrom.'&to='.$rangeTo.'&preset='.$chartPreset)) ?>">
+            <i class="fa-solid fa-file-excel me-1 text-success"></i>Export to Excel
+        </a>
+        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="window.print()">
+            <i class="fa-solid fa-print me-1"></i>Print report summary
+        </button>
+    </div>
 </div>
 
 <div class="reports-print-scope" style="overflow-x: hidden;">
@@ -129,6 +134,7 @@ $addonItemsOut = (float) ($stats['addon_items_out_total'] ?? 0);
 $totalItemsOut = (float) ($stats['total_items_out_total'] ?? ($inclusionItemsOut + $addonItemsOut));
 $inventoryLedgerRows = (array) ($stats['inventory_ledger_rows'] ?? []);
 $machineCreditLedgerRows = (array) ($stats['machine_credit_ledger_rows'] ?? []);
+$machineIdleRows = (array) ($stats['machine_idle_rows'] ?? []);
 $expenses = (float) ($stats['expenses_total'] ?? 0);
 $netSales = (float) ($stats['net_sales'] ?? 0);
 $grossProfit = (float) ($stats['gross_profit'] ?? ($netSales - $expenses));
@@ -703,6 +709,46 @@ $nDaily = count($dailyDates);
     <div class="col-12">
         <div class="card">
             <div class="card-body">
+                <h6 class="mb-1">Machine idle time (Selected range)</h6>
+                <p class="small text-muted mb-3">Idle gaps between logged machine usages. Helps detect long machine idle windows that may indicate unlogged transactions.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th>Machine</th>
+                            <th class="text-end">Idle (hours)</th>
+                            <th class="text-end">Idle gaps</th>
+                            <th class="text-end">Longest idle (hours)</th>
+                            <th>Longest idle range</th>
+                            <th class="text-end">Usage logs</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php if ($machineIdleRows === []): ?>
+                            <tr><td colspan="6" class="text-muted text-center py-3">No machine idle records for this period.</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($machineIdleRows as $row): ?>
+                                <tr>
+                                    <td>
+                                        <?= e((string) ($row['machine_label'] ?? 'Machine')) ?>
+                                    </td>
+                                    <td class="text-end fw-semibold"><?= e(number_format((float) ($row['idle_hours'] ?? 0), 2, '.', ',')) ?></td>
+                                    <td class="text-end"><?= (int) ($row['idle_gaps'] ?? 0) ?></td>
+                                    <td class="text-end"><?= e(number_format((float) ($row['longest_idle_hours'] ?? 0), 2, '.', ',')) ?></td>
+                                    <td class="small"><?= e((string) ($row['longest_idle_range'] ?? '—')) ?></td>
+                                    <td class="text-end"><?= (int) ($row['usage_logs'] ?? 0) ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
                 <h6 class="mb-1">Machine credits ledger (Selected range)</h6>
                 <p class="small text-muted mb-3">Opening + Restock - Usage = Closing per machine for the selected date range.</p>
                 <div class="table-responsive">
@@ -724,7 +770,6 @@ $nDaily = count($dailyDates);
                                 <tr>
                                     <td>
                                         <?= e((string) ($row['machine_label'] ?? 'Machine')) ?>
-                                        <span class="small text-muted">(<?= e((string) ($row['machine_code'] ?? '')) ?>)</span>
                                     </td>
                                     <td class="text-end"><?= ! empty($row['credit_required']) ? e(format_stock((float) ($row['opening'] ?? 0))) : '—' ?></td>
                                     <td class="text-end text-success"><?= ! empty($row['credit_required']) ? e(format_stock((float) ($row['restock'] ?? 0))) : '—' ?></td>

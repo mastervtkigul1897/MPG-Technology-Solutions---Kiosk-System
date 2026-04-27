@@ -107,6 +107,11 @@ if (($u['role'] ?? '') !== 'super_admin' && ! empty($u['tenant_id']) && ! empty(
 }
 $swalClockInRequired = (bool) session_flash('swal_clock_in_required');
 $isStoreOwner = (($u['role'] ?? '') === 'tenant_admin');
+$showEmailVerificationGraceNotice = (($u['role'] ?? '') !== 'super_admin')
+    && empty($u['email_verified_at'])
+    && !\App\Core\Auth::isEmailVerificationEnforced($u ?? null);
+$emailVerificationDaysLeft = \App\Core\Auth::emailVerificationGraceDaysRemaining($u ?? null);
+$emailVerificationGraceDays = \App\Core\Auth::emailVerificationGraceDays();
 $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHints): string {
     if (! $navPremiumTrialHints || ! $isPremiumItem) {
         return '';
@@ -665,6 +670,20 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
             <div class="modern-page-note">Manage and monitor your laundry operations.</div>
         </div>
         <?php require dirname(__DIR__).'/partials/alerts.php'; ?>
+        <?php if ($showEmailVerificationGraceNotice): ?>
+            <div class="alert alert-warning border-warning-subtle d-flex flex-wrap align-items-center justify-content-between gap-2 py-2 px-3">
+                <div class="small">
+                    <strong>Please verify your email.</strong>
+                    You can use the system now, but verification becomes required after
+                    <?= $emailVerificationDaysLeft !== null ? max(0, (int) $emailVerificationDaysLeft) : (int) $emailVerificationGraceDays ?>
+                    day<?= ($emailVerificationDaysLeft !== null ? max(0, (int) $emailVerificationDaysLeft) : (int) $emailVerificationGraceDays) === 1 ? '' : 's' ?>.
+                </div>
+                <form method="POST" action="<?= e(url('/email/verification-notification')) ?>" class="m-0" data-mpg-ajax="off">
+                    <?= csrf_field() ?>
+                    <button type="submit" class="btn btn-sm btn-outline-warning">Resend confirmation link</button>
+                </form>
+            </div>
+        <?php endif; ?>
         <div class="app-content-area flex-grow-1 min-h-0 min-w-0 overflow-y-auto"><?= $content ?? '' ?></div>
         <?php
         $footerCreditClass = 'text-muted mt-auto pt-3 border-top';

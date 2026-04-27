@@ -841,7 +841,7 @@
         const contactDisplay = pendingContact ? escapeHtml(pendingContact) : '—';
         const ask = await Swal.fire({
             icon: 'question',
-            title: `Pay Pending #${id}`,
+            title: `Pay/Deposit Pending #${id}`,
             html: `
                 <div class="text-start">
                     <label class="form-label mb-1 text-muted small" for="swalCreditorName">Name of Creditor</label>
@@ -866,14 +866,14 @@
                         </button>
                         <div class="form-text">If no cash row is used, split total must match exact grand total.</div>
                     </div>
-                    <label class="form-label mb-1">Amount received</label>
+                    <label class="form-label mb-1">Amount to pay now (Deposit allowed)</label>
                     <input id="swalPayAmountReceived" class="form-control" placeholder="0.00" inputmode="decimal" autocomplete="off">
                     <div id="swalPayPendingQuickAmounts" class="d-flex flex-wrap gap-2 mt-2"></div>
-                    <div class="form-text">For non-cash payments, this will be set to exact total.</div>
+                    <div class="form-text">You can collect partial payment and settle the remaining balance later.</div>
                 </div>
             `,
             showCancelButton: true,
-            confirmButtonText: 'Confirm payment',
+            confirmButtonText: 'Confirm payment / deposit',
             didOpen: () => {
                 const methodEl = document.getElementById('swalPayPendingPaymentMethod');
                 const paymentCards = Array.from(document.querySelectorAll('#swalPayPendingPaymentCards .swal-pay-pending-payment-card'));
@@ -977,8 +977,10 @@
                                 addSplitRow('cash', toMoneyInputStr(0), true);
                             }
                         } else {
-                            amtEl.value = toMoneyInputStr(total);
-                            amtEl.disabled = true;
+                            if (!String(amtEl.value || '').trim()) {
+                                amtEl.value = toMoneyInputStr(total);
+                            }
+                            amtEl.disabled = false;
                             amtEl.readOnly = false;
                             amtEl.removeAttribute('readonly');
                             if (quickWrap) quickWrap.innerHTML = '';
@@ -1045,23 +1047,23 @@
                     }
                     const splitSum = splitPayments.reduce((s, r) => s + Number(r.amount || 0), 0);
                     const hasCash = splitPayments.some((r) => r.method === 'cash');
-                    if (splitSum < total) {
-                        Swal.showValidationMessage('Split payment total is less than grand total.');
+                    if (splitSum <= 0) {
+                        Swal.showValidationMessage('Enter split payment amounts greater than 0.');
                         return false;
                     }
-                    if (!hasCash && Math.abs(splitSum - total) > 0.009) {
-                        Swal.showValidationMessage('Without cash, split payment must equal exact grand total.');
+                    if (!hasCash && splitSum - total > 0.009) {
+                        Swal.showValidationMessage('Without cash, split payment cannot exceed remaining balance.');
                         return false;
                     }
                     return { method, received: splitSum, splitPayments };
                 }
-                const finalReceived = method === 'cash' ? received : total;
+                const finalReceived = method === 'cash' ? received : received;
                 if (!Number.isFinite(finalReceived) || finalReceived < 0) {
                     Swal.showValidationMessage('Enter a valid amount received.');
                     return false;
                 }
-                if (method === 'cash' && finalReceived < total) {
-                    Swal.showValidationMessage('Amount received is less than total.');
+                if (finalReceived <= 0) {
+                    Swal.showValidationMessage('Enter an amount paid greater than 0.');
                     return false;
                 }
                 return { method, received: finalReceived, splitPayments: [] };
@@ -1082,7 +1084,7 @@
 
         try {
             Swal.fire({
-                title: 'Recording payment…',
+                title: 'Recording payment/deposit…',
                 allowOutsideClick: false,
                 allowEscapeKey: false,
                 didOpen: () => Swal.showLoading(),
@@ -1099,10 +1101,14 @@
             }
             lastTxReceiptObject = null;
             try { $('#transactionsTable').DataTable().ajax.reload(null, false); } catch {}
+            const rem = Number(body.remaining_balance || 0);
+            const hasRemaining = Number.isFinite(rem) && rem > 0.000001;
             await Swal.fire({
                 icon: 'success',
-                title: 'Payment recorded',
-                html: '<p class="mb-0 text-start">When you are ready to give the customer their official receipt, open the completed order in the list and tap <strong>receipt</strong> to print (standard receipt as usual).</p>',
+                title: hasRemaining ? 'Deposit recorded' : 'Payment completed',
+                html: hasRemaining
+                    ? `<p class="mb-1 text-start">Remaining balance: <strong>${money(rem)}</strong>.</p><p class="mb-0 text-start">You can collect the next payment later from this Pending order.</p>`
+                    : '<p class="mb-0 text-start">When you are ready to give the customer their official receipt, open the completed order in the list and tap <strong>receipt</strong> to print (standard receipt as usual).</p>',
             });
         } catch {
             Swal.close();

@@ -102,7 +102,7 @@ final class Router
         }
         foreach ($mw as $rule) {
             if ($rule === 'guest' && $user) {
-                if (($user['role'] ?? '') !== 'super_admin' && empty($user['email_verified_at'])) {
+                if (Auth::isEmailVerificationEnforced($user)) {
                     return redirect(url('/email/verification-notice'));
                 }
 
@@ -111,7 +111,7 @@ final class Router
             if ($rule === 'auth' && ! $user) {
                 return redirect(url('/login'));
             }
-            if ($rule === 'auth' && $user && ($user['role'] ?? '') !== 'super_admin' && empty($user['email_verified_at'])) {
+            if ($rule === 'auth' && $user && Auth::isEmailVerificationEnforced($user)) {
                 $allowedPaths = [
                     '/email/verification-notice',
                     '/email/verification-notification',
@@ -402,6 +402,7 @@ final class Router
 
         $r(['GET'], '#^/tenant/reports$#', ReportController::class.'::index', 'tenant.reports.index', $tenantAdmin);
         $r(['GET'], '#^/tenant/reports/daily-outs$#', ReportController::class.'::dailyOuts', 'tenant.reports.daily-outs', $tenantAdmin);
+        $r(['GET'], '#^/tenant/reports/export-excel$#', ReportController::class.'::exportExcel', 'tenant.reports.export-excel', $tenantAdmin);
         $r(['GET'], '#^/tenant/transactions/(\d+)/receipt$#', ReportController::class.'::receipt', 'tenant.transactions.receipt', array_merge($ta, ['tenant.access:transactions']));
         $r(['DELETE'], '#^/tenant/transactions/(\d+)$#', ReportController::class.'::destroyTransaction', 'tenant.transactions.destroy', $tenantAdmin);
     }

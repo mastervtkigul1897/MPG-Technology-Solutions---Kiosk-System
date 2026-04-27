@@ -108,6 +108,7 @@ return [
     'tenant.redeem-config.redeem' => '/tenant/redeem-rewards-config/redeem',
     'tenant.reports.index' => '/tenant/reports',
     'tenant.reports.daily-outs' => '/tenant/reports/daily-outs',
+    'tenant.reports.export-excel' => '/tenant/reports/export-excel',
     'tenant.transactions.destroy' => '/tenant/transactions/{id}',
     'tenant.transactions.receipt' => '/tenant/transactions/{id}/receipt',
     'tenant.staff.index' => '/tenant/staff',

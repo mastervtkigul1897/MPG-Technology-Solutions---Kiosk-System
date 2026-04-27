@@ -30,7 +30,7 @@
     <div>
         <label class="form-label" for="reg_email">Email</label>
         <input type="email" class="form-control" id="reg_email" name="email" value="<?= e(old('email')) ?>" required autocomplete="email">
-        <div class="form-text">Use a real email address. We will send a verification link before you can use the system.</div>
+        <div class="form-text">Use a real email address. You can access the system right away, but email verification will be required after 5 days.</div>
     </div>
     <div>
         <label class="form-label" for="reg_password">Password</label>
