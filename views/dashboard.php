@@ -1,9 +1,132 @@
 <?php
 /** @var bool $is_super */
 if (! empty($is_super)): ?>
+    <?php
+    $superStats = (array) ($stats ?? []);
+    $usersColumns = (array) ($users_columns ?? []);
+    $usersRows = (array) ($users_rows ?? []);
+    ?>
+    <div class="row g-3 mb-3">
+        <div class="col-md-4 col-lg-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">Overall Total Shops</small>
+                    <h3 class="mb-0"><?= (int) ($superStats['overall_total_shops'] ?? 0) ?></h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 col-lg-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">Free Users</small>
+                    <h3 class="mb-0"><?= (int) ($superStats['free_users'] ?? 0) ?></h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 col-lg-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">Premium Users</small>
+                    <h3 class="mb-0"><?= (int) ($superStats['premium_users'] ?? 0) ?></h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 col-lg-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">Total Verified Shops</small>
+                    <h3 class="mb-0"><?= (int) ($superStats['total_verified_shops'] ?? 0) ?></h3>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">1 Month Users</small>
+                    <h4 class="mb-0"><?= (int) ($superStats['one_month_users'] ?? 0) ?></h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">3 Months Users</small>
+                    <h4 class="mb-0"><?= (int) ($superStats['three_month_users'] ?? 0) ?></h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">6 Months Users</small>
+                    <h4 class="mb-0"><?= (int) ($superStats['six_month_users'] ?? 0) ?></h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">12 Months Users</small>
+                    <h4 class="mb-0"><?= (int) ($superStats['twelve_month_users'] ?? 0) ?></h4>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">Total Main Branches</small>
+                    <h4 class="mb-0"><?= (int) ($superStats['total_main_branches'] ?? 0) ?></h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <small class="text-muted">Total Sub Branches</small>
+                    <h4 class="mb-0"><?= (int) ($superStats['total_sub_branches'] ?? 0) ?></h4>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="card">
         <div class="card-body">
-            <h5>Total Tenants: <?= (int) ($stats['tenants_count'] ?? 0) ?></h5>
+            <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                <h5 class="mb-0">Users Table (All columns except password)</h5>
+                <span class="small text-muted">Showing latest <?= count($usersRows) ?> rows</span>
+            </div>
+            <?php if ($usersColumns === []): ?>
+                <p class="text-muted mb-0">Users table columns are unavailable.</p>
+            <?php elseif ($usersRows === []): ?>
+                <p class="text-muted mb-0">No users found.</p>
+            <?php else: ?>
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <?php foreach ($usersColumns as $col): ?>
+                                <th><?= e((string) $col) ?></th>
+                            <?php endforeach; ?>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($usersRows as $row): ?>
+                            <tr>
+                                <?php foreach ($usersColumns as $col): ?>
+                                    <td><?= e((string) ($row[$col] ?? '')) ?></td>
+                                <?php endforeach; ?>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
         </div>
     </div>
 <?php else: ?>

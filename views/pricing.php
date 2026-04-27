@@ -60,7 +60,7 @@ $branch_addon_12_renewal = 750.0;
                     <li>7 days premium access from account creation</li>
                     <li>After 7 days, account stays on free access (no subscription fee)</li>
                     <li>One owner login and one staff login</li>
-                    <li>Up to 3 washers and 3 dryers</li>
+                    <li>Up to 1 washer and 1 dryer</li>
                     <li><span class="badge text-bg-warning text-dark">Premium</span> Customer profile, payroll, rewards, expenses, damaged items, receipt config</li>
                     <li><span class="badge text-bg-warning text-dark">Premium</span> Dashboard insights and detailed reports</li>
                     <li class="text-success"><i class="fa-solid fa-xmark me-1"></i>Priority support response</li>

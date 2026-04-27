@@ -599,7 +599,7 @@ $nDaily = count($dailyDates);
     <div class="col-lg-6">
         <div class="card h-100">
             <div class="card-body">
-                <h6 class="mb-1">Items out by service mode<?= $isTodayOnly ? ' (today)' : ' (selected range)' ?></h6>
+                <h6 class="mb-1">Items out by service mode<?= $isTodayOnly ? ' (today)' : ' (selected range)' ?><?= $premiumBadge ?></h6>
                 <p class="small text-muted mb-3">Uses the same selected period as Inventory items out and Services sold.</p>
                 <div class="table-responsive">
                     <table class="table table-sm align-middle mb-0">
@@ -749,7 +749,7 @@ $nDaily = count($dailyDates);
     <div class="col-12">
         <div class="card">
             <div class="card-body">
-                <h6 class="mb-1">Machine credits ledger (Selected range)</h6>
+                <h6 class="mb-1">Machine credits ledger (Selected range)<?= $premiumBadge ?></h6>
                 <p class="small text-muted mb-3">Opening + Restock - Usage = Closing per machine for the selected date range.</p>
                 <div class="table-responsive">
                     <table class="table table-sm align-middle mb-0">

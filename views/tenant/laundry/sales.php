@@ -15,6 +15,8 @@ $isTenantAdmin = (($currentUser['role'] ?? '') === 'tenant_admin');
 $tenantScopeId = (int) ($currentUser['tenant_id'] ?? 0);
 $machineAssignmentEnabled = (bool) ($machine_assignment_enabled ?? true);
 $laundryStatusTrackingEnabled = (bool) ($laundry_status_tracking_enabled ?? true);
+$trackMachineMovementEnabled = (bool) ($track_machine_movement_enabled ?? false);
+$defaultDryingMinutes = $default_drying_minutes ?? null;
 $editableOrderDate = (bool) ($editable_order_date ?? false);
 $order_types_list = $order_types ?? [];
 $rewardConfig = is_array($reward_config ?? null) ? $reward_config : null;
@@ -72,7 +74,8 @@ $buildSalesLink = static function (array $updates = []): string {
     return $qs !== '' ? ($base.'?'.$qs) : $base;
 };
 $kanbanPending = [];
-$kanbanWashing = [];
+$kanbanWashingRinsing = [];
+$kanbanDrying = [];
 $kanbanUnpaid = [];
 $kanbanPaid = [];
 $voidedToday = [];
@@ -97,7 +100,12 @@ foreach ($ordersList as $_o) {
     if ($st === 'pending') {
         $kanbanPending[] = $_o;
     } elseif ($st === 'washing_drying' || $st === 'running') {
-        $kanbanWashing[] = $_o;
+        $stage = strtolower(trim((string) ($_o['track_machine_stage'] ?? '')));
+        if ($trackMachineMovementEnabled && in_array($stage, ['drying', 'drying_waiting_machine', 'drying_done'], true)) {
+            $kanbanDrying[] = $_o;
+        } else {
+            $kanbanWashingRinsing[] = $_o;
+        }
     } elseif ($st === 'open_ticket') {
         $kanbanUnpaid[] = $_o;
     } elseif ($st === 'paid') {
@@ -174,11 +182,12 @@ $toDateTimeLocal = static function (string $raw): string {
 <?php if ($isTenantAdmin): ?>
     <div class="card mb-3">
         <div class="card-body">
-            <div class="small fw-semibold text-secondary text-uppercase mb-2">Load Status Settings</div>
-            <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" class="d-flex flex-wrap gap-3 align-items-center">
+            <div class="small fw-semibold text-secondary text-uppercase mb-2">Track Machine Movement</div>
+            <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" class="vstack gap-2">
                 <?= csrf_field() ?>
                 <input type="hidden" name="update_laundry_status_workflow" value="1">
                 <input type="hidden" name="laundry_status_tracking_enabled" value="0">
+                <input type="hidden" name="track_machine_movement" value="0">
                 <div class="form-check mb-0">
                     <input
                         class="form-check-input"
@@ -194,7 +203,39 @@ $toDateTimeLocal = static function (string $raw): string {
                     </label>
                 </div>
                 <div class="small text-muted">
-                    ON: Pending → Washing - Drying → Unpaid → Paid. OFF: payment-only flow (Unpaid/Paid).
+                    ON: standard workflow is enabled. If machine movement tracking is ON, cycle view becomes Pending → Washing - Rinsing → Drying → Unpaid → Paid.
+                    If OFF, payment-only flow is used (Unpaid/Paid).
+                </div>
+                <div class="d-flex flex-wrap align-items-center gap-3">
+                    <div class="form-check mb-0">
+                        <input
+                            class="form-check-input"
+                            type="checkbox"
+                            name="track_machine_movement"
+                            id="trackMachineMovementEnabled"
+                            value="1"
+                            <?= $trackMachineMovementEnabled ? 'checked' : '' ?>
+                            onchange="this.form.submit()"
+                        >
+                        <label class="form-check-label" for="trackMachineMovementEnabled">
+                            Enable machine movement tracking
+                        </label>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <label class="small text-muted mb-0" for="defaultDryingMinutes">Default drying minutes</label>
+                        <input
+                            class="form-control form-control-sm"
+                            style="width: 7rem;"
+                            type="number"
+                            min="1"
+                            step="1"
+                            name="default_drying_minutes"
+                            id="defaultDryingMinutes"
+                            value="<?= $defaultDryingMinutes === null || $defaultDryingMinutes === '' ? '' : e((string) $defaultDryingMinutes) ?>"
+                            onchange="this.form.submit()"
+                            placeholder="Manual"
+                        >
+                    </div>
                 </div>
             </form>
             <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" class="d-flex flex-wrap gap-3 align-items-center mt-2">
@@ -528,11 +569,12 @@ $toDateTimeLocal = static function (string $raw): string {
     .sortable-ghost { opacity: 0.45; }
     .laundry-kanban-board {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(0, 1fr);
         gap: 0.75rem;
     }
     .laundry-kanban-board.laundry-kanban-board--compact {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-auto-columns: minmax(0, 1fr);
     }
     .laundry-kanban-col {
         min-width: 0;
@@ -575,16 +617,6 @@ $toDateTimeLocal = static function (string $raw): string {
         }
         .laundry-kanban-date-input {
             max-width: 100%;
-        }
-    }
-    @media (max-width: 1199.98px) {
-        .laundry-kanban-board {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-    }
-    @media (max-width: 767.98px) {
-        .laundry-kanban-board {
-            grid-template-columns: minmax(0, 1fr);
         }
     }
     .laundry-sales-table-scroll {
@@ -686,13 +718,32 @@ $toDateTimeLocal = static function (string $raw): string {
                         'hint' => 'Queued loads waiting to be placed on machine.',
                         'list' => $kanbanPending,
                     ],
-                    'washing_drying' => [
-                        'title' => 'Washing - Drying',
-                        'badge' => 'bg-warning text-dark',
-                        'border' => 'border-warning border-opacity-50',
-                        'hint' => 'Cycle in progress. Move to Unpaid (or Paid if already paid) when cycle is finished.',
-                        'list' => $kanbanWashing,
-                    ],
+                    ...($trackMachineMovementEnabled
+                        ? [
+                            'washing_rinsing' => [
+                                'title' => 'Washing - Rinsing',
+                                'badge' => 'bg-warning text-dark',
+                                'border' => 'border-warning border-opacity-50',
+                                'hint' => 'Wash-rinse cycle in progress. It will auto-move to Drying when timer ends.',
+                                'list' => $kanbanWashingRinsing,
+                            ],
+                            'drying' => [
+                                'title' => 'Drying',
+                                'badge' => 'bg-info text-dark',
+                                'border' => 'border-info border-opacity-50',
+                                'hint' => 'Drying in progress. Move to Unpaid/Paid when finished.',
+                                'list' => $kanbanDrying,
+                            ],
+                        ]
+                        : [
+                            'washing_drying' => [
+                                'title' => 'Washing - Drying',
+                                'badge' => 'bg-warning text-dark',
+                                'border' => 'border-warning border-opacity-50',
+                                'hint' => 'Cycle in progress. Move to Unpaid (or Paid if already paid) when cycle is finished.',
+                                'list' => $kanbanWashingRinsing,
+                            ],
+                        ]),
                     'open_ticket' => [
                         'title' => 'Unpaid',
                         'badge' => 'bg-info text-dark',
@@ -746,6 +797,7 @@ $toDateTimeLocal = static function (string $raw): string {
                                 if ($refDisplay === '') {
                                     $refDisplay = '—';
                                 }
+                                $groupRefDisplay = trim((string) ($order['group_reference_code'] ?? ''));
                                 $otLabel = trim((string) ($order['order_type_label'] ?? ''));
                                 $typeDisp = $otLabel !== '' ? $otLabel : ucwords(str_replace('_', ' ', (string) ($order['order_type'] ?? '')));
                                 $pmRaw = strtolower(trim((string) ($order['payment_method'] ?? '')));
@@ -766,6 +818,17 @@ $toDateTimeLocal = static function (string $raw): string {
                                 $dragClass = $isDraggableCol ? 'laundry-kanban-card--draggable' : '';
                                 $createdAtDisplay = trim((string) ($order['created_at'] ?? ''));
                                 $createdAtLocal = $toDateTimeLocal($createdAtDisplay);
+                                $showMovementTimer = in_array($colKey, ['washing_rinsing', 'drying'], true);
+                                $movementEndAtRaw = $colKey === 'washing_rinsing'
+                                    ? trim((string) ($order['wash_rinse_end_at'] ?? ''))
+                                    : trim((string) ($order['drying_end_at'] ?? ''));
+                                $movementExpectedDisplay = '—';
+                                if ($showMovementTimer && $movementEndAtRaw !== '') {
+                                    $movementEndTs = strtotime($movementEndAtRaw);
+                                    if ($movementEndTs !== false) {
+                                        $movementExpectedDisplay = date('g:i A', $movementEndTs);
+                                    }
+                                }
                                 ?>
                                 <div
                                     class="card mb-2 shadow-sm laundry-kanban-card border-0 <?= e($dragClass) ?>"
@@ -782,6 +845,7 @@ $toDateTimeLocal = static function (string $raw): string {
                                     data-balance="<?= e((string) $balanceForDisplay) ?>"
                                     data-service-kind="<?= e((string) ($order['order_type_service_kind'] ?? 'full_service')) ?>"
                                     data-reference-code="<?= e($refDisplay) ?>"
+                                    data-group-reference-code="<?= e($groupRefDisplay) ?>"
                                     data-customer-name="<?= e((string) ($order['customer_name'] ?? 'Walk-in')) ?>"
                                     data-order-type-label="<?= e($typeDisp) ?>"
                                     data-service-mode-label="<?= e($serviceModeLabel) ?>"
@@ -789,6 +853,8 @@ $toDateTimeLocal = static function (string $raw): string {
                                     data-date-update-url="<?= e(route('tenant.laundry-sales.date.update', ['id' => $oid])) ?>"
                                     data-payment-status="<?= e($paymentStatus) ?>"
                                     data-order-mode="<?= e($orderModeRaw) ?>"
+                                    data-track-stage="<?= e((string) ($order['track_machine_stage'] ?? '')) ?>"
+                                    data-movement-end-at="<?= e($movementEndAtRaw) ?>"
                                 >
                                     <div class="card-body py-2 px-2">
                                         <div class="laundry-kanban-card-head mb-1">
@@ -808,6 +874,9 @@ $toDateTimeLocal = static function (string $raw): string {
                                                 <?php endif; ?>
                                             </div>
                                         </div>
+                                        <?php if ($groupRefDisplay !== ''): ?>
+                                            <div class="small text-muted mb-1">Group Ref: <span class="font-monospace"><?= e($groupRefDisplay) ?></span></div>
+                                        <?php endif; ?>
                                         <div class="small fw-medium text-truncate" title="<?= e((string) ($order['customer_name'] ?? 'Walk-in')) ?>"><?= e((string) ($order['customer_name'] ?? 'Walk-in')) ?></div>
                                         <div class="small text-muted text-truncate"><?= e($typeDisp) ?></div>
                                         <div class="small text-muted mb-1"><?= e($laundryMachinesSummary($order)) ?></div>
@@ -826,6 +895,12 @@ $toDateTimeLocal = static function (string $raw): string {
                                         <div class="small text-muted">
                                             Paid <?= e(format_money($paidForDisplay)) ?> · Balance <?= e(format_money($balanceForDisplay)) ?>
                                         </div>
+                                        <?php if ($showMovementTimer): ?>
+                                            <div class="small mt-1 pt-1 border-top js-movement-timer-block">
+                                                <div><span class="text-muted">Expected finish:</span> <span class="fw-semibold js-movement-expected"><?= e($movementExpectedDisplay) ?></span></div>
+                                                <div><span class="text-muted">Current timer:</span> <span class="fw-semibold js-movement-timer" data-end-at="<?= e($movementEndAtRaw) ?>">--:--</span></div>
+                                            </div>
+                                        <?php endif; ?>
                                         <?php if ($colKey === 'pending' || $colKey === 'paid' || $isTenantAdmin): ?>
                                             <div class="mt-1 pt-1 border-top d-flex align-items-center gap-2 flex-wrap">
                                                 <?php if ($colKey === 'paid'): ?>
@@ -1359,6 +1434,10 @@ $toDateTimeLocal = static function (string $raw): string {
             </div>
             <div class="modal-body pt-0">
                 <p class="small text-muted">Choose the available machine before moving this load to Washing - Drying.</p>
+                <div class="mb-3 d-none" id="assignWashRinseMinutesWrap">
+                    <label class="form-label mb-1" for="assignWashRinseMinutes">Wash-rinse minutes</label>
+                    <input type="number" class="form-control" id="assignWashRinseMinutes" min="1" step="1" placeholder="e.g. 35">
+                </div>
                 <div class="mb-3" id="assignWasherWrap">
                     <label class="form-label mb-1" for="assignWasherSelect">Washer</label>
                     <select class="form-select" id="assignWasherSelect" name="washer_machine_id">
@@ -1995,6 +2074,9 @@ $toDateTimeLocal = static function (string $raw): string {
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     const laundryStatusTrackingEnabled = <?= $laundryStatusTrackingEnabled ? 'true' : 'false' ?>;
     const machineAssignmentEnabled = <?= $machineAssignmentEnabled ? 'true' : 'false' ?>;
+    const trackMachineMovementEnabled = <?= $trackMachineMovementEnabled ? 'true' : 'false' ?>;
+    const movementTickUrl = <?= json_encode(route('tenant.laundry-sales.movement-tick'), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>;
+    const jobOrderDoneAudioUrl = <?= json_encode(url('audio/job-order-done-ready.mp3'), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>;
     const ownerCanEditOrderDate = <?= ($isTenantAdmin && $editableOrderDate) ? 'true' : 'false' ?>;
 
     const viewSelect = document.getElementById('laundrySalesViewSelect');
@@ -2432,8 +2514,10 @@ $toDateTimeLocal = static function (string $raw): string {
     const assignForm = document.getElementById('laundryMachineAssignForm');
     const assignWasherWrap = document.getElementById('assignWasherWrap');
     const assignDryerWrap = document.getElementById('assignDryerWrap');
+    const assignWashRinseMinutesWrap = document.getElementById('assignWashRinseMinutesWrap');
     const assignWasherSelect = document.getElementById('assignWasherSelect');
     const assignDryerSelect = document.getElementById('assignDryerSelect');
+    const assignWashRinseMinutes = document.getElementById('assignWashRinseMinutes');
     const assignError = document.getElementById('laundryMachineAssignError');
     const openMachineAssignModal = (cardOrRow, options = {}) => new Promise((resolve) => {
         if (!assignModalEl || !assignForm || !assignWasherSelect || !assignDryerSelect) {
@@ -2441,8 +2525,15 @@ $toDateTimeLocal = static function (string $raw): string {
             return;
         }
         const serviceKind = String(cardOrRow?.getAttribute?.('data-service-kind') || 'full_service');
-        const needWasher = ['full_service', 'wash_only', 'rinse_only'].includes(serviceKind);
-        const needDryer = ['full_service', 'dry_only'].includes(serviceKind);
+        const useTrackMovement = laundryStatusTrackingEnabled && trackMachineMovementEnabled;
+        const needWashMinutes = useTrackMovement && ['full_service', 'wash_only', 'rinse_only'].includes(serviceKind);
+        const needWasher = !useTrackMovement && ['full_service', 'wash_only', 'rinse_only'].includes(serviceKind);
+        const needDryer = !useTrackMovement && ['full_service', 'dry_only'].includes(serviceKind);
+        assignWashRinseMinutesWrap?.classList.toggle('d-none', !needWashMinutes);
+        if (assignWashRinseMinutes) {
+            assignWashRinseMinutes.required = needWashMinutes;
+            assignWashRinseMinutes.value = '';
+        }
         assignWasherWrap?.classList.toggle('d-none', !needWasher);
         assignDryerWrap?.classList.toggle('d-none', !needDryer);
         assignWasherSelect.required = needWasher;
@@ -2484,12 +2575,30 @@ $toDateTimeLocal = static function (string $raw): string {
                 }
                 return;
             }
+            if (needWashMinutes) {
+                const mins = Math.max(0, parseInt(assignWashRinseMinutes?.value || '0', 10) || 0);
+                if (mins < 1) {
+                    if (assignError) {
+                        assignError.textContent = 'Enter wash-rinse minutes greater than 0.';
+                        assignError.classList.remove('d-none');
+                    }
+                    return;
+                }
+            }
             const params = {
                 washer_machine_id: needWasher ? assignWasherSelect.value : '',
                 dryer_machine_id: needDryer ? assignDryerSelect.value : '',
+                wash_rinse_minutes: needWashMinutes ? String(assignWashRinseMinutes?.value || '') : '',
             };
             const ok = await postAdvance(cardOrRow, 'washing_drying', { ...options, params, errorTarget: assignError });
             if (ok) {
+                if (trackMachineMovementEnabled && cardOrRow instanceof HTMLElement && needWashMinutes) {
+                    const mins = Math.max(0, parseInt(assignWashRinseMinutes?.value || '0', 10) || 0);
+                    if (mins > 0) {
+                        const endAt = new Date(Date.now() + (mins * 60 * 1000));
+                        applyMovementTimerToCard(cardOrRow, endAt, 'washing_rinsing');
+                    }
+                }
                 if (modal) modal.hide();
                 cleanup(true);
             }
@@ -2508,6 +2617,219 @@ $toDateTimeLocal = static function (string $raw): string {
         if (Number.isNaN(x)) return '₱0.00';
         return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(x);
     };
+
+    const parseEndAt = (raw) => {
+        const s = String(raw || '').trim();
+        if (!s) return null;
+        const normalized = s.includes('T') ? s : s.replace(' ', 'T');
+        const d = new Date(normalized);
+        if (!Number.isFinite(d.getTime())) return null;
+        return d;
+    };
+    const formatDuration = (secondsRaw) => {
+        const seconds = Math.max(0, Math.floor(secondsRaw));
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        if (h > 0) {
+            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+        return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    };
+    const formatClockTime = (d) => {
+        if (!(d instanceof Date) || !Number.isFinite(d.getTime())) return '—';
+        const hh = d.getHours();
+        const mm = d.getMinutes();
+        const ap = hh >= 12 ? 'PM' : 'AM';
+        const hr12 = hh % 12 === 0 ? 12 : (hh % 12);
+        return `${hr12}:${String(mm).padStart(2, '0')} ${ap}`;
+    };
+    const ensureMovementTimerBlock = (card) => {
+        if (!(card instanceof HTMLElement)) return null;
+        const blocks = Array.from(card.querySelectorAll('.js-movement-timer-block'));
+        if (blocks.length > 1) {
+            blocks.slice(1).forEach((el) => el.remove());
+        }
+        let block = blocks[0] || null;
+        if (block) return block;
+        const body = card.querySelector('.card-body');
+        if (!body) return null;
+        block = document.createElement('div');
+        block.className = 'small mt-1 pt-1 border-top js-movement-timer-block';
+        block.innerHTML = '<div><span class="text-muted">Expected finish:</span> <span class="fw-semibold js-movement-expected">—</span></div>'
+            + '<div><span class="text-muted">Current timer:</span> <span class="fw-semibold js-movement-timer" data-end-at="">--:--</span></div>';
+        const actionRow = body.querySelector('.mt-1.pt-1.border-top.d-flex.align-items-center.gap-2.flex-wrap');
+        if (actionRow) {
+            body.insertBefore(block, actionRow);
+        } else {
+            body.appendChild(block);
+        }
+        return block;
+    };
+    const applyMovementTimerToCard = (card, endAtDate, stage) => {
+        if (!(card instanceof HTMLElement) || !(endAtDate instanceof Date) || !Number.isFinite(endAtDate.getTime())) return;
+        const block = ensureMovementTimerBlock(card);
+        if (!block) return;
+        const expectedEl = block.querySelector('.js-movement-expected');
+        const timerEl = block.querySelector('.js-movement-timer');
+        const endAtRaw = `${endAtDate.getFullYear()}-${String(endAtDate.getMonth() + 1).padStart(2, '0')}-${String(endAtDate.getDate()).padStart(2, '0')} ${String(endAtDate.getHours()).padStart(2, '0')}:${String(endAtDate.getMinutes()).padStart(2, '0')}:${String(endAtDate.getSeconds()).padStart(2, '0')}`;
+        if (expectedEl) expectedEl.textContent = formatClockTime(endAtDate);
+        if (timerEl) timerEl.setAttribute('data-end-at', endAtRaw);
+        card.setAttribute('data-movement-end-at', endAtRaw);
+        card.setAttribute('data-track-stage', stage);
+    };
+    const clearMovementTimerFromCard = (card, stage) => {
+        if (!(card instanceof HTMLElement)) return;
+        const block = ensureMovementTimerBlock(card);
+        if (!block) return;
+        const expectedEl = block.querySelector('.js-movement-expected');
+        const timerEl = block.querySelector('.js-movement-timer');
+        if (expectedEl) expectedEl.textContent = '—';
+        if (timerEl) {
+            timerEl.setAttribute('data-end-at', '');
+            timerEl.textContent = stage === 'drying_waiting_machine' ? 'Waiting for machine...' : 'Waiting...';
+        }
+        card.setAttribute('data-movement-end-at', '');
+        card.setAttribute('data-track-stage', stage);
+    };
+    const playCompletionAlarm = () => {
+        try {
+            const audio = new Audio(jobOrderDoneAudioUrl);
+            audio.preload = 'auto';
+            audio.play().catch(() => {});
+            return () => {
+                try {
+                    audio.pause();
+                    audio.currentTime = 0;
+                } catch {}
+            };
+        } catch {
+            return () => {};
+        }
+    };
+
+    const moveDryingCardToNextStatus = async (card) => {
+        const ok = await postAdvance(card, 'open_ticket', {});
+        if (!ok) return false;
+        const nextPaymentStatus = String(card.getAttribute('data-payment-status') || 'unpaid').trim() === 'paid' ? 'paid' : 'unpaid';
+        const nextStatus = nextPaymentStatus === 'paid' ? 'paid' : 'open_ticket';
+        card.setAttribute('data-status', nextStatus);
+        card.setAttribute('data-track-stage', 'completed');
+        const targetListId = nextPaymentStatus === 'paid' ? 'kanban-paid' : 'kanban-open_ticket';
+        const targetList = document.getElementById(targetListId);
+        if (targetList) {
+            targetList.appendChild(card);
+            ensureEmptyPlaceholder(targetList);
+        }
+        const dryingList = document.getElementById('kanban-drying');
+        if (dryingList) ensureEmptyPlaceholder(dryingList);
+        card.dataset.movementDoneNotified = '1';
+        document.dispatchEvent(new CustomEvent('mpg:ajax-success', {
+            detail: { method: 'POST', payload: { success: true, auto_transition: true } },
+        }));
+        return true;
+    };
+
+    const notifyDryingCompleted = async (card) => {
+        if (!card || card.dataset.movementDoneNotified === '1') return;
+        card.dataset.movementDoneNotified = '1';
+        const reference = String(card.getAttribute('data-reference-code') || card.getAttribute('data-order-id') || '').trim() || '—';
+        const nextStatus = String(card.getAttribute('data-payment-status') || '').toLowerCase() === 'paid' ? 'paid' : 'unpaid';
+        const stopAlarm = playCompletionAlarm();
+        try {
+            if (typeof Swal !== 'undefined') {
+                await Swal.fire({
+                    icon: 'success',
+                    title: `Transaction ${reference} is completed`,
+                    text: `Moving to ${nextStatus}...`,
+                    confirmButtonText: 'OK',
+                    confirmButtonColor: '#198754',
+                });
+            } else {
+                window.alert(`Transaction ${reference} is completed. Moving to ${nextStatus}.`);
+            }
+        } finally {
+            stopAlarm();
+        }
+        const moved = await moveDryingCardToNextStatus(card);
+        if (!moved) {
+            card.dataset.movementDoneNotified = '0';
+        }
+    };
+
+    const refreshMovementTimers = () => {
+        const nowMs = Date.now();
+        document.querySelectorAll('.js-movement-timer').forEach((el) => {
+            const endAt = parseEndAt(el.getAttribute('data-end-at') || '');
+            if (!endAt) {
+                el.textContent = 'Waiting...';
+                return;
+            }
+            const remainSec = Math.floor((endAt.getTime() - nowMs) / 1000);
+            if (remainSec <= 0) {
+                el.textContent = '00:00';
+                const card = el.closest('.laundry-kanban-card');
+                const list = card?.closest?.('[data-kanban-column]');
+                const col = String(list?.getAttribute?.('data-kanban-column') || '').trim();
+                const stage = String(card?.getAttribute?.('data-track-stage') || '').trim();
+                if (trackMachineMovementEnabled && col === 'drying' && stage === 'drying_done') {
+                    notifyDryingCompleted(card);
+                }
+                return;
+            }
+            el.textContent = formatDuration(remainSec);
+        });
+    };
+    refreshMovementTimers();
+    window.setInterval(refreshMovementTimers, 1000);
+    const applyMovementStageFromTick = (card, state) => {
+        if (!(card instanceof HTMLElement) || !state) return;
+        const stage = String(state.track_machine_stage || '').trim();
+        const pay = String(state.payment_status || '').trim();
+        card.setAttribute('data-track-stage', stage);
+        card.setAttribute('data-payment-status', pay === 'paid' ? 'paid' : 'unpaid');
+        if (stage === 'washing_rinsing') {
+            const list = document.getElementById('kanban-washing_rinsing');
+            if (list && card.parentElement !== list) list.appendChild(card);
+            const endAt = parseEndAt(state.wash_rinse_end_at || '');
+            if (endAt) applyMovementTimerToCard(card, endAt, 'washing_rinsing');
+            if (list) ensureEmptyPlaceholder(list);
+        } else if (stage === 'drying' || stage === 'drying_waiting_machine' || stage === 'drying_done') {
+            const list = document.getElementById('kanban-drying');
+            if (list && card.parentElement !== list) list.appendChild(card);
+            const endAt = parseEndAt(state.drying_end_at || '');
+            if (endAt) applyMovementTimerToCard(card, endAt, stage);
+            else clearMovementTimerFromCard(card, stage);
+            if (list) ensureEmptyPlaceholder(list);
+        }
+    };
+    const pollMovementRealtime = async () => {
+        if (!trackMachineMovementEnabled || !laundryStatusTrackingEnabled || !movementTickUrl) return;
+        try {
+            const res = await fetch(movementTickUrl, {
+                method: 'GET',
+                headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin',
+            });
+            const { data } = await parseJsonBody(res);
+            if (!res.ok || data.success !== true || !Array.isArray(data.orders)) return;
+            const byId = new Map();
+            data.orders.forEach((row) => {
+                const id = String(row?.id || '').trim();
+                if (id !== '') byId.set(id, row);
+            });
+            document.querySelectorAll('.laundry-kanban-card[data-order-id]').forEach((card) => {
+                const id = String(card.getAttribute('data-order-id') || '').trim();
+                if (!id) return;
+                if (!byId.has(id)) return;
+                applyMovementStageFromTick(card, byId.get(id));
+            });
+            ensureEmptyPlaceholder(document.getElementById('kanban-washing_rinsing'));
+            ensureEmptyPlaceholder(document.getElementById('kanban-drying'));
+        } catch {}
+    };
+    pollMovementRealtime();
+    window.setInterval(pollMovementRealtime, 3000);
 
     const payModalReady = modalEl && form && dueEl && tenderedEl && changeEl;
 
@@ -2794,7 +3116,9 @@ $toDateTimeLocal = static function (string $raw): string {
         if (cashRadio) cashRadio.checked = true;
     });
 
-    const kanbanIds = ['kanban-pending', 'kanban-washing_drying', 'kanban-open_ticket', 'kanban-paid'];
+    const kanbanIds = trackMachineMovementEnabled
+        ? ['kanban-pending', 'kanban-washing_rinsing', 'kanban-drying', 'kanban-open_ticket', 'kanban-paid']
+        : ['kanban-pending', 'kanban-washing_drying', 'kanban-open_ticket', 'kanban-paid'];
     if (typeof Sortable !== 'undefined') {
     kanbanIds.forEach((id) => {
         const el = document.getElementById(id);
@@ -2812,6 +3136,17 @@ $toDateTimeLocal = static function (string $raw): string {
                 const toCol = evt.to.dataset.kanbanColumn;
                 if (!laundryStatusTrackingEnabled) {
                     if (fromCol === 'open_ticket' && toCol === 'paid') return true;
+                    return false;
+                }
+                if (trackMachineMovementEnabled) {
+                    if (fromCol === 'pending') return toCol === 'washing_rinsing';
+                    if (fromCol === 'washing_rinsing') return false;
+                    if (fromCol === 'drying') {
+                        const ps = String(drag.getAttribute('data-payment-status') || '').toLowerCase();
+                        const expected = ps === 'paid' ? 'paid' : 'open_ticket';
+                        return expected === toCol;
+                    }
+                    if (fromCol === 'open_ticket') return toCol === 'paid';
                     return false;
                 }
                 if (fromCol === 'washing_drying') {
@@ -2833,6 +3168,53 @@ $toDateTimeLocal = static function (string $raw): string {
                 if (fromCol === toCol) return;
 
                 if (!laundryStatusTrackingEnabled) {
+                    if (fromCol === 'open_ticket' && toCol === 'paid') {
+                        evt.to.removeChild(item);
+                        const ref = evt.from.children[evt.oldIndex] || null;
+                        evt.from.insertBefore(item, ref);
+                        ensureEmptyPlaceholder(evt.to);
+                        ensureEmptyPlaceholder(evt.from);
+                        openPayModalFromCard(item);
+                        return;
+                    }
+                    evt.to.removeChild(item);
+                    const ref = evt.from.children[evt.oldIndex] || null;
+                    evt.from.insertBefore(item, ref);
+                    return;
+                }
+
+                if (trackMachineMovementEnabled) {
+                    if (fromCol === 'pending' && toCol === 'washing_rinsing') {
+                        const ok = await openMachineAssignModal(item, {});
+                        if (!ok) {
+                            evt.to.removeChild(item);
+                            const ref = evt.from.children[evt.oldIndex] || null;
+                            evt.from.insertBefore(item, ref);
+                        }
+                        ensureEmptyPlaceholder(evt.from);
+                        ensureEmptyPlaceholder(evt.to);
+                        return;
+                    }
+                    if (fromCol === 'washing_rinsing') {
+                        evt.to.removeChild(item);
+                        const ref = evt.from.children[evt.oldIndex] || null;
+                        evt.from.insertBefore(item, ref);
+                        ensureEmptyPlaceholder(evt.to);
+                        ensureEmptyPlaceholder(evt.from);
+                        showProcessError('Washing - Rinsing auto-advances to Drying when timer ends.');
+                        return;
+                    }
+                    if (fromCol === 'drying' && (toCol === 'open_ticket' || toCol === 'paid')) {
+                        const ok = await postAdvance(item, 'open_ticket', {});
+                        if (!ok) {
+                            evt.to.removeChild(item);
+                            const ref = evt.from.children[evt.oldIndex] || null;
+                            evt.from.insertBefore(item, ref);
+                        }
+                        ensureEmptyPlaceholder(evt.from);
+                        ensureEmptyPlaceholder(evt.to);
+                        return;
+                    }
                     if (fromCol === 'open_ticket' && toCol === 'paid') {
                         evt.to.removeChild(item);
                         const ref = evt.from.children[evt.oldIndex] || null;
@@ -2945,12 +3327,18 @@ $toDateTimeLocal = static function (string $raw): string {
     const statusLabelFromOrder = (o) => {
         const st = String(o.status || '');
         const ps = String(o.payment_status || '');
+        const stage = String(o.track_machine_stage || '');
         if (!laundryStatusTrackingEnabled) {
             if (st === 'paid' || ps === 'paid') return 'Paid';
             return 'Unpaid';
         }
         if (st === 'pending') return 'Pending';
-        if (st === 'washing_drying' || st === 'running') return 'Washing - Drying';
+        if (st === 'washing_drying' || st === 'running') {
+            if (stage === 'washing_rinsing') return 'Washing - Rinsing';
+            if (stage === 'drying') return 'Drying';
+            if (stage === 'drying_waiting_machine') return 'Drying (Waiting for Machine)';
+            return 'Washing - Drying';
+        }
         if (st === 'open_ticket') return 'Unpaid';
         if (st === 'paid') return 'Paid';
         return st || '—';
@@ -2967,6 +3355,7 @@ $toDateTimeLocal = static function (string $raw): string {
         const statusLabel = statusLabelFromOrder(o);
         const statusFieldLabel = statusFieldLabelFromOrder(o);
         const referenceNo = String(o.reference_code || '').trim() || '—';
+        const groupReferenceNo = String(o.group_reference_code || '').trim();
         if (detailTitleEl) detailTitleEl.textContent = `Reference No. ${referenceNo}`;
 
         const inclusionLine = (key, title) => {
@@ -3007,6 +3396,7 @@ $toDateTimeLocal = static function (string $raw): string {
               <div class="col-md-6">
                 <dl class="row mb-0">
                   <dt class="col-sm-4 text-muted">Date</dt><dd class="col-sm-8">${escapeHtml(String(o.created_at || '—'))}</dd>
+                  <dt class="col-sm-4 text-muted">Group Ref</dt><dd class="col-sm-8 font-monospace">${escapeHtml(groupReferenceNo || '—')}</dd>
                   <dt class="col-sm-4 text-muted">Customer</dt><dd class="col-sm-8">${escapeHtml(String(o.customer_name || 'Walk-in'))}</dd>
                   <dt class="col-sm-4 text-muted">Order type</dt><dd class="col-sm-8">${escapeHtml(String(o.order_type_label || o.order_type || '—'))}</dd>
                   <dt class="col-sm-4 text-muted">${escapeHtml(statusFieldLabel)}</dt><dd class="col-sm-8">${escapeHtml(statusLabel)}</dd>

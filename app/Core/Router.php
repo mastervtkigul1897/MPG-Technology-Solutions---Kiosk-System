@@ -10,6 +10,8 @@ use App\Controllers\HomeController;
 use App\Controllers\ProfileController;
 use App\Controllers\SuperAdmin\SettingsController;
 use App\Controllers\SuperAdmin\BranchController as SuperAdminBranchController;
+use App\Controllers\SuperAdmin\EmailCampaignController;
+use App\Controllers\SuperAdmin\TrafficTrackingController;
 use App\Controllers\SuperAdmin\TenantBackupController;
 use App\Controllers\SuperAdmin\TenantController;
 use App\Controllers\Tenant\ActivityLogController;
@@ -292,6 +294,9 @@ final class Router
         $r(['GET'], '#^/super-admin/settings$#', SettingsController::class.'::edit', 'super-admin.settings.edit', ['auth', 'role:super_admin']);
         $r(['POST'], '#^/super-admin/settings$#', SettingsController::class.'::update', 'super-admin.settings.update', ['auth', 'role:super_admin']);
         $r(['POST'], '#^/super-admin/settings/run-storage-migrations$#', SettingsController::class.'::runStorageMigrations', 'super-admin.settings.run-storage-migrations', ['auth', 'role:super_admin']);
+        $r(['GET'], '#^/super-admin/email-campaign$#', EmailCampaignController::class.'::index', 'super-admin.email-campaign.index', ['auth', 'role:super_admin']);
+        $r(['POST'], '#^/super-admin/email-campaign$#', EmailCampaignController::class.'::send', 'super-admin.email-campaign.send', ['auth', 'role:super_admin']);
+        $r(['GET'], '#^/super-admin/traffic-tracking$#', TrafficTrackingController::class.'::index', 'super-admin.traffic-tracking.index', ['auth', 'role:super_admin']);
 
         $r(['GET'], '#^/super-admin/tenants$#', TenantController::class.'::index', 'super-admin.tenants.index', ['auth', 'role:super_admin']);
         $r(['POST'], '#^/super-admin/tenants$#', TenantController::class.'::store', 'super-admin.tenants.store', ['auth', 'role:super_admin']);
@@ -371,6 +376,7 @@ final class Router
         $r(['POST'], '#^/tenant/laundry-sales/(\d+)/date$#', LaundryController::class.'::updateTransactionOrderDate', 'tenant.laundry-sales.date.update', $tenantAdmin);
         $r(['POST'], '#^/tenant/laundry-sales/(\d+)/void$#', LaundryController::class.'::voidTransaction', 'tenant.laundry-sales.void', $tenantAdmin);
         $r(['GET'], '#^/tenant/laundry-sales/(\d+)/detail$#', LaundryController::class.'::salesOrderDetail', 'tenant.laundry-sales.detail', array_merge($ta, ['tenant.access:pos']));
+        $r(['GET'], '#^/tenant/laundry-sales/movement-tick$#', LaundryController::class.'::movementTick', 'tenant.laundry-sales.movement-tick', array_merge($ta, ['tenant.access:pos']));
         $r(['GET'], '#^/tenant/laundry-inventory$#', LaundryController::class.'::inventoryIndex', 'tenant.laundry-inventory.index', array_merge($ta, ['tenant.access:ingredients']));
         $r(['POST'], '#^/tenant/laundry-inventory/items$#', LaundryController::class.'::inventoryStore', 'tenant.laundry-inventory.store', array_merge($ta, ['tenant.access:ingredients']));
         $r(['PUT'], '#^/tenant/laundry-inventory/items/(\d+)$#', LaundryController::class.'::inventoryUpdate', 'tenant.laundry-inventory.update', array_merge($ta, ['tenant.access:ingredients']));

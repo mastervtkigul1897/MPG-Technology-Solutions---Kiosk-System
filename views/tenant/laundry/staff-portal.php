@@ -12,6 +12,7 @@ $rewardThreshold = $rewardConfig !== null ? max(1.0, (float) ($rewardConfig['min
 $rewardOrderTypeCode = $rewardConfig !== null ? (string) ($rewardConfig['reward_order_type_code'] ?? '') : '';
 $rewardPointsPerDropoffLoad = $rewardConfig !== null ? max(0.0, (float) ($rewardConfig['points_per_dropoff_load'] ?? 1)) : 0.0;
 $enableBluetoothPrint = ! empty($enable_bluetooth_print);
+$trackMachineMovementEnabled = ! empty($track_machine_movement_enabled);
 $trackGasulUsage = ! empty($track_gasul_usage);
 $kioskAutomationSettings = is_array($kiosk_automation_settings ?? null) ? $kiosk_automation_settings : [];
 $kioskInclusionAutofillMode = (string) ($kioskAutomationSettings['inclusion_mode'] ?? 'off');
@@ -816,6 +817,7 @@ $stockQtyLabel = static function (float $qty): string {
 (() => {
     const KIOSK_SCROLL_TOP_AFTER_SAVE_KEY = 'kioskScrollTopAfterSave';
     const kioskReferenceCode = <?= json_embed($referencePreview) ?>;
+    const trackMachineMovementEnabled = <?= $trackMachineMovementEnabled ? 'true' : 'false' ?>;
     let kioskEnableBluetoothPrint = <?= $enableBluetoothPrint ? 'true' : 'false' ?>;
     try {
         if (window.sessionStorage.getItem(KIOSK_SCROLL_TOP_AFTER_SAVE_KEY) === '1') {
@@ -2178,7 +2180,10 @@ $stockQtyLabel = static function (float $qty): string {
         const enc = new TextEncoder();
         const chunks = [];
         const push = (...bytes) => chunks.push(Uint8Array.from(bytes));
-        const pushText = (text) => chunks.push(enc.encode(String(text || '')));
+        const printableAscii = (value) => String(value || '')
+            .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
+            .replace(/[ \t]{2,}/g, ' ');
+        const pushText = (text) => chunks.push(enc.encode(printableAscii(text)));
         const line = '--------------------------------\n';
         const centerText = (text = '') => {
             push(0x1b, 0x61, 0x01);
@@ -2186,6 +2191,7 @@ $stockQtyLabel = static function (float $qty): string {
             push(0x1b, 0x61, 0x00);
         };
         push(0x1b, 0x40);
+        push(0x1b, 0x74, 0x00);
         centerText('LAUNDRY RECEIPT');
         pushText(line);
         centerText('REFERENCE NO.');
@@ -2229,6 +2235,19 @@ $stockQtyLabel = static function (float $qty): string {
         merged.set(shopCopy, customerCopy.length);
         return merged;
     };
+    const buildKioskEscposBytesBatch = (payloads) => {
+        const list = Array.isArray(payloads) ? payloads.filter(Boolean) : [];
+        if (!list.length) return new Uint8Array();
+        const sections = list.map((item) => buildKioskEscposBytes(item));
+        const totalLength = sections.reduce((acc, part) => acc + part.length, 0);
+        const merged = new Uint8Array(totalLength);
+        let offset = 0;
+        sections.forEach((part) => {
+            merged.set(part, offset);
+            offset += part.length;
+        });
+        return merged;
+    };
 
     /** When branch "Enable Bluetooth print" is on, send ESC/POS immediately (opens system Bluetooth flow). When off, skip printing. */
     const runKioskBluetoothPrintAfterSave = async (payload) => {
@@ -2238,7 +2257,10 @@ $stockQtyLabel = static function (float $qty): string {
         if (typeof window.mpgWriteEscposBluetooth !== 'function') {
             throw new Error('Bluetooth thermal printing is not available on this device/browser.');
         }
-        await window.mpgWriteEscposBluetooth(buildKioskEscposBytes(payload));
+        const receiptSections = Array.isArray(payload?.receiptSections) && payload.receiptSections.length
+            ? payload.receiptSections
+            : [payload];
+        await window.mpgWriteEscposBluetooth(buildKioskEscposBytesBatch(receiptSections));
         return { printed: true };
     };
 
@@ -2284,6 +2306,26 @@ $stockQtyLabel = static function (float $qty): string {
                 totalPrice: totals.totalPrice,
                 savedAt: String(data.saved_at || '').trim(),
             };
+            const splitRefs = Array.isArray(data.reference_codes)
+                ? data.reference_codes.map((v) => String(v || '').trim()).filter((v) => v !== '')
+                : [];
+            const splitReceiptRows = Array.isArray(data.split_receipt_rows)
+                ? data.split_receipt_rows
+                : [];
+            if (splitReceiptRows.length > 1) {
+                printPayload.receiptSections = splitReceiptRows.map((row) => ({
+                    ...printPayload,
+                    referenceCode: String(row?.reference_code || '').trim() || printPayload.referenceCode,
+                    orderType: String(row?.order_type_label || '').trim() || printPayload.orderType,
+                    totalPrice: Number(row?.total_amount || 0) || 0,
+                }));
+            } else if (splitRefs.length > 1) {
+                // Backward compatibility fallback if server response has refs only.
+                printPayload.receiptSections = splitRefs.map((refCode) => ({
+                    ...printPayload,
+                    referenceCode: refCode,
+                }));
+            }
             let printResult = { printed: false };
             try {
                 printResult = await runKioskBluetoothPrintAfterSave(printPayload);
@@ -2446,6 +2488,10 @@ $stockQtyLabel = static function (float $qty): string {
         if (foldService) {
             foldService.value = (selfMode ? (foldQty > 0) : (foldService.value === '1')) ? '1' : '0';
         }
+        const groupRefScenario = trackMachineMovementEnabled
+            && dropOffStacked
+            && loadsLabel > 1;
+        const refSummaryLabel = groupRefScenario ? 'Group Ref.' : 'Reference No.';
         summary.innerHTML = `
             <div class="kiosk-summary-receipt">
                 <div class="line"><span class="label">Order Type</span><span class="value">${esc((selfMode || dropOffStacked) ? (selfLines || 'N/A') : (selectedOrderLabel || 'No order type'))}</span></div>
@@ -2460,7 +2506,7 @@ $stockQtyLabel = static function (float $qty): string {
                 <div class="line"><span class="label">Add-ons Total</span><span class="value">₱${esc(addOnTotal.toFixed(2))}</span></div>
                 <div class="line"><span class="label">Total Price</span><span class="value">₱${esc(totalPrice.toFixed(2))}</span></div>
                 ${excessNotice && !selfMode ? `<div class="line"><span class="label">Notice</span><span class="value">${esc(excessNotice)}</span></div>` : '<div class="line"><span class="label">Notice</span><span class="value">N/A</span></div>'}
-                <div class="line"><span class="label">Reference No.</span><span class="value">${esc(kioskReferenceCode || '-')}</span></div>
+                <div class="line"><span class="label">${esc(refSummaryLabel)}</span><span class="value">${esc(kioskReferenceCode || '-')}</span></div>
                 <div class="line"><span class="label">Customer</span><span class="value">${esc(customerSummary)}</span></div>
                 <div class="line"><span class="label">Service Supplies</span><span class="value">${serviceSuppliesSummary}</span></div>
                 <div class="line"><span class="label">Add-ons</span><span class="value">${addOnSummary}</span></div>

@@ -24,8 +24,8 @@ final class LaundryController
     private static ?bool $hasLaundryOrdersDiscountAmount = null;
     private static ?bool $hasLaundryOrdersAmountTendered = null;
     private static ?bool $hasLaundryOrdersChangeAmount = null;
-    private const FREE_LIMIT_WASHERS = 3;
-    private const FREE_LIMIT_DRYERS = 3;
+    private const FREE_LIMIT_WASHERS = 1;
+    private const FREE_LIMIT_DRYERS = 1;
 
     private static function hasUsersDayRateColumn(PDO $pdo): bool
     {
@@ -78,6 +78,11 @@ final class LaundryController
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
         $laundryStatusTrackingEnabled = $this->isLaundryStatusTrackingEnabled($pdo, $tenantId);
+        $trackMachineMovementEnabled = $this->isTrackMachineMovementEnabled($pdo, $tenantId);
+        $defaultDryingMinutes = $this->getBranchDefaultDryingMinutes($pdo, $tenantId);
+        if ($laundryStatusTrackingEnabled && $trackMachineMovementEnabled) {
+            $this->processTrackMachineMovementTimers($pdo, $tenantId);
+        }
         $editableOrderDate = $this->isEditableOrderDateEnabled($pdo, $tenantId);
         $transactionsScope = strtolower(trim((string) $request->input('tx_scope', 'today')));
         if (! in_array($transactionsScope, ['today', 'all'], true)) {
@@ -291,6 +296,8 @@ final class LaundryController
             'reward_config' => $this->fetchRewardConfigForRedemption($pdo, $tenantId),
             'machine_assignment_enabled' => $this->isMachineAssignmentEnabled($pdo, $tenantId),
             'laundry_status_tracking_enabled' => $laundryStatusTrackingEnabled,
+            'track_machine_movement_enabled' => $trackMachineMovementEnabled,
+            'default_drying_minutes' => $defaultDryingMinutes,
             'editable_order_date' => $editableOrderDate,
             'transactions_scope' => $transactionsScope,
             'transactions_mode' => $transactionsMode,
@@ -386,6 +393,7 @@ final class LaundryController
             'is_clocked_in' => $clockOpenSt->fetch(PDO::FETCH_ASSOC) !== false,
             'machine_assignment_enabled' => $this->isMachineAssignmentEnabled($pdo, $tenantId),
             'laundry_status_tracking_enabled' => $this->isLaundryStatusTrackingEnabled($pdo, $tenantId),
+            'track_machine_movement_enabled' => $this->isTrackMachineMovementEnabled($pdo, $tenantId),
             'enable_bluetooth_print' => $this->isBranchBluetoothPrintEnabled($pdo, $tenantId),
             'next_transaction_id' => $nextOrderId,
             'reference_preview' => $referencePreview,
@@ -417,6 +425,13 @@ final class LaundryController
             if ($updateWorkflow) {
                 $enabled = $request->boolean('laundry_status_tracking_enabled');
                 $this->persistLaundryStatusTrackingConfig($pdo, $tenantId, $enabled);
+                $trackMachineMovement = $request->boolean('track_machine_movement');
+                $defaultDryingMinutesInput = trim((string) $request->input('default_drying_minutes', ''));
+                $defaultDryingMinutes = $defaultDryingMinutesInput === ''
+                    ? null
+                    : max(1, (int) $defaultDryingMinutesInput);
+                $this->persistTrackMachineMovementConfig($pdo, $tenantId, $trackMachineMovement);
+                $this->persistBranchDefaultDryingMinutes($pdo, $tenantId, $defaultDryingMinutes);
             }
             if ($updateOrderDateEdit) {
                 $enabled = $request->boolean('editable_order_date');
@@ -504,6 +519,7 @@ final class LaundryController
         // IMPORTANT: Always use branch config as source of truth.
         // Do not override status workflow mode from request input.
         $trackLaundryStatus = $this->isLaundryStatusTrackingEnabled($pdo, $tenantId);
+        $trackMachineMovementEnabled = $this->isTrackMachineMovementEnabled($pdo, $tenantId);
         $rewardConfig = null;
         if ($serviceMode === 'reward') {
             if ($customerId < 1) {
@@ -775,6 +791,7 @@ final class LaundryController
 
             return redirect(route($redirectRoute));
         }
+        $hasGroupReferenceCode = $this->ensureLaundryOrdersGroupReferenceCode($pdo);
         $referenceCode = $this->resolveUniqueOrderReference($pdo, $tenantId, trim((string) $request->input('reference_code', '')));
         $needsWasher = false;
         $needsDryer = false;
@@ -1227,6 +1244,229 @@ final class LaundryController
 
         $savedOrderId = 0;
         $savedReferenceCode = $referenceCode;
+        $createdOrderCount = 0;
+        $incDetDb = $incDetItem !== null ? (int) $incDetItem['id'] : null;
+        $incFabDb = $incFabItem !== null ? (int) $incFabItem['id'] : null;
+        $incBleachDb = $incBleachItem !== null ? (int) $incBleachItem['id'] : null;
+
+        $lineSourceForSplit = $orderMode === 'self_service'
+            ? $selfServiceLines
+            : (($orderMode === 'drop_off' && $dropOffLines !== []) ? $dropOffLines : []);
+        if ($lineSourceForSplit === [] && $orderMode === 'drop_off' && $numberOfLoads > 1) {
+            $lineSourceForSplit[] = [
+                'code' => $orderTypeCode,
+                'label' => trim((string) ($otDef['label'] ?? $orderTypeCode)),
+                'service_kind' => $serviceKind,
+                'quantity' => $numberOfLoads,
+                'price_per_load' => $pricePerLoad,
+            ];
+        }
+        $splitEligibleKinds = ['full_service', 'wash_only', 'rinse_only', 'dry_only', 'other'];
+        $splitLines = [];
+        $splitEligibleLoadCount = 0;
+        foreach ($lineSourceForSplit as $line) {
+            $lineKind = strtolower(trim((string) ($line['service_kind'] ?? '')));
+            $lineQty = max(0, (int) ($line['quantity'] ?? 0));
+            if ($lineQty < 1) {
+                continue;
+            }
+            if (! in_array($lineKind, $splitEligibleKinds, true)) {
+                continue;
+            }
+            $splitLines[] = $line;
+            $splitEligibleLoadCount += $lineQty;
+        }
+        if ($orderMode === 'drop_off'
+            && $numberOfLoads > 1
+            && in_array($serviceKind, $splitEligibleKinds, true)
+            && count($lineSourceForSplit) <= 1
+            && $splitEligibleLoadCount < $numberOfLoads) {
+            $splitLines = [[
+                'code' => $orderTypeCode,
+                'label' => trim((string) ($otDef['label'] ?? $orderTypeCode)),
+                'service_kind' => $serviceKind,
+                'quantity' => $numberOfLoads,
+                'price_per_load' => $pricePerLoad,
+            ]];
+            $splitEligibleLoadCount = $numberOfLoads;
+        }
+        $splitCreationEnabled = $trackMachineMovementEnabled
+            && $splitLines !== []
+            && $splitEligibleLoadCount > 1;
+
+        if ($splitCreationEnabled) {
+            $hasChargedAddOns = false;
+            foreach ($addOns as $entry) {
+                $entryName = strtolower(trim((string) ($entry[0] ?? '')));
+                $entryQty = max(0.0, (float) ($entry[1] ?? 0));
+                $entryUnit = max(0.0, (float) ($entry[2] ?? 0));
+                if ($entryName === 'fold service' && $entryUnit <= 0.000001) {
+                    continue;
+                }
+                if (($entryQty * $entryUnit) > 0.000001) {
+                    $hasChargedAddOns = true;
+                    break;
+                }
+            }
+            $splitBlockReasons = [];
+            if ($isFree) {
+                $splitBlockReasons[] = 'free mode';
+            }
+            if ($isReward) {
+                $splitBlockReasons[] = 'reward mode';
+            }
+            if ($discountPercentage > 0.000001) {
+                $splitBlockReasons[] = 'discount';
+            }
+            if ($serviceWeight !== null) {
+                $splitBlockReasons[] = 'service weight input';
+            }
+            if ($actualWeightKg > 0.000001) {
+                $splitBlockReasons[] = 'actual weight input';
+            }
+            if ($hasChargedAddOns) {
+                $splitBlockReasons[] = 'charged add-ons';
+            }
+            if ($splitBlockReasons !== []) {
+                $reasonText = implode(', ', $splitBlockReasons);
+                $splitBlockMessage = 'Multi-load split transaction is blocked by: '.$reasonText.'. Remove these options, then try again.';
+                if ($request->wantsJson()) {
+                    return json_response([
+                        'success' => false,
+                        'message' => $splitBlockMessage,
+                    ], 422);
+                }
+                session_flash('errors', [$splitBlockMessage]);
+                return redirect(route($redirectRoute));
+            }
+
+            $trackKinds = ['full_service', 'wash_only', 'rinse_only', 'dry_only', 'other'];
+            $groupReferenceCode = $hasGroupReferenceCode ? $referenceCode : null;
+            $pdo->beginTransaction();
+            try {
+                $orderInsertSql = 'INSERT INTO laundry_orders
+                     (tenant_id, created_by_user_id, reference_code, '.($hasGroupReferenceCode ? 'group_reference_code, ' : '').'machine_id, washer_machine_id, dryer_machine_id, customer_id, include_fold_service, inclusion_detergent_item_id, inclusion_fabcon_item_id, inclusion_bleach_item_id, order_type, machine_type, wash_qty, dry_minutes, service_weight, actual_weight_kg, excess_weight_kg, excess_weight_fee_amount, subtotal, add_on_total, total_amount, payment_method, payment_status, split_cash_amount, split_online_amount, split_online_method, is_free, is_reward, reward_config_id, status, created_at, updated_at)
+                     VALUES (?, ?, ?, '.($hasGroupReferenceCode ? '?, ' : '').'NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, "manual", ?, ?, NULL, NULL, 0, 0, ?, 0, ?, "pending", "unpaid", 0, 0, NULL, 0, 0, NULL, ?, NOW(), NOW())';
+                $orderInsert = $pdo->prepare($orderInsertSql);
+                $lineInsert = $pdo->prepare(
+                    'INSERT INTO laundry_order_lines (tenant_id, order_id, order_type_code, order_type_label, service_kind, quantity, unit_price, line_total, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+                );
+
+                $createdRefs = [];
+                $receiptRows = [];
+                foreach ($splitLines as $line) {
+                    $lineKind = (string) ($line['service_kind'] ?? 'full_service');
+                    $lineQty = max(0, (int) ($line['quantity'] ?? 0));
+                    $lineCode = (string) ($line['code'] ?? $orderTypeCode);
+                    $lineLabel = (string) ($line['label'] ?? $lineCode);
+                    $linePrice = max(0.0, (float) ($line['price_per_load'] ?? 0));
+                    if ($lineQty < 1) {
+                        continue;
+                    }
+                    for ($i = 0; $i < $lineQty; $i++) {
+                        $needsTracking = in_array($lineKind, $trackKinds, true);
+                        $washLoadQty = in_array($lineKind, ['dry_only', 'dry_cleaning', 'fold_only'], true) ? 0 : 1;
+                        $dryLoadQty = in_array($lineKind, ['wash_only', 'rinse_only', 'dry_cleaning', 'fold_only'], true) ? 0 : 1;
+                        $initialStatusForLoad = $needsTracking ? 'pending' : 'open_ticket';
+                        $orderInsert->execute([
+                            $tenantId,
+                            $userId > 0 ? $userId : null,
+                            $referenceCode,
+                            ...($hasGroupReferenceCode ? [$groupReferenceCode] : []),
+                            $customerId > 0 ? $customerId : null,
+                            $incDetDb,
+                            $incFabDb,
+                            $incBleachDb,
+                            $lineCode,
+                            $washLoadQty,
+                            $dryLoadQty,
+                            $linePrice,
+                            $linePrice,
+                            $initialStatusForLoad,
+                        ]);
+                        $newOrderId = (int) $pdo->lastInsertId();
+                        if ($newOrderId < 1) {
+                            throw new \RuntimeException('Unable to create split transaction.');
+                        }
+                        $finalRef = $this->resolveUniqueOrderReference($pdo, $tenantId, $this->generateOrderReferenceCandidate($newOrderId));
+                        $pdo->prepare(
+                            'UPDATE laundry_orders
+                             SET reference_code = ?, updated_at = NOW()
+                             WHERE tenant_id = ? AND id = ?'
+                        )->execute([$finalRef, $tenantId, $newOrderId]);
+                        $lineInsert->execute([
+                            $tenantId,
+                            $newOrderId,
+                            $lineCode,
+                            $lineLabel,
+                            $lineKind,
+                            1,
+                            $linePrice,
+                            $linePrice,
+                        ]);
+                        $createdOrderCount++;
+                        $savedOrderId = $newOrderId;
+                        $savedReferenceCode = $finalRef;
+                        $createdRefs[] = $finalRef;
+                        $receiptRows[] = [
+                            'reference_code' => $finalRef,
+                            'order_type_label' => $lineLabel,
+                            'total_amount' => $linePrice,
+                        ];
+                    }
+                }
+
+                if ($createdOrderCount < 1) {
+                    throw new \RuntimeException('No split transactions were created.');
+                }
+                if ($deductionByItemId !== []) {
+                    $this->deductInventoryByItemId($pdo, $tenantId, $deductionByItemId);
+                }
+
+                $this->persistBranchBluetoothPrintConfig($pdo, $tenantId, $enableBluetoothPrint);
+                $pdo->commit();
+                $groupNote = ($hasGroupReferenceCode && $groupReferenceCode !== null)
+                    ? (' Group Ref: '.$groupReferenceCode.'.')
+                    : '';
+                $successMessage = 'Created '.$createdOrderCount.' separate transactions for machine monitoring: '.implode(', ', $createdRefs).'.'.$groupNote;
+                if ($request->wantsJson()) {
+                    return json_response([
+                        'success' => true,
+                        'message' => $successMessage,
+                        'reference_code' => $savedReferenceCode,
+                        'reference_codes' => $createdRefs,
+                        'split_receipt_rows' => $receiptRows,
+                        'group_reference_code' => $groupReferenceCode,
+                        'split_count' => $createdOrderCount,
+                        'order_id' => $savedOrderId,
+                        'order_type_label' => trim((string) ($otDef['label'] ?? $orderTypeCode)),
+                        'service_mode_label' => $isReward ? ($totalAmountForPayment > 1e-9 ? 'Rewards with Payment' : 'Reward') : ($isFree ? 'Free' : 'Regular'),
+                        'saved_at' => date('Y-m-d H:i:s'),
+                    ]);
+                }
+                session_flash('success', $successMessage);
+                return redirect(route($redirectRoute));
+            } catch (\RuntimeException $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                if ($request->wantsJson()) {
+                    return json_response(['success' => false, 'message' => $e->getMessage()], 422);
+                }
+                session_flash('errors', [$e->getMessage()]);
+                return redirect(route($redirectRoute));
+            } catch (\Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                if ($request->wantsJson()) {
+                    return json_response(['success' => false, 'message' => $e->getMessage()], 500);
+                }
+                throw $e;
+            }
+        }
+
         $pdo->beginTransaction();
         try {
             $invShort = $this->assertSufficientInventoryForSale($pdo, $tenantId, $deductionByItemId);
@@ -1236,10 +1476,6 @@ final class LaundryController
 
                 return redirect(route($redirectRoute));
             }
-
-            $incDetDb = $incDetItem !== null ? (int) $incDetItem['id'] : null;
-            $incFabDb = $incFabItem !== null ? (int) $incFabItem['id'] : null;
-            $incBleachDb = $incBleachItem !== null ? (int) $incBleachItem['id'] : null;
 
             $pdo->prepare(
                 'INSERT INTO laundry_orders
@@ -1800,7 +2036,7 @@ final class LaundryController
             $countSt->execute([$tenantId, $machineKind]);
             $count = (int) $countSt->fetchColumn();
             if ($count >= $limit) {
-                session_flash('errors', ['Free Mode limit reached: only 3 washers and 3 dryers are allowed.']);
+                session_flash('errors', ['Free Mode limit reached: only 1 washer and 1 dryer are allowed.']);
                 return redirect(route('tenant.machines.index'));
             }
         }
@@ -2440,7 +2676,7 @@ final class LaundryController
         $pdo->beginTransaction();
         try {
             $st = $pdo->prepare(
-                'SELECT id, machine_id, washer_machine_id, dryer_machine_id, machine_type, order_type, wash_qty, status, payment_method, payment_status, is_free, is_reward
+                'SELECT id, machine_id, washer_machine_id, dryer_machine_id, machine_type, order_type, wash_qty, status, payment_method, payment_status, is_free, is_reward, track_machine_stage, drying_end_at
                  FROM laundry_orders
                  WHERE tenant_id = ? AND id = ?
                  LIMIT 1
@@ -2467,12 +2703,143 @@ final class LaundryController
                 throw new \RuntimeException('Invalid status sequence. Move forward only.');
             }
 
+            if ($toStatus === 'open_ticket'
+                && $trackingEnabled
+                && $this->isTrackMachineMovementEnabled($pdo, $tenantId)
+                && in_array($current, ['washing_drying', 'running'], true)) {
+                $dryingEndAtRaw = trim((string) ($order['drying_end_at'] ?? ''));
+                if ($dryingEndAtRaw === '') {
+                    throw new \RuntimeException('Cannot move to Unpaid/Paid yet. Drying end time is not set.');
+                }
+            }
+
             if ($toStatus === 'washing_drying') {
+                $trackMachineMovementEnabled = $this->isTrackMachineMovementEnabled($pdo, $tenantId);
+                $defaultDryingMinutes = $this->getBranchDefaultDryingMinutes($pdo, $tenantId);
                 $machineAssignmentEnabled = $this->isMachineAssignmentEnabled($pdo, $tenantId);
                 $orderType = $this->fetchOrderTypeByCode($pdo, $tenantId, (string) ($order['order_type'] ?? ''));
                 $serviceKind = (string) ($orderType['service_kind'] ?? 'full_service');
                 if (! in_array($serviceKind, ['full_service', 'wash_only', 'dry_only', 'rinse_only', 'dry_cleaning', 'fold_only', 'other'], true)) {
                     $serviceKind = 'full_service';
+                }
+                if ($trackMachineMovementEnabled) {
+                    $washRinseMinutes = max(0, (int) $request->input('wash_rinse_minutes', 0));
+                    if (in_array($serviceKind, ['full_service', 'wash_only', 'rinse_only'], true)) {
+                        if ($washRinseMinutes < 1) {
+                            throw new \RuntimeException('Enter wash/rinse minutes greater than 0.');
+                        }
+                        $washer = $this->fetchFirstAvailableMachineByKind($pdo, $tenantId, 'washer');
+                        if (! is_array($washer) || (int) ($washer['id'] ?? 0) < 1) {
+                            throw new \RuntimeException('No available washing machine.');
+                        }
+                        $markWasherRunning = $pdo->prepare(
+                            'UPDATE laundry_machines
+                             SET status = "running", current_order_id = ?, updated_at = NOW()
+                             WHERE tenant_id = ? AND id = ? AND status = "available"'
+                        );
+                        $markWasherRunning->execute([$id, $tenantId, (int) $washer['id']]);
+                        if ($markWasherRunning->rowCount() < 1) {
+                            throw new \RuntimeException('No available washing machine.');
+                        }
+                        $usageQty = max(1, (int) ($order['wash_qty'] ?? 1));
+                        $this->deductMachineCredits($pdo, $tenantId, [$washer], $usageQty, $id);
+                        $this->applyLoadCardUsage(
+                            $pdo,
+                            $tenantId,
+                            (string) ($washer['machine_type'] ?? ''),
+                            $serviceKind,
+                            $usageQty
+                        );
+                        $pdo->prepare(
+                            'UPDATE laundry_orders
+                             SET status = "washing_drying",
+                                 track_machine_stage = "washing_rinsing",
+                                 wash_rinse_minutes = ?,
+                                 wash_rinse_machine_id = ?,
+                                 wash_rinse_started_at = NOW(),
+                                 wash_rinse_end_at = DATE_ADD(NOW(), INTERVAL ? MINUTE),
+                                 drying_minutes = ?,
+                                 drying_machine_id = NULL,
+                                 drying_started_at = NULL,
+                                 drying_end_at = NULL,
+                                 movement_completed_at = NULL,
+                                 movement_last_error = NULL,
+                                 machine_id = ?,
+                                 washer_machine_id = ?,
+                                 dryer_machine_id = NULL,
+                                 machine_type = "washer",
+                                 updated_at = NOW()
+                             WHERE tenant_id = ? AND id = ?'
+                        )->execute([
+                            $washRinseMinutes,
+                            (int) $washer['id'],
+                            $washRinseMinutes,
+                            $defaultDryingMinutes,
+                            (int) $washer['id'],
+                            (int) $washer['id'],
+                            $tenantId,
+                            $id,
+                        ]);
+                        $pdo->commit();
+                        if ($request->wantsJson()) {
+                            return json_response(['success' => true, 'message' => 'Washing-rinsing timer started.']);
+                        }
+                        session_flash('success', 'Washing-rinsing timer started.');
+                        return redirect(route('tenant.laundry-sales.index'));
+                    }
+                    if ($serviceKind === 'dry_only') {
+                        $dryer = $this->fetchFirstAvailableMachineByKind($pdo, $tenantId, 'dryer');
+                        if (! is_array($dryer) || (int) ($dryer['id'] ?? 0) < 1) {
+                            throw new \RuntimeException('Ready for drying but no machine available.');
+                        }
+                        $markDryerRunning = $pdo->prepare(
+                            'UPDATE laundry_machines
+                             SET status = "running", current_order_id = ?, updated_at = NOW()
+                             WHERE tenant_id = ? AND id = ? AND status = "available"'
+                        );
+                        $markDryerRunning->execute([$id, $tenantId, (int) $dryer['id']]);
+                        if ($markDryerRunning->rowCount() < 1) {
+                            throw new \RuntimeException('Ready for drying but no machine available.');
+                        }
+                        $usageQty = max(1, (int) ($order['wash_qty'] ?? 1));
+                        $this->deductMachineCredits($pdo, $tenantId, [$dryer], $usageQty, $id);
+                        $pdo->prepare(
+                            'UPDATE laundry_orders
+                             SET status = "washing_drying",
+                                 track_machine_stage = "drying",
+                                 wash_rinse_minutes = NULL,
+                                 wash_rinse_machine_id = NULL,
+                                 wash_rinse_started_at = NULL,
+                                 wash_rinse_end_at = NULL,
+                                 drying_minutes = ?,
+                                 drying_machine_id = ?,
+                                 drying_started_at = NOW(),
+                                 drying_end_at = IF(? IS NULL, NULL, DATE_ADD(NOW(), INTERVAL ? MINUTE)),
+                                 movement_completed_at = NULL,
+                                 movement_last_error = NULL,
+                                 machine_id = ?,
+                                 washer_machine_id = NULL,
+                                 dryer_machine_id = ?,
+                                 machine_type = "dryer",
+                                 updated_at = NOW()
+                             WHERE tenant_id = ? AND id = ?'
+                        )->execute([
+                            $defaultDryingMinutes,
+                            (int) $dryer['id'],
+                            $defaultDryingMinutes,
+                            $defaultDryingMinutes ?? 0,
+                            (int) $dryer['id'],
+                            (int) $dryer['id'],
+                            $tenantId,
+                            $id,
+                        ]);
+                        $pdo->commit();
+                        if ($request->wantsJson()) {
+                            return json_response(['success' => true, 'message' => 'Drying started.']);
+                        }
+                        session_flash('success', 'Drying started.');
+                        return redirect(route('tenant.laundry-sales.index'));
+                    }
                 }
                 $needsWasher = in_array($serviceKind, ['full_service', 'wash_only', 'rinse_only'], true);
                 $needsDryer = in_array($serviceKind, ['full_service', 'dry_only'], true);
@@ -2670,6 +3037,51 @@ final class LaundryController
         session_flash('success', 'Status updated.');
 
         return redirect(route('tenant.laundry-sales.index'));
+    }
+
+    public function movementTick(Request $request): Response
+    {
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+        if (! $this->isLaundryStatusTrackingEnabled($pdo, $tenantId) || ! $this->isTrackMachineMovementEnabled($pdo, $tenantId)) {
+            return json_response(['success' => true, 'orders' => []]);
+        }
+        $this->processTrackMachineMovementTimers($pdo, $tenantId);
+        try {
+            $st = $pdo->prepare(
+                'SELECT id, track_machine_stage, payment_status, wash_rinse_end_at, drying_end_at
+                 FROM laundry_orders
+                 WHERE tenant_id = ?
+                   AND status = "washing_drying"
+                   AND track_machine_stage IN ("washing_rinsing", "drying", "drying_waiting_machine", "drying_done")
+                   AND COALESCE(is_void, 0) = 0'
+            );
+            $st->execute([$tenantId]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $completedSt = $pdo->prepare(
+                'SELECT id, reference_code, payment_status, movement_completed_at
+                 FROM laundry_orders
+                 WHERE tenant_id = ?
+                   AND track_machine_stage = "completed"
+                   AND movement_completed_at IS NOT NULL
+                   AND movement_completed_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
+                 ORDER BY movement_completed_at DESC
+                 LIMIT 25'
+            );
+            $completedSt->execute([$tenantId]);
+            $completedRows = $completedSt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            return json_response([
+                'success' => true,
+                'orders' => $rows,
+                'completed_orders' => $completedRows,
+            ]);
+        } catch (\Throwable $e) {
+            return json_response([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     public function payTransaction(Request $request, int|string $id): Response
@@ -4332,6 +4744,171 @@ final class LaundryController
         return $this->getBranchBoolConfig($pdo, $tenantId, 'editable_order_date', false);
     }
 
+    private function isTrackMachineMovementEnabled(PDO $pdo, int $tenantId): bool
+    {
+        return $this->getBranchBoolConfig($pdo, $tenantId, 'track_machine_movement', false);
+    }
+
+    private function persistTrackMachineMovementConfig(PDO $pdo, int $tenantId, bool $enabled): void
+    {
+        if ($tenantId < 1 || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'track_machine_movement')) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, track_machine_movement, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE track_machine_movement = VALUES(track_machine_movement), updated_at = NOW()'
+        )->execute([$tenantId, $enabled ? 1 : 0]);
+    }
+
+    private function getBranchDefaultDryingMinutes(PDO $pdo, int $tenantId): ?int
+    {
+        $value = $this->getBranchScalarConfig($pdo, $tenantId, 'default_drying_minutes', null);
+        if ($value === null || $value === '') {
+            return null;
+        }
+        return max(1, (int) $value);
+    }
+
+    private function persistBranchDefaultDryingMinutes(PDO $pdo, int $tenantId, ?int $minutes): void
+    {
+        if ($tenantId < 1 || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'default_drying_minutes')) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, default_drying_minutes, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE default_drying_minutes = VALUES(default_drying_minutes), updated_at = NOW()'
+        )->execute([$tenantId, $minutes]);
+    }
+
+    private function processTrackMachineMovementTimers(PDO $pdo, int $tenantId): void
+    {
+        if ($tenantId < 1 || ! $this->isTrackMachineMovementEnabled($pdo, $tenantId)) {
+            return;
+        }
+        $defaultDryingMinutes = $this->getBranchDefaultDryingMinutes($pdo, $tenantId);
+        try {
+            $pdo->beginTransaction();
+            $washToDry = $pdo->prepare(
+                'SELECT id, payment_status, wash_qty
+                 FROM laundry_orders
+                 WHERE tenant_id = ?
+                   AND status = "washing_drying"
+                   AND (
+                       (track_machine_stage = "washing_rinsing" AND wash_rinse_end_at IS NOT NULL AND wash_rinse_end_at <= NOW())
+                       OR track_machine_stage = "drying_waiting_machine"
+                   )
+                   AND COALESCE(is_void, 0) = 0
+                 ORDER BY wash_rinse_end_at ASC
+                 FOR UPDATE'
+            );
+            $washToDry->execute([$tenantId]);
+            $rows = $washToDry->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            foreach ($rows as $row) {
+                $orderId = (int) ($row['id'] ?? 0);
+                if ($orderId < 1) {
+                    continue;
+                }
+                $pdo->prepare('UPDATE laundry_machines SET status = "available", current_order_id = NULL, updated_at = NOW() WHERE tenant_id = ? AND current_order_id = ? AND machine_kind = "washer"')
+                    ->execute([$tenantId, $orderId]);
+                $dryer = $this->fetchFirstAvailableMachineByKind($pdo, $tenantId, 'dryer');
+                if (! is_array($dryer) || (int) ($dryer['id'] ?? 0) < 1) {
+                    $pdo->prepare(
+                        'UPDATE laundry_orders
+                         SET track_machine_stage = "drying_waiting_machine",
+                             movement_last_error = "Ready for drying but no machine available",
+                             updated_at = NOW()
+                         WHERE tenant_id = ? AND id = ?'
+                    )->execute([$tenantId, $orderId]);
+                    continue;
+                }
+                $markDryerRunning = $pdo->prepare(
+                    'UPDATE laundry_machines
+                     SET status = "running", current_order_id = ?, updated_at = NOW()
+                     WHERE tenant_id = ? AND id = ? AND status = "available"'
+                );
+                $markDryerRunning->execute([$orderId, $tenantId, (int) $dryer['id']]);
+                if ($markDryerRunning->rowCount() < 1) {
+                    $pdo->prepare(
+                        'UPDATE laundry_orders
+                         SET track_machine_stage = "drying_waiting_machine",
+                             movement_last_error = "All machines are currently in use",
+                             updated_at = NOW()
+                         WHERE tenant_id = ? AND id = ?'
+                    )->execute([$tenantId, $orderId]);
+                    continue;
+                }
+                $usageQty = max(1, (int) ($row['wash_qty'] ?? 1));
+                $this->deductMachineCredits($pdo, $tenantId, [$dryer], $usageQty, $orderId);
+                $dryingMinutes = $defaultDryingMinutes;
+                $pdo->prepare(
+                    'UPDATE laundry_orders
+                     SET track_machine_stage = "drying",
+                         movement_last_error = NULL,
+                         drying_minutes = ?,
+                         drying_machine_id = ?,
+                         drying_started_at = NOW(),
+                         drying_end_at = IF(? IS NULL, NULL, DATE_ADD(NOW(), INTERVAL ? MINUTE)),
+                         machine_id = ?,
+                         dryer_machine_id = ?,
+                         machine_type = "dryer",
+                         updated_at = NOW()
+                     WHERE tenant_id = ? AND id = ?'
+                )->execute([
+                    $dryingMinutes,
+                    (int) $dryer['id'],
+                    $dryingMinutes,
+                    $dryingMinutes ?? 0,
+                    (int) $dryer['id'],
+                    (int) $dryer['id'],
+                    $tenantId,
+                    $orderId,
+                ]);
+            }
+
+            $dryDone = $pdo->prepare(
+                'SELECT id, payment_status
+                 FROM laundry_orders
+                 WHERE tenant_id = ?
+                   AND status = "washing_drying"
+                   AND track_machine_stage = "drying"
+                   AND drying_end_at IS NOT NULL
+                   AND drying_end_at <= NOW()
+                   AND COALESCE(is_void, 0) = 0
+                 ORDER BY drying_end_at ASC
+                 FOR UPDATE'
+            );
+            $dryDone->execute([$tenantId]);
+            $doneRows = $dryDone->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            foreach ($doneRows as $row) {
+                $orderId = (int) ($row['id'] ?? 0);
+                if ($orderId < 1) {
+                    continue;
+                }
+                $pdo->prepare('UPDATE laundry_machines SET status = "available", current_order_id = NULL, updated_at = NOW() WHERE tenant_id = ? AND current_order_id = ?')
+                    ->execute([$tenantId, $orderId]);
+                $pdo->prepare(
+                    'UPDATE laundry_orders
+                     SET status = "washing_drying",
+                         track_machine_stage = "drying_done",
+                         movement_completed_at = NOW(),
+                         movement_last_error = NULL,
+                         machine_id = NULL,
+                         washer_machine_id = NULL,
+                         dryer_machine_id = NULL,
+                         updated_at = NOW()
+                     WHERE tenant_id = ? AND id = ?'
+                )->execute([$tenantId, $orderId]);
+            }
+            $pdo->commit();
+        } catch (\Throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+        }
+    }
+
     private function isBranchTrackGasulUsageEnabled(PDO $pdo, int $tenantId): bool
     {
         return $this->getBranchBoolConfig($pdo, $tenantId, 'track_gasul_usage', false);
@@ -4357,6 +4934,32 @@ final class LaundryController
             $st->execute([$tenantId, $code]);
 
             return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function fetchFirstAvailableMachineByKind(PDO $pdo, int $tenantId, string $kind): ?array
+    {
+        try {
+            $st = $pdo->prepare(
+                'SELECT id, machine_label, machine_kind, machine_type, credit_required, credit_balance
+                 FROM laundry_machines
+                 WHERE tenant_id = ?
+                   AND machine_kind = ?
+                   AND status = "available"
+                 ORDER BY machine_label ASC, machine_code ASC, id ASC
+                 LIMIT 1'
+            );
+            $st->execute([$tenantId, $kind]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (! is_array($row)) {
+                return null;
+            }
+            if ((int) ($row['credit_required'] ?? 0) === 1 && (float) ($row['credit_balance'] ?? 0) <= 0) {
+                return null;
+            }
+            return $row;
         } catch (\Throwable) {
             return null;
         }
@@ -5788,6 +6391,18 @@ final class LaundryController
         return $code;
     }
 
+    private function generateOrderGroupReferenceCandidate(): string
+    {
+        $alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        $max = strlen($alphabet) - 1;
+        $code = 'grp'.date('ymdHis');
+        for ($i = 0; $i < 4; $i++) {
+            $code .= $alphabet[random_int(0, $max)];
+        }
+
+        return $code;
+    }
+
     private function resolveUniqueOrderReference(PDO $pdo, int $tenantId, string $preferred): string
     {
         if (! $this->hasLaundryOrdersReferenceCode($pdo)) {
@@ -5832,6 +6447,16 @@ final class LaundryController
         }
 
         return self::$hasLaundryOrdersReferenceCode;
+    }
+
+    private function hasLaundryOrdersGroupReferenceCode(PDO $pdo): bool
+    {
+        try {
+            $st = $pdo->query("SHOW COLUMNS FROM `laundry_orders` LIKE 'group_reference_code'");
+            return $st !== false && $st->fetch(PDO::FETCH_ASSOC) !== false;
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private function hasLaundryOrdersDiscountPercentage(PDO $pdo): bool
@@ -5913,5 +6538,17 @@ final class LaundryController
         }
 
         return true;
+    }
+
+    private function ensureLaundryOrdersGroupReferenceCode(PDO $pdo): bool
+    {
+        if ($this->hasLaundryOrdersGroupReferenceCode($pdo)) {
+            return true;
+        }
+        try {
+            $pdo->exec('ALTER TABLE `laundry_orders` ADD COLUMN `group_reference_code` VARCHAR(40) NULL DEFAULT NULL AFTER `reference_code`');
+        } catch (\Throwable) {
+        }
+        return $this->hasLaundryOrdersGroupReferenceCode($pdo);
     }
 }

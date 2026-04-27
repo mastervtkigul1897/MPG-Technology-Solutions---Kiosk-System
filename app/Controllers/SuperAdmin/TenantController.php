@@ -221,11 +221,12 @@ final class TenantController
                 4 => 'mb.name',
                 5 => 't.plan',
                 6 => 't.paid_amount',
-                7 => 't.license_starts_at',
-                8 => 't.license_expires_at',
-                9 => 'u.email',
-                10 => $hasUsersLastLoginColumn ? 'u.last_login_at' : 'u.created_at',
-                11 => 't.is_active',
+                7 => 't.created_at',
+                8 => 't.license_starts_at',
+                9 => 't.license_expires_at',
+                10 => 'u.email',
+                11 => $hasUsersLastLoginColumn ? 'u.last_login_at' : 'u.created_at',
+                12 => 't.is_active',
             ];
             $orderBy = $orderColumnMap[$orderIdx] ?? 't.id';
 
@@ -250,10 +251,14 @@ final class TenantController
                 $patchUrl = url('/super-admin/tenants/'.$id);
                 $deleteUrl = url('/super-admin/tenants/'.$id);
 
-                $startsRaw = $t['license_starts_at'] ?? null;
+                $createdRaw = $t['created_at'] ?? null;
+                $subscriptionStartsRaw = $t['license_starts_at'] ?? null;
                 $expiresRaw = $t['license_expires_at'] ?? null;
-                $startsDisplay = $startsRaw
-                    ? e(date('M j, Y', strtotime((string) $startsRaw)))
+                $createdDisplay = $createdRaw
+                    ? e(date('M j, Y', strtotime((string) $createdRaw)))
+                    : '<span class="text-muted">—</span>';
+                $subscriptionStartsDisplay = $subscriptionStartsRaw
+                    ? e(date('M j, Y', strtotime((string) $subscriptionStartsRaw)))
                     : '<span class="text-muted">—</span>';
                 $expiresVal = $expiresRaw ? date('Y-m-d', strtotime((string) $expiresRaw)) : '';
                 $isExpired = false;
@@ -271,8 +276,8 @@ final class TenantController
                 $expiresField = '<span>'.$expiresDisplay.'</span>';
                 $planRaw = trim((string) ($t['plan'] ?? ''));
                 $planMonths = self::monthsFromPlanCode($planRaw);
-                if ($planMonths === null && $startsRaw && $expiresRaw) {
-                    $startTs = strtotime((string) $startsRaw);
+                if ($planMonths === null && $subscriptionStartsRaw && $expiresRaw) {
+                    $startTs = strtotime((string) $subscriptionStartsRaw);
                     $expTs = strtotime((string) $expiresRaw);
                     if ($startTs !== false && $expTs !== false && $expTs >= $startTs) {
                         $days = (int) floor(($expTs - $startTs) / 86400);
@@ -322,7 +327,7 @@ final class TenantController
                     .'data-tenant-plan-code="'.e($isFreePlan ? self::FREE_ACCESS_PLAN_CODE : $planRaw).'" '
                     .'data-tenant-expires="'.e($expiresVal).'" '
                     .'title="Edit store" aria-label="Edit store"><i class="fa-solid fa-pen-to-square"></i></button>';
-                $deleteForm = '<form method="POST" action="'.e($deleteUrl).'" class="d-inline js-delete-tenant-form" data-tenant-name="'.e((string) ($t['name'] ?? 'Store')).'">'
+                $deleteForm = '<form method="POST" action="'.e($deleteUrl).'" class="d-inline js-delete-tenant-form" data-tenant-name="'.e((string) ($t['name'] ?? 'Store')).'" onsubmit="return confirmTenantDelete(this, event);">'
                     .csrf_field()
                     .method_field('DELETE')
                     .'<input type="hidden" name="delete_confirmation" value="">'
@@ -360,7 +365,8 @@ final class TenantController
                     'branch_details' => $branchDetails,
                     'plan' => $planCell,
                     'paid_amount' => $paidCell,
-                    'starts' => $startsDisplay,
+                    'shop_created_date' => $createdDisplay,
+                    'subscription_starts' => $subscriptionStartsDisplay,
                     'expires' => $expiresField,
                     'owner_email' => $ownerCell,
                     'last_login' => $lastLoginCell,
@@ -571,6 +577,7 @@ final class TenantController
 
                 return redirect(url('/super-admin/tenants'));
             }
+            $startsAt = date('Y-m-d H:i:s');
             $effectiveExpires = $manualEndDateOverride
                 ? ($expires.' 23:59:59')
                 : $window['expires_at'];
@@ -578,18 +585,21 @@ final class TenantController
                 'UPDATE tenants
                  SET name = COALESCE(?, name),
                      plan = ?,
+                     license_starts_at = ?,
                      license_expires_at = ?,
                      updated_at = NOW()
                  WHERE id = ?'
             )->execute([
                 $name !== '' ? $name : null,
                 self::FREE_ACCESS_PLAN_CODE,
+                $startsAt,
                 $effectiveExpires,
                 $tid,
             ]);
             session_flash('status', 'Store details updated.');
         } elseif ($months !== null) {
             $window = self::computeSubscriptionWindow($months);
+            $startsAt = date('Y-m-d H:i:s');
             $effectiveExpires = $window['expires_at'];
             if ($manualEndDateOverride) {
                 $effectiveExpires = $expires.' 23:59:59';
@@ -597,6 +607,7 @@ final class TenantController
             $params = [
                 $name !== '' ? $name : null,
                 self::planCodeFromMonths($months),
+                $startsAt,
                 $effectiveExpires,
                 $tid,
             ];
@@ -604,6 +615,7 @@ final class TenantController
                 'UPDATE tenants
                  SET name = COALESCE(?, name),
                      plan = ?,
+                     license_starts_at = ?,
                      license_expires_at = ?,
                      updated_at = NOW()
                  WHERE id = ?'

@@ -61,6 +61,8 @@ final class Application
             }
         }
 
+        TrafficTracker::track($req);
+
         $router = new Router();
         $resp = $router->dispatch($req);
         if ($this->shouldConvertRedirectToJson($req, $resp)) {

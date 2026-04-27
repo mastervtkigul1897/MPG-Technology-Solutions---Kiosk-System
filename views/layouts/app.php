@@ -251,6 +251,8 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
             <?php endif; ?>
             <?php if (($u['role'] ?? null) === 'super_admin'): ?>
                 <a class="nav-link text-white <?= route_is('super-admin.tenants.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/tenants')) ?>"><i class="fa-solid fa-building"></i><span>Tenants</span></a>
+                <a class="nav-link text-white <?= route_is('super-admin.email-campaign.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('super-admin.email-campaign.index')) ?>"><i class="fa-solid fa-envelope"></i><span>Email Campaign</span></a>
+                <a class="nav-link text-white <?= route_is('super-admin.traffic-tracking.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('super-admin.traffic-tracking.index')) ?>"><i class="fa-solid fa-chart-column"></i><span>Traffic Tracking</span></a>
                 <a class="nav-link text-white <?= route_is('super-admin.backups.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/backups/runner')) ?>"><i class="fa-solid fa-database"></i><span>Backup Runner</span></a>
                 <a class="nav-link text-white <?= route_is('super-admin.settings.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/settings')) ?>"><i class="fa-solid fa-gear"></i><span>Settings</span></a>
             <?php else: ?>
@@ -295,7 +297,7 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                     <a class="nav-link text-white <?= route_is('tenant.staff.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/staff')) ?>"><i class="fa-solid fa-users"></i><span>Staff</span></a>
                     <a class="nav-link text-white <?= route_is('tenant.receipt-settings.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.receipt-settings.edit')) ?>"><i class="fa-solid fa-file-lines"></i><span>Receipt Config<?= $premiumNavBadge(true) ?></span></a>
                     <?php if ($currentBranchIsMain): ?>
-                        <a class="nav-link text-white <?= route_is('tenant.branches.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch"></i><span>Branches</span></a>
+                        <a class="nav-link text-white <?= route_is('tenant.branches.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch"></i><span>Branches<?= $premiumNavBadge(true) ?></span></a>
                     <?php endif; ?>
                 <?php endif; ?>
                 <?php endif; ?>
@@ -320,6 +322,8 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                 <?php endif; ?>
                 <?php if (($u['role'] ?? null) === 'super_admin'): ?>
                     <a class="nav-link text-white" href="<?= e(url('/super-admin/tenants')) ?>"><i class="fa-solid fa-building me-2"></i>Tenants</a>
+                    <a class="nav-link text-white" href="<?= e(route('super-admin.email-campaign.index')) ?>"><i class="fa-solid fa-envelope me-2"></i>Email Campaign</a>
+                    <a class="nav-link text-white" href="<?= e(route('super-admin.traffic-tracking.index')) ?>"><i class="fa-solid fa-chart-column me-2"></i>Traffic Tracking</a>
                     <a class="nav-link text-white" href="<?= e(url('/super-admin/backups/runner')) ?>"><i class="fa-solid fa-database me-2"></i>Backup Runner</a>
                     <a class="nav-link text-white" href="<?= e(url('/super-admin/settings')) ?>"><i class="fa-solid fa-gear me-2"></i>Settings</a>
                 <?php else: ?>
@@ -364,7 +368,7 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                         <a class="nav-link text-white" href="<?= e(url('/tenant/staff')) ?>"><i class="fa-solid fa-users me-2"></i>Staff</a>
                         <a class="nav-link text-white" href="<?= e(route('tenant.receipt-settings.edit')) ?>"><i class="fa-solid fa-file-lines me-2"></i>Receipt Config<?= $premiumNavBadge(true) ?></a>
                         <?php if ($currentBranchIsMain): ?>
-                            <a class="nav-link text-white" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch me-2"></i>Branches</a>
+                            <a class="nav-link text-white" href="<?= e(url('/tenant/branches')) ?>"><i class="fa-solid fa-code-branch me-2"></i>Branches<?= $premiumNavBadge(true) ?></a>
                         <?php endif; ?>
                     <?php endif; ?>
                     <?php endif; ?>
@@ -981,6 +985,77 @@ document.addEventListener('DOMContentLoaded', function () {
     }, true);
 })();
 </script>
+<?php if (($u['role'] ?? '') !== 'super_admin' && user_can_module('pos')): ?>
+<script>
+(() => {
+    const movementTickUrl = <?= json_encode(route('tenant.laundry-sales.movement-tick'), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>;
+    const voiceUrl = <?= json_encode(url('audio/job-order-done-ready.mp3'), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>;
+    if (!movementTickUrl) return;
+    if (window.location.pathname.startsWith('/tenant/laundry-sales')) return;
+    const seenKey = 'mpg_seen_completed_machine_jobs_v1';
+    let seen = {};
+    try {
+        seen = JSON.parse(localStorage.getItem(seenKey) || '{}') || {};
+    } catch {
+        seen = {};
+    }
+    const saveSeen = () => {
+        try { localStorage.setItem(seenKey, JSON.stringify(seen)); } catch {}
+    };
+    const playVoice = () => {
+        try {
+            const a = new Audio(voiceUrl);
+            a.preload = 'auto';
+            a.play().catch(() => {});
+        } catch {}
+    };
+    const notifyDone = (row) => {
+        const ref = String(row?.reference_code || row?.id || '').trim() || '—';
+        const key = `${String(row?.id || '')}:${String(row?.movement_completed_at || '')}`;
+        if (!key || seen[key]) return;
+        seen[key] = Date.now();
+        Object.keys(seen).forEach((k) => {
+            if ((Date.now() - (seen[k] || 0)) > (24 * 60 * 60 * 1000)) delete seen[k];
+        });
+        saveSeen();
+        playVoice();
+        if ('Notification' in window && Notification.permission === 'granted') {
+            try {
+                new Notification('Laundry Job Completed', {
+                    body: `Job Order ${ref} is done and ready.`,
+                    icon: <?= json_encode(url('images/branding/mpglms-logo.png'), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>,
+                });
+            } catch {}
+        } else if (typeof Swal !== 'undefined') {
+            Swal.fire({
+                icon: 'success',
+                title: `Job Order ${ref} is done and ready.`,
+                confirmButtonText: 'OK',
+                confirmButtonColor: '#198754',
+            });
+        }
+    };
+    if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
+    }
+    const poll = async () => {
+        try {
+            const res = await fetch(movementTickUrl, {
+                method: 'GET',
+                headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin',
+            });
+            if (!res.ok) return;
+            const data = await res.json().catch(() => ({}));
+            if (!data || data.success !== true || !Array.isArray(data.completed_orders)) return;
+            data.completed_orders.forEach((row) => notifyDone(row));
+        } catch {}
+    };
+    poll();
+    window.setInterval(poll, 5000);
+})();
+</script>
+<?php endif; ?>
 <div class="modal fade" id="topAttendancePhotoModal" tabindex="-1" aria-labelledby="topAttendancePhotoModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">

@@ -5,7 +5,7 @@
                 <i class="fa-solid fa-database me-1"></i>Run daily backup for all stores
             </a>
         </div>
-        <p class="small text-muted mb-3">Each store needs a <strong>store owner</strong> (<code>tenant_admin</code>). Stores are not deleted from the system—use <strong>active/inactive</strong> to control access. <strong>Subscription starts</strong> is set when the store is created (not editable here). <strong>Subscription ends</strong> is shown as read-only in its column; use <strong>Edit</strong> in <strong>Actions</strong> to change the end date, then <strong>Save</strong>. <strong>Slug</strong> is fixed after creation. <strong>Reset password</strong> sets a new password for the store owner email shown in the table.</p>
+        <p class="small text-muted mb-3">Each store needs a <strong>store owner</strong> (<code>tenant_admin</code>). Stores are not deleted from the system—use <strong>active/inactive</strong> to control access. <strong>Shop Created Date</strong> shows when the store was first registered. <strong>Subscription starts</strong> updates when a premium/free plan is activated or renewed. <strong>Subscription ends</strong> is shown as read-only in its column; use <strong>Edit</strong> in <strong>Actions</strong> to change the end date, then <strong>Save</strong>. <strong>Slug</strong> is fixed after creation. <strong>Reset password</strong> sets a new password for the store owner email shown in the table.</p>
         <form method="POST" action="<?= e(route('super-admin.tenants.store')) ?>" class="vstack gap-3">
             <?= csrf_field() ?>
             <div class="row g-3">
@@ -84,6 +84,7 @@
                     <th>Branch details</th>
                     <th>Plan</th>
                     <th>Paid amount</th>
+                    <th>Shop Created Date</th>
                     <th>Subscription starts</th>
                     <th>Subscription ends</th>
                     <th>Store owner email</th>
@@ -179,8 +180,32 @@
     const isMobile = window.matchMedia('(max-width: 767.98px)').matches;
     const isTablet = window.matchMedia('(max-width: 991.98px)').matches;
     const hiddenByViewport = isMobile
-        ? [1, 3, 4, 5, 6, 7, 9, 10]
-        : (isTablet ? [3, 4, 6, 7, 10] : []);
+        ? [1, 3, 4, 5, 6, 7, 8, 10, 11]
+        : (isTablet ? [3, 4, 6, 7, 8, 11] : []);
+
+    // Keep delete confirmation independent from DataTable init.
+    window.confirmTenantDelete = (form, ev) => {
+        if (!form) return false;
+        if (form.dataset.mpgConfirmBypass === '1') {
+            form.dataset.mpgConfirmBypass = '0';
+            return true;
+        }
+        if (ev && typeof ev.preventDefault === 'function') {
+            ev.preventDefault();
+        }
+        const tenantName = form.getAttribute('data-tenant-name') || 'STORE';
+        const requiredPhrase = `DELETE ${String(tenantName).trim().toUpperCase()}`;
+        const typed = window.prompt(`Type ${requiredPhrase} to permanently delete ${tenantName} and all associated data (including users).`);
+        if (String(typed || '').trim().toUpperCase() !== requiredPhrase) {
+            return false;
+        }
+        const confirmationInput = form.querySelector('input[name="delete_confirmation"]');
+        if (confirmationInput) confirmationInput.value = requiredPhrase;
+        form.dataset.mpgConfirmBypass = '1';
+        if (typeof form.requestSubmit === 'function') form.requestSubmit();
+        else form.submit();
+        return false;
+    };
 
     initServerDataTable('#tenantsTable', {
         printButton: true,
@@ -197,11 +222,12 @@
             { targets: 5, responsivePriority: 97 },
             { targets: 6, responsivePriority: 98 },
             { targets: 7, responsivePriority: 99 },
-            { targets: 8, responsivePriority: 4 },
-            { targets: 9, responsivePriority: 100 },
-            { targets: 10, responsivePriority: 6 },
-            { targets: 11, responsivePriority: 3 },
-            { targets: 12, orderable: false, searchable: false, responsivePriority: 5 },
+            { targets: 8, responsivePriority: 7 },
+            { targets: 9, responsivePriority: 4 },
+            { targets: 10, responsivePriority: 100 },
+            { targets: 11, responsivePriority: 6 },
+            { targets: 12, responsivePriority: 3 },
+            { targets: 13, orderable: false, searchable: false, responsivePriority: 5 },
             { targets: hiddenByViewport, visible: false },
         ],
         columns: [
@@ -212,7 +238,8 @@
             { data: 'branch_details' },
             { data: 'plan' },
             { data: 'paid_amount' },
-            { data: 'starts' },
+            { data: 'shop_created_date' },
+            { data: 'subscription_starts' },
             { data: 'expires' },
             { data: 'owner_email' },
             { data: 'last_login' },
@@ -281,54 +308,6 @@
         btn.setAttribute('data-bs-toggle', 'modal');
         btn.setAttribute('data-bs-target', '#editTenantModal');
         modal.show(btn);
-    });
-
-    document.addEventListener('submit', async (e) => {
-        const form = e.target.closest('.js-delete-tenant-form');
-        if (!form) return;
-        if (form.dataset.mpgConfirmBypass === '1') {
-            form.dataset.mpgConfirmBypass = '0';
-            return;
-        }
-        e.preventDefault();
-        const tenantName = form.getAttribute('data-tenant-name') || 'this store';
-        const requiredPhrase = `DELETE ${String(tenantName).trim().toUpperCase()}`;
-        const confirmationInput = form.querySelector('input[name="delete_confirmation"]');
-        if (typeof Swal === 'undefined') {
-            const typed = window.prompt(`Type ${requiredPhrase} to permanently delete ${tenantName} and all associated data (including users).`);
-            if (String(typed || '').trim().toUpperCase() === requiredPhrase) {
-                if (confirmationInput) confirmationInput.value = requiredPhrase;
-                form.dataset.mpgConfirmBypass = '1';
-                if (typeof form.requestSubmit === 'function') form.requestSubmit();
-                else form.submit();
-            }
-            return;
-        }
-        const res = await Swal.fire({
-            icon: 'warning',
-            title: 'Delete store?',
-            html: `You are about to permanently delete <strong>${tenantName}</strong>.<br>This removes all associated data, including users.`,
-            input: 'text',
-            inputLabel: `Type ${requiredPhrase} to confirm`,
-            inputPlaceholder: requiredPhrase,
-            showCancelButton: true,
-            confirmButtonText: 'Delete permanently',
-            cancelButtonText: 'Cancel',
-            confirmButtonColor: '#dc3545',
-            preConfirm: (value) => {
-                if (String(value || '').trim().toUpperCase() !== requiredPhrase) {
-                    Swal.showValidationMessage(`Type ${requiredPhrase} exactly to continue.`);
-                    return false;
-                }
-                return requiredPhrase;
-            },
-        });
-        if (res.isConfirmed) {
-            if (confirmationInput) confirmationInput.value = requiredPhrase;
-            form.dataset.mpgConfirmBypass = '1';
-            if (typeof form.requestSubmit === 'function') form.requestSubmit();
-            else form.submit();
-        }
     });
 
     const planSelect = document.getElementById('subscription_plan');

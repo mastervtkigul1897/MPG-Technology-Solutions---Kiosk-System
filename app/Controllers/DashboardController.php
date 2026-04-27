@@ -22,13 +22,117 @@ final class DashboardController
 
         if ($user['role'] === 'super_admin') {
             $pdo = App::db();
-            $tenants = (int) $pdo->query('SELECT COUNT(*) FROM tenants')->fetchColumn();
+            $hasBranchColumns = $this->tableHasColumns($pdo, 'tenants', ['is_main_branch']);
+            $hasPlanColumn = $this->tableHasColumns($pdo, 'tenants', ['plan']);
+            $hasLicenseStarts = $this->tableHasColumns($pdo, 'tenants', ['license_starts_at']);
+            $hasEmailVerifiedAt = $this->tableHasColumns($pdo, 'users', ['email_verified_at']);
+
+            $overallTotalShops = (int) $pdo->query('SELECT COUNT(*) FROM tenants')->fetchColumn();
+            $freeUsers = 0;
+            $premiumUsers = 0;
+            if ($hasPlanColumn) {
+                $stPlanCounts = $pdo->query(
+                    "SELECT
+                        SUM(CASE WHEN LOWER(TRIM(plan)) IN ('trial','free','free_trial','free_access') THEN 1 ELSE 0 END) AS free_count,
+                        SUM(CASE WHEN LOWER(TRIM(plan)) NOT IN ('trial','free','free_trial','free_access') THEN 1 ELSE 0 END) AS premium_count
+                     FROM tenants"
+                );
+                $planCounts = $stPlanCounts !== false ? ($stPlanCounts->fetch(PDO::FETCH_ASSOC) ?: []) : [];
+                $freeUsers = (int) ($planCounts['free_count'] ?? 0);
+                $premiumUsers = (int) ($planCounts['premium_count'] ?? 0);
+            }
+
+            $monthCounts = [
+                '1m' => 0,
+                '3m' => 0,
+                '6m' => 0,
+                '12m' => 0,
+            ];
+            if ($hasPlanColumn) {
+                $stMonthCounts = $pdo->query(
+                    "SELECT
+                        SUM(CASE WHEN LOWER(TRIM(plan)) = 'subscription_1m' THEN 1 ELSE 0 END) AS m1,
+                        SUM(CASE WHEN LOWER(TRIM(plan)) = 'subscription_3m' THEN 1 ELSE 0 END) AS m3,
+                        SUM(CASE WHEN LOWER(TRIM(plan)) = 'subscription_6m' THEN 1 ELSE 0 END) AS m6,
+                        SUM(CASE WHEN LOWER(TRIM(plan)) = 'subscription_12m' THEN 1 ELSE 0 END) AS m12
+                     FROM tenants"
+                );
+                $mc = $stMonthCounts !== false ? ($stMonthCounts->fetch(PDO::FETCH_ASSOC) ?: []) : [];
+                $monthCounts = [
+                    '1m' => (int) ($mc['m1'] ?? 0),
+                    '3m' => (int) ($mc['m3'] ?? 0),
+                    '6m' => (int) ($mc['m6'] ?? 0),
+                    '12m' => (int) ($mc['m12'] ?? 0),
+                ];
+            }
+
+            $totalMainBranches = 0;
+            $totalSubBranches = 0;
+            if ($hasBranchColumns) {
+                $stBranchCounts = $pdo->query(
+                    "SELECT
+                        SUM(CASE WHEN COALESCE(is_main_branch, 0) = 1 THEN 1 ELSE 0 END) AS main_branches,
+                        SUM(CASE WHEN COALESCE(is_main_branch, 0) = 0 THEN 1 ELSE 0 END) AS sub_branches
+                     FROM tenants"
+                );
+                $bc = $stBranchCounts !== false ? ($stBranchCounts->fetch(PDO::FETCH_ASSOC) ?: []) : [];
+                $totalMainBranches = (int) ($bc['main_branches'] ?? 0);
+                $totalSubBranches = (int) ($bc['sub_branches'] ?? 0);
+            } else {
+                // Fallback for older schemas without explicit branch columns.
+                $totalMainBranches = $overallTotalShops;
+                $totalSubBranches = 0;
+            }
+
+            $totalVerifiedShops = 0;
+            if ($hasEmailVerifiedAt) {
+                $stVerified = $pdo->query(
+                    "SELECT COUNT(DISTINCT tenant_id)
+                     FROM users
+                     WHERE role = 'tenant_admin'
+                       AND tenant_id IS NOT NULL
+                       AND email_verified_at IS NOT NULL"
+                );
+                $totalVerifiedShops = $stVerified !== false ? (int) $stVerified->fetchColumn() : 0;
+            }
+
+            $userColumns = [];
+            $userRows = [];
+            $showColumnsSt = $pdo->query('SHOW COLUMNS FROM users');
+            $allUserColumns = [];
+            if ($showColumnsSt !== false) {
+                foreach ($showColumnsSt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $col) {
+                    $field = (string) ($col['Field'] ?? '');
+                    if ($field === '' || strtolower($field) === 'password') {
+                        continue;
+                    }
+                    $allUserColumns[] = $field;
+                }
+            }
+            if ($allUserColumns !== []) {
+                $userColumns = $allUserColumns;
+                $selectCols = implode(', ', array_map(static fn (string $c): string => "`{$c}`", $allUserColumns));
+                $userRowsSt = $pdo->query("SELECT {$selectCols} FROM users ORDER BY id DESC LIMIT 500");
+                $userRows = $userRowsSt !== false ? ($userRowsSt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+            }
 
             return view_page('Dashboard', 'dashboard', [
                 'is_super' => true,
                 'stats' => [
-                    'tenants_count' => $tenants,
+                    'overall_total_shops' => $overallTotalShops,
+                    'free_users' => $freeUsers,
+                    'premium_users' => $premiumUsers,
+                    'one_month_users' => (int) ($monthCounts['1m'] ?? 0),
+                    'three_month_users' => (int) ($monthCounts['3m'] ?? 0),
+                    'six_month_users' => (int) ($monthCounts['6m'] ?? 0),
+                    'twelve_month_users' => (int) ($monthCounts['12m'] ?? 0),
+                    'total_main_branches' => $totalMainBranches,
+                    'total_sub_branches' => $totalSubBranches,
+                    'total_verified_shops' => $totalVerifiedShops,
+                    'has_license_starts_at' => $hasLicenseStarts,
                 ],
+                'users_columns' => $userColumns,
+                'users_rows' => $userRows,
             ]);
         }
 
@@ -1127,6 +1231,28 @@ final class DashboardController
                 $pdo->exec("ALTER TABLE `laundry_time_logs` ADD COLUMN `clock_out_photo_path` VARCHAR(255) NULL DEFAULT NULL AFTER `clock_out_at`");
             } catch (\Throwable) {
             }
+        }
+    }
+
+    /**
+     * @param list<string> $columns
+     */
+    private function tableHasColumns(PDO $pdo, string $table, array $columns): bool
+    {
+        if ($table === '' || $columns === []) {
+            return false;
+        }
+        try {
+            foreach ($columns as $column) {
+                $st = $pdo->prepare("SHOW COLUMNS FROM `{$table}` LIKE ?");
+                $st->execute([$column]);
+                if (! $st->fetch(PDO::FETCH_ASSOC)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (\Throwable) {
+            return false;
         }
     }
 
