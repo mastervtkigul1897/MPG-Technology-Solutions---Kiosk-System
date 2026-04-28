@@ -170,6 +170,90 @@ final class TenantController
         }
     }
 
+    private static function hasLaundryBranchConfigColumn(PDO $pdo, string $column): bool
+    {
+        try {
+            $st = $pdo->query("SHOW COLUMNS FROM laundry_branch_configs LIKE '".$column."'");
+            return $st !== false && $st->fetch(PDO::FETCH_ASSOC) !== false;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private static function seedLaundryBranchConfigDefaults(PDO $pdo, int $tenantId): void
+    {
+        if ($tenantId < 1) {
+            return;
+        }
+        try {
+            $tableChk = $pdo->query("SHOW TABLES LIKE 'laundry_branch_configs'");
+            if ($tableChk === false || $tableChk->fetch(PDO::FETCH_ASSOC) === false) {
+                return;
+            }
+
+            $insertColumns = ['tenant_id'];
+            $insertValues = [$tenantId];
+            $updateParts = [];
+
+            if (self::hasLaundryBranchConfigColumn($pdo, 'laundry_status_tracking_enabled')) {
+                $insertColumns[] = 'laundry_status_tracking_enabled';
+                $insertValues[] = 1;
+                $updateParts[] = 'laundry_status_tracking_enabled = VALUES(laundry_status_tracking_enabled)';
+            }
+            if (self::hasLaundryBranchConfigColumn($pdo, 'track_machine_movement')) {
+                $insertColumns[] = 'track_machine_movement';
+                $insertValues[] = 1;
+                $updateParts[] = 'track_machine_movement = VALUES(track_machine_movement)';
+            }
+            if (self::hasLaundryBranchConfigColumn($pdo, 'machine_assignment_enabled')) {
+                // Automatic ON by default, so manual stays OFF.
+                $insertColumns[] = 'machine_assignment_enabled';
+                $insertValues[] = 0;
+                $updateParts[] = 'machine_assignment_enabled = VALUES(machine_assignment_enabled)';
+            }
+            if (self::hasLaundryBranchConfigColumn($pdo, 'default_drying_minutes')) {
+                $insertColumns[] = 'default_drying_minutes';
+                $insertValues[] = 30;
+                $updateParts[] = 'default_drying_minutes = VALUES(default_drying_minutes)';
+            }
+            if (self::hasLaundryBranchConfigColumn($pdo, 'kiosk_inclusion_autofill_mode')) {
+                $insertColumns[] = 'kiosk_inclusion_autofill_mode';
+                $insertValues[] = 'lock';
+                $updateParts[] = 'kiosk_inclusion_autofill_mode = VALUES(kiosk_inclusion_autofill_mode)';
+            }
+            if (self::hasLaundryBranchConfigColumn($pdo, 'kiosk_fold_autofill_mode')) {
+                $insertColumns[] = 'kiosk_fold_autofill_mode';
+                $insertValues[] = 'free_fold';
+                $updateParts[] = 'kiosk_fold_autofill_mode = VALUES(kiosk_fold_autofill_mode)';
+            }
+            if (self::hasLaundryBranchConfigColumn($pdo, 'kiosk_autofill_order_type_codes')) {
+                $insertColumns[] = 'kiosk_autofill_order_type_codes';
+                $insertValues[] = 'drop_off';
+                $updateParts[] = 'kiosk_autofill_order_type_codes = VALUES(kiosk_autofill_order_type_codes)';
+            }
+            if (self::hasLaundryBranchConfigColumn($pdo, 'enable_bluetooth_print')) {
+                $insertColumns[] = 'enable_bluetooth_print';
+                $insertValues[] = 0;
+                $updateParts[] = 'enable_bluetooth_print = VALUES(enable_bluetooth_print)';
+            }
+            if ($updateParts === []) {
+                return;
+            }
+
+            $sql = sprintf(
+                'INSERT INTO laundry_branch_configs (%s, created_at, updated_at)
+                 VALUES (%s, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE %s, updated_at = NOW()',
+                implode(', ', $insertColumns),
+                implode(', ', array_fill(0, count($insertColumns), '?')),
+                implode(', ', $updateParts)
+            );
+            $pdo->prepare($sql)->execute($insertValues);
+        } catch (\Throwable) {
+            // Optional setup only; should not block tenant creation.
+        }
+    }
+
     private static function hasUsersLastLoginColumn(PDO $pdo): bool
     {
         if (self::$usersLastLoginColumnExists === true) {
@@ -517,6 +601,7 @@ final class TenantController
             $pdo->prepare('UPDATE tenants SET parent_tenant_id = ?, branch_group_id = ? WHERE id = ?')
                 ->execute([$tenantId, $tenantId, $tenantId]);
             LaundrySchema::ensureDefaultInventoryForTenant($pdo, $tenantId);
+            self::seedLaundryBranchConfigDefaults($pdo, $tenantId);
             if (Auth::hasModulePermissionsColumn()) {
                 $pdo->prepare(
                     'INSERT INTO users (name, email, password, role, tenant_id, module_permissions, email_verified_at, created_at, updated_at)

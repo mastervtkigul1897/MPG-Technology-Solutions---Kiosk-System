@@ -1,7 +1,7 @@
 <p class="small text-muted mb-3 laundry-sales-hint" id="laundrySalesHintKanban">
     <strong>Kanban:</strong> drag cards in sequence only: <strong>Pending</strong> → <strong>Washing - Drying</strong> → <strong>Unpaid</strong> → <strong>Paid</strong>.
     Payment modal appears when moving from <strong>Unpaid</strong> to <strong>Paid</strong> for regular transactions; if you cancel, the card stays in Unpaid.
-    Backward moves and skipped steps are blocked.
+    You can move back to <strong>Pending</strong> only while the load is still in Washing/Drying (before Unpaid/Paid).
     Use <strong>View details</strong> or double-click a card to see inclusions, add-ons, and payment info.
 </p>
 <p class="small text-muted mb-3 laundry-sales-hint d-none" id="laundrySalesHintTable">
@@ -148,11 +148,16 @@ foreach (($customers ?? []) as $_c) {
         'rewards_balance' => (float) ($_c['rewards_balance'] ?? 0),
     ];
 }
-$machinesWasherSales = array_values(array_filter($machines ?? [], static fn ($m) => ($m['machine_kind'] ?? 'washer') === 'washer'));
-$machinesDryerSales = array_values(array_filter($machines ?? [], static fn ($m) => ($m['machine_kind'] ?? 'washer') === 'dryer'));
+$machinesWasherSales = array_values(array_filter($machines ?? [], static function ($m): bool {
+    $kind = strtolower(trim((string) ($m['machine_kind'] ?? '')));
+    return $kind === 'washer';
+}));
+$machinesDryerSales = array_values(array_filter($machines ?? [], static function ($m): bool {
+    $kind = strtolower(trim((string) ($m['machine_kind'] ?? '')));
+    return $kind === 'dryer';
+}));
 $machineOptionLabel = static function (array $machine): string {
     $label = trim((string) ($machine['machine_label'] ?? ''));
-    $code = trim((string) ($machine['machine_code'] ?? ''));
     $balance = rtrim(rtrim(number_format((float) ($machine['credit_balance'] ?? 0), 4, '.', ''), '0'), '.');
     if ($balance === '') {
         $balance = '0';
@@ -160,11 +165,17 @@ $machineOptionLabel = static function (array $machine): string {
     $credit = ! empty($machine['credit_required'])
         ? ($balance === '0' ? 'No credit' : 'Credit '.$balance)
         : 'Manual';
+    $status = strtolower(trim((string) ($machine['status'] ?? 'available')));
+    if ($status === 'running') {
+        $credit .= ' · Running';
+    }
 
-    return trim($label.' '.($code !== '' ? '('.$code.') ' : '').'- '.$credit);
+    return trim($label.' - '.$credit);
 };
 $machineOptionDisabled = static function (array $machine): bool {
-    return ! empty($machine['credit_required']) && (float) ($machine['credit_balance'] ?? 0) <= 0;
+    // Keep zero-credit machines selectable so users can still choose and receive
+    // a specific validation message from backend. Only hard-disable running machines.
+    return strtolower(trim((string) ($machine['status'] ?? 'available'))) === 'running';
 };
 $toDateTimeLocal = static function (string $raw): string {
     $raw = trim($raw);
@@ -199,46 +210,91 @@ $toDateTimeLocal = static function (string $raw): string {
                         onchange="this.form.submit()"
                     >
                     <label class="form-check-label" for="laundryStatusTrackingEnabled">
-                        Enable laundry status workflow (Pending/Washing/Drying/Finished)
+                        Enable laundry status workflow
                     </label>
                 </div>
-                <div class="small text-muted">
-                    ON: standard workflow is enabled. If machine movement tracking is ON, cycle view becomes Pending → Washing - Rinsing → Drying → Unpaid → Paid.
-                    If OFF, payment-only flow is used (Unpaid/Paid).
+                <div class="small text-muted lh-base">
+                    Use this to turn on stage-based transaction handling instead of payment-only processing.
+                    When enabled, each job follows laundry workflow statuses so staff can monitor progress clearly from processing to release.
+                    This setting is the main switch that controls whether machine movement options (automatic or manual) are available.
                 </div>
-                <div class="d-flex flex-wrap align-items-center gap-3">
-                    <div class="form-check mb-0">
-                        <input
-                            class="form-check-input"
-                            type="checkbox"
-                            name="track_machine_movement"
-                            id="trackMachineMovementEnabled"
-                            value="1"
-                            <?= $trackMachineMovementEnabled ? 'checked' : '' ?>
-                            onchange="this.form.submit()"
-                        >
-                        <label class="form-check-label" for="trackMachineMovementEnabled">
-                            Enable machine movement tracking
-                        </label>
+                <div class="small text-muted mb-2">
+                    <ul class="mb-0 ps-3">
+                        <li><strong>Workflow OFF:</strong> Jobs skip stage monitoring and use payment-only handling (Unpaid/Paid), best for simple counter operation without machine-stage tracking.</li>
+                        <li><strong>Workflow ON + Manual machine movement:</strong> Staff manually controls machine assignment and job progress per stage, useful when operators decide washer/dryer usage based on actual floor conditions.</li>
+                        <li><strong>Workflow ON + Automatic machine movement:</strong> The system drives stage flow (Pending → Washing - Rinsing → Drying → Unpaid → Paid) using configured timing rules and availability checks for more consistent, low-touch operations.</li>
+                    </ul>
+                </div>
+                <div class="<?= $laundryStatusTrackingEnabled ? '' : 'd-none' ?>">
+                    <div class="d-flex flex-wrap align-items-center gap-3">
+                        <div class="form-check mb-0">
+                            <input
+                                class="form-check-input"
+                                type="checkbox"
+                                name="track_machine_movement"
+                                id="trackMachineMovementEnabled"
+                                value="1"
+                                <?= $trackMachineMovementEnabled ? 'checked' : '' ?>
+                                onchange="this.form.submit()"
+                            >
+                            <label class="form-check-label" for="trackMachineMovementEnabled">
+                                Automatic machine movement
+                            </label>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <label class="small text-muted mb-0" for="defaultDryingMinutes">Default drying minutes</label>
+                            <input
+                                class="form-control form-control-sm"
+                                style="width: 7rem;"
+                                type="number"
+                                min="1"
+                                step="1"
+                                name="default_drying_minutes"
+                                id="defaultDryingMinutes"
+                                value="<?= $defaultDryingMinutes === null || $defaultDryingMinutes === '' ? '' : e((string) $defaultDryingMinutes) ?>"
+                                onchange="this.form.submit()"
+                                <?= $trackMachineMovementEnabled ? 'required' : '' ?>
+                                placeholder="Manual"
+                            >
+                        </div>
                     </div>
-                    <div class="d-flex align-items-center gap-2">
-                        <label class="small text-muted mb-0" for="defaultDryingMinutes">Default drying minutes</label>
-                        <input
-                            class="form-control form-control-sm"
-                            style="width: 7rem;"
-                            type="number"
-                            min="1"
-                            step="1"
-                            name="default_drying_minutes"
-                            id="defaultDryingMinutes"
-                            value="<?= $defaultDryingMinutes === null || $defaultDryingMinutes === '' ? '' : e((string) $defaultDryingMinutes) ?>"
-                            onchange="this.form.submit()"
-                            placeholder="Manual"
-                        >
+                    <div class="small text-muted mt-2 lh-base">
+                        Use this when you want the system to automatically move each job through machine stages based on timer rules.
+                        The app can auto-progress from Washing - Rinsing to Drying and then to completion flow, while respecting
+                        machine availability and configured defaults. Default drying minutes is required so every auto-moved drying step
+                        has a clear expected finish time.
                     </div>
                 </div>
             </form>
-            <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" class="d-flex flex-wrap gap-3 align-items-center mt-2">
+            <form method="POST" action="<?= e(route('tenant.machines.store')) ?>" class="vstack gap-2 mt-3 <?= $laundryStatusTrackingEnabled ? '' : 'd-none' ?>">
+                <?= csrf_field() ?>
+                <input type="hidden" name="update_machine_assignment" value="1">
+                <input type="hidden" name="origin" value="sales">
+                <input type="hidden" name="machine_assignment_enabled" value="0">
+                <div class="form-check mb-0">
+                    <input
+                        class="form-check-input"
+                        type="checkbox"
+                        name="machine_assignment_enabled"
+                        id="machineAssignmentEnabled"
+                        value="1"
+                        <?= $machineAssignmentEnabled ? 'checked' : '' ?>
+                        onchange="this.form.submit()"
+                    >
+                    <label class="form-check-label" for="machineAssignmentEnabled">
+                        Manual machine movement
+                    </label>
+                </div>
+                <div class="small text-muted lh-base">
+                    Use this when your team wants to manually choose the washer/dryer per job. The system keeps the workflow status cards, but machine selection is done by staff during assignment instead of fully automatic movement.
+                </div>
+            </form>
+        </div>
+    </div>
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="small fw-semibold text-secondary text-uppercase mb-2">Transaction Settings</div>
+            <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" class="d-flex flex-wrap gap-3 align-items-center">
                 <?= csrf_field() ?>
                 <input type="hidden" name="update_editable_order_date" value="1">
                 <input type="hidden" name="editable_order_date" value="0">
@@ -3140,8 +3196,9 @@ $toDateTimeLocal = static function (string $raw): string {
                 }
                 if (trackMachineMovementEnabled) {
                     if (fromCol === 'pending') return toCol === 'washing_rinsing';
-                    if (fromCol === 'washing_rinsing') return false;
+                    if (fromCol === 'washing_rinsing') return toCol === 'pending';
                     if (fromCol === 'drying') {
+                        if (toCol === 'pending') return true;
                         const ps = String(drag.getAttribute('data-payment-status') || '').toLowerCase();
                         const expected = ps === 'paid' ? 'paid' : 'open_ticket';
                         return expected === toCol;
@@ -3150,6 +3207,7 @@ $toDateTimeLocal = static function (string $raw): string {
                     return false;
                 }
                 if (fromCol === 'washing_drying') {
+                    if (toCol === 'pending') return true;
                     const ps = String(drag.getAttribute('data-payment-status') || '').toLowerCase();
                     const expected = ps === 'paid' ? 'paid' : 'open_ticket';
                     return expected === toCol;
@@ -3195,6 +3253,17 @@ $toDateTimeLocal = static function (string $raw): string {
                         ensureEmptyPlaceholder(evt.to);
                         return;
                     }
+                    if (fromCol === 'washing_rinsing' && toCol === 'pending') {
+                        const ok = await postAdvance(item, 'pending', {});
+                        if (!ok) {
+                            evt.to.removeChild(item);
+                            const ref = evt.from.children[evt.oldIndex] || null;
+                            evt.from.insertBefore(item, ref);
+                        }
+                        ensureEmptyPlaceholder(evt.from);
+                        ensureEmptyPlaceholder(evt.to);
+                        return;
+                    }
                     if (fromCol === 'washing_rinsing') {
                         evt.to.removeChild(item);
                         const ref = evt.from.children[evt.oldIndex] || null;
@@ -3202,6 +3271,17 @@ $toDateTimeLocal = static function (string $raw): string {
                         ensureEmptyPlaceholder(evt.to);
                         ensureEmptyPlaceholder(evt.from);
                         showProcessError('Washing - Rinsing auto-advances to Drying when timer ends.');
+                        return;
+                    }
+                    if (fromCol === 'drying' && toCol === 'pending') {
+                        const ok = await postAdvance(item, 'pending', {});
+                        if (!ok) {
+                            evt.to.removeChild(item);
+                            const ref = evt.from.children[evt.oldIndex] || null;
+                            evt.from.insertBefore(item, ref);
+                        }
+                        ensureEmptyPlaceholder(evt.from);
+                        ensureEmptyPlaceholder(evt.to);
                         return;
                     }
                     if (fromCol === 'drying' && (toCol === 'open_ticket' || toCol === 'paid')) {
@@ -3246,6 +3326,17 @@ $toDateTimeLocal = static function (string $raw): string {
 
                 if (fromCol === 'washing_drying' && (toCol === 'open_ticket' || toCol === 'paid')) {
                     const ok = await postAdvance(item, 'open_ticket', {});
+                    if (!ok) {
+                        evt.to.removeChild(item);
+                        const ref = evt.from.children[evt.oldIndex] || null;
+                        evt.from.insertBefore(item, ref);
+                    }
+                    ensureEmptyPlaceholder(evt.from);
+                    ensureEmptyPlaceholder(evt.to);
+                    return;
+                }
+                if (fromCol === 'washing_drying' && toCol === 'pending') {
+                    const ok = await postAdvance(item, 'pending', {});
                     if (!ok) {
                         evt.to.removeChild(item);
                         const ref = evt.from.children[evt.oldIndex] || null;

@@ -7,21 +7,6 @@
         </div>
     </div>
 <?php endif; ?>
-<?php if (! empty($reports_subscription)): ?>
-    <?php
-    $dl = (int) ($reports_subscription['days_left'] ?? 0);
-    $dayWord = $dl === 1 ? 'day' : 'days';
-    ?>
-    <div class="alert alert-info mb-3 border-0 shadow-sm d-flex gap-3 align-items-start">
-        <i class="fa-solid fa-calendar-days fa-lg mt-1" aria-hidden="true"></i>
-        <div>
-            <strong class="d-block">Subscription ending soon</strong>
-            <p class="mb-0">Your store subscription ends on <strong><?= e((string) ($reports_subscription['expires_label'] ?? '')) ?></strong>
-                (<?= $dl ?> <?= $dayWord ?> remaining). Please contact the application owner to renew and avoid interruption.</p>
-        </div>
-    </div>
-<?php endif; ?>
-
 <?php
 $rangeFrom = (string) ($stats['range_from'] ?? date('Y-m-d'));
 $rangeTo = (string) ($stats['range_to'] ?? date('Y-m-d'));

@@ -1158,17 +1158,17 @@ final class ReportController
     }
 
     /**
-     * @return list<array{machine_label:string,machine_code:string,credit_required:int,opening:float,restock:float,usage:float,closing:float}>
+     * @return list<array{machine_label:string,credit_required:int,opening:float,restock:float,usage:float,closing:float}>
      */
     private function fetchMachineCreditLedgerRows(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
     {
         $rows = [];
         try {
             $st = $pdo->prepare(
-                'SELECT id, machine_label, machine_code, credit_required, credit_balance
+                'SELECT id, machine_label, credit_required, credit_balance
                  FROM laundry_machines
                  WHERE tenant_id = ?
-                 ORDER BY machine_kind ASC, machine_label ASC, machine_code ASC, id ASC'
+                 ORDER BY machine_kind ASC, machine_label ASC, id ASC'
             );
             $st->execute([$tenantId]);
             $machines = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -1180,7 +1180,6 @@ final class ReportController
                     $current = max(0.0, (float) ($machine['credit_balance'] ?? 0));
                     $rows[] = [
                         'machine_label' => (string) ($machine['machine_label'] ?? ''),
-                        'machine_code' => (string) ($machine['machine_code'] ?? ''),
                         'credit_required' => (int) ($machine['credit_required'] ?? 0),
                         'opening' => $current,
                         'restock' => 0.0,
@@ -1243,7 +1242,6 @@ final class ReportController
                 $opening = max(0.0, $closing - $rangeDelta);
                 $rows[] = [
                     'machine_label' => (string) ($machine['machine_label'] ?? ''),
-                    'machine_code' => (string) ($machine['machine_code'] ?? ''),
                     'credit_required' => (int) ($machine['credit_required'] ?? 0),
                     'opening' => $opening,
                     'restock' => max(0.0, (float) ($restockByMachine[$machineId] ?? 0.0)),
@@ -1259,16 +1257,16 @@ final class ReportController
     }
 
     /**
-     * @return list<array{machine_label:string,machine_code:string,idle_hours:float,idle_gaps:int,longest_idle_hours:float,longest_idle_range:string,usage_logs:int}>
+     * @return list<array{machine_label:string,idle_hours:float,idle_gaps:int,longest_idle_hours:float,longest_idle_range:string,usage_logs:int}>
      */
     private function fetchMachineIdleRows(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
     {
         try {
             $st = $pdo->prepare(
-                'SELECT id, machine_label, machine_code, machine_kind
+                'SELECT id, machine_label, machine_kind
                  FROM laundry_machines
                  WHERE tenant_id = ?
-                 ORDER BY machine_kind ASC, machine_label ASC, machine_code ASC, id ASC'
+                 ORDER BY machine_kind ASC, machine_label ASC, id ASC'
             );
             $st->execute([$tenantId]);
             $machines = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -1370,7 +1368,6 @@ final class ReportController
                 }
                 $rows[] = [
                     'machine_label' => (string) ($machine['machine_label'] ?? ''),
-                    'machine_code' => (string) ($machine['machine_code'] ?? ''),
                     'idle_hours' => round($idleSeconds / 3600, 2),
                     'idle_gaps' => $idleGaps,
                     'longest_idle_hours' => round($longestIdle / 3600, 2),

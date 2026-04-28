@@ -13,31 +13,26 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
 <div class="card mb-3">
     <div class="card-body">
         <h6 class="mb-1">Machines</h6>
-        <p class="small text-muted mb-0">Register washers and dryers separately. Same list is used on Daily Sales when selecting machines.</p>
+        <p class="small text-muted mb-2">
+            Set up all washers and dryers here before running daily operations. This machine master list is shared across
+            Daily Sales, Kanban movement, and Kiosk order handling.
+        </p>
+        <ul class="small text-muted mb-0 ps-3">
+            <li><strong>Create clear labels:</strong> use unique names like <strong>Washer #1</strong> and <strong>Dryer #1</strong> so staff can assign jobs quickly without confusion.</li>
+            <li><strong>Enable credit only when needed:</strong> check <strong>Needs credit</strong> for coin/credit-based machines; leave it off for manual/non-credit units.</li>
+            <li><strong>Keep status reliable:</strong> machines move between <strong>Available</strong> and <strong>Running</strong> during transaction stages and card movement.</li>
+            <li><strong>Kiosk impact:</strong> when orders are created from Kiosk, machine options and movement validation use this same washer/dryer inventory and availability.</li>
+            <li><strong>Best practice:</strong> keep at least one available washer and dryer with enough credit (if credit mode is used) to avoid assignment blocking.</li>
+        </ul>
     </div>
 </div>
 <div class="card mb-3">
     <div class="card-body">
-        <div class="small fw-semibold text-secondary text-uppercase mb-2">Feature Toggles</div>
-        <form method="POST" action="<?= e(route('tenant.machines.store')) ?>" class="d-flex flex-wrap gap-3 align-items-center">
-            <?= csrf_field() ?>
-            <input type="hidden" name="update_machine_assignment" value="1">
-            <input type="hidden" name="machine_assignment_enabled" value="0">
-            <div class="form-check mb-0">
-                <input
-                    class="form-check-input"
-                    type="checkbox"
-                    name="machine_assignment_enabled"
-                    id="machineAssignmentEnabled"
-                    value="1"
-                    <?= $machineAssignmentEnabled ? 'checked' : '' ?>
-                    onchange="this.form.submit()"
-                >
-                <label class="form-check-label" for="machineAssignmentEnabled">
-                    Enable machine assignment (auto by order type)
-                </label>
-            </div>
-        </form>
+        <div class="small text-muted mb-0">
+            Assignment mode is managed in <strong>Transactions → Track Machine Movement</strong>.
+            <strong>Automatic machine movement</strong> uses this machine list for timed stage progression,
+            while <strong>Manual machine movement</strong> lets staff choose machines per job in Kiosk/Daily Sales flow.
+        </div>
     </div>
 </div>
 
@@ -49,7 +44,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                 <form method="POST" action="<?= e(route('tenant.machines.store')) ?>" class="row g-2 mb-3">
                     <?= csrf_field() ?>
                     <input type="hidden" name="machine_kind" value="washer">
-                    <input type="hidden" name="machine_code" value="">
                     <div class="col-md-12">
                         <label class="form-label mb-1">Machine label</label>
                         <input class="form-control" name="machine_label" placeholder="Washer #1" required>
@@ -101,7 +95,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                                             class="btn btn-sm btn-outline-primary js-edit-machine"
                                             data-id="<?= (int) ($machine['id'] ?? 0) ?>"
                                             data-kind="washer"
-                                            data-code="<?= e((string) ($machine['machine_code'] ?? '')) ?>"
                                             data-label="<?= e((string) ($machine['machine_label'] ?? '')) ?>"
                                             data-credit-required="<?= ! empty($machine['credit_required']) ? '1' : '0' ?>"
                                             data-credit-balance="<?= e((string) (float) ($machine['credit_balance'] ?? 0)) ?>"
@@ -131,7 +124,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                 <form method="POST" action="<?= e(route('tenant.machines.store')) ?>" class="row g-2 mb-3">
                     <?= csrf_field() ?>
                     <input type="hidden" name="machine_kind" value="dryer">
-                    <input type="hidden" name="machine_code" value="">
                     <div class="col-md-12">
                         <label class="form-label mb-1">Machine label</label>
                         <input class="form-control" name="machine_label" placeholder="Dryer #1" required>
@@ -183,7 +175,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                                             class="btn btn-sm btn-outline-primary js-edit-machine"
                                             data-id="<?= (int) ($machine['id'] ?? 0) ?>"
                                             data-kind="dryer"
-                                            data-code="<?= e((string) ($machine['machine_code'] ?? '')) ?>"
                                             data-label="<?= e((string) ($machine['machine_label'] ?? '')) ?>"
                                             data-credit-required="<?= ! empty($machine['credit_required']) ? '1' : '0' ?>"
                                             data-credit-balance="<?= e((string) (float) ($machine['credit_balance'] ?? 0)) ?>"
@@ -214,7 +205,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                 <?= csrf_field() ?>
                 <?= method_field('PUT') ?>
                 <input type="hidden" name="machine_kind" id="machineEditKind" value="washer">
-                <input type="hidden" name="machine_code" id="machineEditCode" value="">
                 <div class="modal-header">
                     <h6 class="modal-title" id="machineEditModalLabel">Edit machine</h6>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -251,7 +241,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
     const editModal = editModalEl ? new bootstrap.Modal(editModalEl) : null;
     const editForm = document.getElementById('machineEditForm');
     const editKind = document.getElementById('machineEditKind');
-    const editCode = document.getElementById('machineEditCode');
     const editLabel = document.getElementById('machineEditLabel');
     const editCreditRequired = document.getElementById('machineEditCreditRequired');
     const editCreditBalance = document.getElementById('machineEditCreditBalance');
@@ -282,7 +271,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
             if (!id || !editForm) return;
             editForm.action = `${baseUrl}/${id}`;
             if (editKind) editKind.value = btn.getAttribute('data-kind') || 'washer';
-            if (editCode) editCode.value = btn.getAttribute('data-code') || '';
             if (editLabel) editLabel.value = btn.getAttribute('data-label') || '';
             if (editCreditRequired) editCreditRequired.checked = btn.getAttribute('data-credit-required') === '1';
             if (editCreditBalance) editCreditBalance.value = btn.getAttribute('data-credit-balance') || '0';

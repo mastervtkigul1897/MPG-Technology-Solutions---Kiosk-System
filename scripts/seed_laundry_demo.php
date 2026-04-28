@@ -30,21 +30,21 @@ foreach ($tenantIds as $tenantIdRaw) {
     $pdo->beginTransaction();
     try {
         $stMachine = $pdo->prepare(
-            'INSERT INTO laundry_machines (tenant_id, machine_kind, machine_code, machine_label, status, current_order_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, "available", NULL, NOW(), NOW())
-             ON DUPLICATE KEY UPDATE machine_label = VALUES(machine_label), machine_kind = VALUES(machine_kind), updated_at = NOW()'
+            'INSERT INTO laundry_machines (tenant_id, machine_kind, machine_label, status, current_order_id, created_at, updated_at)
+             VALUES (?, ?, ?, "available", NULL, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE machine_kind = VALUES(machine_kind), updated_at = NOW()'
         );
         foreach (
             [
-                ['washer', 'W-01', 'Washer #1'],
-                ['washer', 'W-02', 'Washer #2'],
-                ['washer', 'W-03', 'Washer #3'],
-                ['dryer', 'D-01', 'Dryer #1'],
-                ['dryer', 'D-02', 'Dryer #2'],
-                ['dryer', 'D-03', 'Dryer #3'],
+                ['washer', 'Washer #1'],
+                ['washer', 'Washer #2'],
+                ['washer', 'Washer #3'],
+                ['dryer', 'Dryer #1'],
+                ['dryer', 'Dryer #2'],
+                ['dryer', 'Dryer #3'],
             ] as $m
         ) {
-            $stMachine->execute([$tenantId, $m[0], $m[1], $m[2]]);
+            $stMachine->execute([$tenantId, $m[0], $m[1]]);
         }
 
         $customers = [

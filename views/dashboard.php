@@ -242,6 +242,20 @@ if (! empty($is_super)): ?>
         && in_array(strtolower(trim((string) ($dashUser['staff_type'] ?? 'full_time'))), ['utility', 'driver'], true);
     $attendanceFeatureEnabled = ! empty($can_use_attendance);
     ?>
+    <?php if (! empty($dashboard_subscription)): ?>
+        <?php
+        $dl = (int) ($dashboard_subscription['days_left'] ?? 0);
+        $dayWord = $dl === 1 ? 'day' : 'days';
+        ?>
+        <div class="alert alert-info mb-3 border-0 shadow-sm d-flex gap-3 align-items-start">
+            <i class="fa-solid fa-calendar-days fa-lg mt-1" aria-hidden="true"></i>
+            <div>
+                <strong class="d-block">Subscription ending soon</strong>
+                <p class="mb-0">Your store subscription ends on <strong><?= e((string) ($dashboard_subscription['expires_label'] ?? '')) ?></strong>
+                    (<?= $dl ?> <?= $dayWord ?> remaining). Please contact the application owner to renew and avoid interruption.</p>
+            </div>
+        </div>
+    <?php endif; ?>
     <div class="card mb-3">
         <div class="card-body">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
@@ -536,7 +550,6 @@ if (! empty($is_super)): ?>
                                     <tr>
                                         <td>
                                             <?= e((string) ($machine['machine_label'] ?? '')) ?>
-                                            <span class="small text-muted">(<?= e((string) ($machine['machine_code'] ?? '')) ?>)</span>
                                         </td>
                                         <td class="text-end"><?= ! empty($machine['credit_required']) ? e(format_stock((float) ($machine['opening'] ?? 0))) : '—' ?></td>
                                         <td class="text-end"><?= ! empty($machine['credit_required']) ? e(format_stock((float) ($machine['restock'] ?? 0))) : '—' ?></td>

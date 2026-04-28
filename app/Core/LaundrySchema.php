@@ -112,14 +112,13 @@ final class LaundrySchema
                 machine_type VARCHAR(20) NOT NULL DEFAULT \'c5\',
                 credit_required TINYINT(1) NOT NULL DEFAULT 0,
                 credit_balance DECIMAL(16,4) NOT NULL DEFAULT 0,
-                machine_code VARCHAR(60) NOT NULL,
                 machine_label VARCHAR(120) NOT NULL,
                 status VARCHAR(20) NOT NULL DEFAULT \'available\',
                 current_order_id BIGINT UNSIGNED DEFAULT NULL,
                 created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (id),
-                UNIQUE KEY laundry_machines_tenant_code_unique (tenant_id, machine_code),
+                UNIQUE KEY laundry_machines_tenant_label_unique (tenant_id, machine_label),
                 KEY laundry_machines_tenant_status_idx (tenant_id, status),
                 KEY laundry_machines_tenant_kind_idx (tenant_id, machine_kind)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'

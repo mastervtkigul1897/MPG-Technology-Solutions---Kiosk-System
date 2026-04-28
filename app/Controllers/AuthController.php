@@ -79,6 +79,85 @@ final class AuthController
         }
     }
 
+    private static function seedLaundryBranchConfigDefaults(PDO $pdo, int $tenantId): void
+    {
+        if ($tenantId < 1) {
+            return;
+        }
+        try {
+            $chk = $pdo->query("SHOW TABLES LIKE 'laundry_branch_configs'");
+            if ($chk === false || $chk->fetch(PDO::FETCH_ASSOC) === false) {
+                return;
+            }
+            $hasLaundryStatus = self::tableHasColumn($pdo, 'laundry_branch_configs', 'laundry_status_tracking_enabled');
+            $hasTrackMovement = self::tableHasColumn($pdo, 'laundry_branch_configs', 'track_machine_movement');
+            $hasMachineAssignment = self::tableHasColumn($pdo, 'laundry_branch_configs', 'machine_assignment_enabled');
+            $hasDefaultDryingMinutes = self::tableHasColumn($pdo, 'laundry_branch_configs', 'default_drying_minutes');
+
+            $insertColumns = ['tenant_id'];
+            $insertValues = [$tenantId];
+            $updateParts = [];
+
+            if ($hasLaundryStatus) {
+                $insertColumns[] = 'laundry_status_tracking_enabled';
+                $insertValues[] = 1;
+                $updateParts[] = 'laundry_status_tracking_enabled = VALUES(laundry_status_tracking_enabled)';
+            }
+            if ($hasTrackMovement) {
+                $insertColumns[] = 'track_machine_movement';
+                $insertValues[] = 1;
+                $updateParts[] = 'track_machine_movement = VALUES(track_machine_movement)';
+            }
+            if ($hasMachineAssignment) {
+                // Automatic ON by default, so manual stays OFF.
+                $insertColumns[] = 'machine_assignment_enabled';
+                $insertValues[] = 0;
+                $updateParts[] = 'machine_assignment_enabled = VALUES(machine_assignment_enabled)';
+            }
+            if ($hasDefaultDryingMinutes) {
+                $insertColumns[] = 'default_drying_minutes';
+                $insertValues[] = 30;
+                $updateParts[] = 'default_drying_minutes = VALUES(default_drying_minutes)';
+            }
+            if (self::tableHasColumn($pdo, 'laundry_branch_configs', 'kiosk_inclusion_autofill_mode')) {
+                $insertColumns[] = 'kiosk_inclusion_autofill_mode';
+                $insertValues[] = 'lock';
+                $updateParts[] = 'kiosk_inclusion_autofill_mode = VALUES(kiosk_inclusion_autofill_mode)';
+            }
+            if (self::tableHasColumn($pdo, 'laundry_branch_configs', 'kiosk_fold_autofill_mode')) {
+                $insertColumns[] = 'kiosk_fold_autofill_mode';
+                $insertValues[] = 'free_fold';
+                $updateParts[] = 'kiosk_fold_autofill_mode = VALUES(kiosk_fold_autofill_mode)';
+            }
+            if (self::tableHasColumn($pdo, 'laundry_branch_configs', 'kiosk_autofill_order_type_codes')) {
+                $insertColumns[] = 'kiosk_autofill_order_type_codes';
+                $insertValues[] = 'drop_off';
+                $updateParts[] = 'kiosk_autofill_order_type_codes = VALUES(kiosk_autofill_order_type_codes)';
+            }
+            if (self::tableHasColumn($pdo, 'laundry_branch_configs', 'enable_bluetooth_print')) {
+                $insertColumns[] = 'enable_bluetooth_print';
+                $insertValues[] = 0;
+                $updateParts[] = 'enable_bluetooth_print = VALUES(enable_bluetooth_print)';
+            }
+            if ($updateParts === []) {
+                return;
+            }
+
+            $sql = sprintf(
+                'INSERT INTO laundry_branch_configs (%s, created_at, updated_at)
+                 VALUES (%s, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE %s, updated_at = NOW()',
+                implode(', ', $insertColumns),
+                implode(', ', array_fill(0, count($insertColumns), '?')),
+                implode(', ', $updateParts)
+            );
+            $st = $pdo->prepare($sql);
+            $st->execute($insertValues);
+        } catch (\Throwable) {
+            // Optional setup only; should not block successful registration.
+        }
+    }
+
     /** @return array{hash:string,label:string,token:string,user_agent:string,ip:string}|null */
     private static function registerDevicePayload(Request $request): ?array
     {
@@ -478,6 +557,7 @@ final class AuthController
             } catch (\Throwable) {
                 // Optional setup only; should not block successful registration.
             }
+            self::seedLaundryBranchConfigDefaults($pdo, $tenantId);
 
             $userColumns = ['name', 'email', 'password', 'role', 'tenant_id'];
             $userValues = [$name, $email, $pwHash, 'tenant_admin', $tenantId];

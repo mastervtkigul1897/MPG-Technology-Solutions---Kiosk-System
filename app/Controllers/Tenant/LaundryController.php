@@ -123,10 +123,12 @@ final class LaundryController
         $customerRows = $freeCustomerLocked ? [] : $customers->fetchAll(PDO::FETCH_ASSOC);
 
         $machinesSt = $pdo->prepare(
-            'SELECT id, machine_code, machine_label, machine_kind, machine_type, credit_required, credit_balance, status
+            'SELECT id, machine_label, machine_kind, machine_type, credit_required, credit_balance, status
              FROM laundry_machines
              WHERE tenant_id = ? AND status = "available"
-             ORDER BY machine_kind ASC, machine_label ASC, machine_code ASC, id ASC'
+             ORDER BY machine_kind ASC,
+                      CASE WHEN credit_required = 1 AND credit_balance <= 0 THEN 1 ELSE 0 END ASC,
+                      machine_label ASC, id ASC'
         );
         $machinesSt->execute([$tenantId]);
         $machineRows = $this->filterFreeModeMachineRows($machinesSt->fetchAll(PDO::FETCH_ASSOC));
@@ -330,10 +332,12 @@ final class LaundryController
         $customerRows = $freeCustomerLocked ? [] : $customers->fetchAll(PDO::FETCH_ASSOC);
 
         $machinesSt = $pdo->prepare(
-            'SELECT id, machine_code, machine_label, machine_kind, machine_type, credit_required, credit_balance, status
+            'SELECT id, machine_label, machine_kind, machine_type, credit_required, credit_balance, status
              FROM laundry_machines
              WHERE tenant_id = ? AND status = "available"
-             ORDER BY machine_kind ASC, machine_label ASC, machine_code ASC, id ASC'
+             ORDER BY machine_kind ASC,
+                      CASE WHEN credit_required = 1 AND credit_balance <= 0 THEN 1 ELSE 0 END ASC,
+                      machine_label ASC, id ASC'
         );
         $machinesSt->execute([$tenantId]);
         $machines = $this->filterFreeModeMachineRows($machinesSt->fetchAll(PDO::FETCH_ASSOC));
@@ -423,14 +427,35 @@ final class LaundryController
                 return redirect(route('tenant.laundry-sales.index'));
             }
             if ($updateWorkflow) {
+                $wasWorkflowEnabled = $this->isLaundryStatusTrackingEnabled($pdo, $tenantId);
                 $enabled = $request->boolean('laundry_status_tracking_enabled');
                 $this->persistLaundryStatusTrackingConfig($pdo, $tenantId, $enabled);
                 $trackMachineMovement = $request->boolean('track_machine_movement');
                 $defaultDryingMinutesInput = trim((string) $request->input('default_drying_minutes', ''));
+                if (! $enabled) {
+                    // When workflow is OFF, keep both movement modes OFF to avoid conflicting states.
+                    $trackMachineMovement = false;
+                    $this->persistTrackMachineMovementConfig($pdo, $tenantId, false);
+                    $this->persistMachineAssignmentConfig($pdo, $tenantId, false);
+                }
+                if ($enabled && ! $wasWorkflowEnabled) {
+                    // When workflow is newly enabled, default to Automatic mode.
+                    $trackMachineMovement = true;
+                }
+                if ($trackMachineMovement && $defaultDryingMinutesInput === '') {
+                    session_flash('errors', ['Default drying minutes is required when machine movement tracking is enabled.']);
+                    return redirect(route($redirectRoute));
+                }
                 $defaultDryingMinutes = $defaultDryingMinutesInput === ''
                     ? null
                     : max(1, (int) $defaultDryingMinutesInput);
-                $this->persistTrackMachineMovementConfig($pdo, $tenantId, $trackMachineMovement);
+                if ($enabled) {
+                    $this->persistTrackMachineMovementConfig($pdo, $tenantId, $trackMachineMovement);
+                }
+                if ($enabled && $trackMachineMovement) {
+                    // Automatic and manual modes are mutually exclusive.
+                    $this->persistMachineAssignmentConfig($pdo, $tenantId, false);
+                }
                 $this->persistBranchDefaultDryingMinutes($pdo, $tenantId, $defaultDryingMinutes);
             }
             if ($updateOrderDateEdit) {
@@ -1700,7 +1725,7 @@ final class LaundryController
             'SELECT *
              FROM laundry_machines
              WHERE tenant_id = ? AND machine_kind = "washer"
-             ORDER BY machine_label ASC, machine_code ASC, id ASC'
+             ORDER BY machine_label ASC, id ASC'
         );
         $machinesWasher->execute([$tenantId]);
 
@@ -1708,7 +1733,7 @@ final class LaundryController
             'SELECT *
              FROM laundry_machines
              WHERE tenant_id = ? AND machine_kind = "dryer"
-             ORDER BY machine_label ASC, machine_code ASC, id ASC'
+             ORDER BY machine_label ASC, id ASC'
         );
         $machinesDryer->execute([$tenantId]);
 
@@ -2005,11 +2030,18 @@ final class LaundryController
         if ((string) $request->input('update_machine_assignment', '') === '1') {
             $enabled = $request->boolean('machine_assignment_enabled');
             $this->persistMachineAssignmentConfig($pdo, $tenantId, $enabled);
+            if ($enabled) {
+                // Automatic and manual modes are mutually exclusive.
+                $this->persistTrackMachineMovementConfig($pdo, $tenantId, false);
+            }
             session_flash('success', 'Machine assignment setting updated.');
+            $origin = strtolower(trim((string) $request->input('origin', '')));
+            if ($origin === 'sales') {
+                return redirect(route('tenant.laundry-sales.index'));
+            }
             return redirect(route('tenant.machines.index'));
         }
 
-        $machineCode = trim((string) $request->input('machine_code'));
         $machineLabel = trim((string) $request->input('machine_label'));
         $machineKind = trim((string) $request->input('machine_kind', 'washer'));
         $creditRequired = $request->boolean('credit_required') ? 1 : 0;
@@ -2027,9 +2059,6 @@ final class LaundryController
             session_flash('errors', ['Machine label already exists. Please use a different label.']);
             return redirect(route('tenant.machines.index'));
         }
-        if ($machineCode === '') {
-            $machineCode = $this->generateMachineCode($pdo, $tenantId, $machineKind);
-        }
         if (Auth::isTenantFreePlanRestricted(Auth::user())) {
             $limit = $machineKind === 'dryer' ? self::FREE_LIMIT_DRYERS : self::FREE_LIMIT_WASHERS;
             $countSt = $pdo->prepare('SELECT COUNT(*) FROM laundry_machines WHERE tenant_id = ? AND machine_kind = ?');
@@ -2042,14 +2071,14 @@ final class LaundryController
         }
 
         $pdo->prepare(
-            'INSERT INTO laundry_machines (tenant_id, machine_kind, machine_type, credit_required, credit_balance, machine_code, machine_label, status, current_order_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, "available", NULL, NOW(), NOW())
-             ON DUPLICATE KEY UPDATE machine_label = VALUES(machine_label), machine_kind = VALUES(machine_kind), machine_type = VALUES(machine_type), credit_required = VALUES(credit_required), credit_balance = VALUES(credit_balance), updated_at = NOW()'
-        )->execute([$tenantId, $machineKind, $machineType, $creditRequired, $creditBalance, $machineCode, $machineLabel]);
+            'INSERT INTO laundry_machines (tenant_id, machine_kind, machine_type, credit_required, credit_balance, machine_label, status, current_order_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, "available", NULL, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE machine_kind = VALUES(machine_kind), machine_type = VALUES(machine_type), credit_required = VALUES(credit_required), credit_balance = VALUES(credit_balance), updated_at = NOW()'
+        )->execute([$tenantId, $machineKind, $machineType, $creditRequired, $creditBalance, $machineLabel]);
         $machineId = (int) $pdo->lastInsertId();
         if ($machineId < 1) {
-            $stMachine = $pdo->prepare('SELECT id FROM laundry_machines WHERE tenant_id = ? AND machine_code = ? LIMIT 1');
-            $stMachine->execute([$tenantId, $machineCode]);
+            $stMachine = $pdo->prepare('SELECT id FROM laundry_machines WHERE tenant_id = ? AND LOWER(TRIM(machine_label)) = LOWER(TRIM(?)) LIMIT 1');
+            $stMachine->execute([$tenantId, $machineLabel]);
             $machineId = (int) ($stMachine->fetchColumn() ?: 0);
         }
         if ($machineId > 0 && $creditRequired === 1 && $creditBalance > 0) {
@@ -2077,7 +2106,6 @@ final class LaundryController
         $tenantId = $ctx['tenant_id'];
         $machineId = max(0, (int) $id);
 
-        $machineCode = trim((string) $request->input('machine_code'));
         $machineLabel = trim((string) $request->input('machine_label'));
         $machineKind = trim((string) $request->input('machine_kind', 'washer'));
         $creditRequired = $request->boolean('credit_required') ? 1 : 0;
@@ -2091,7 +2119,7 @@ final class LaundryController
 
             return redirect(route('tenant.machines.index'));
         }
-        $existingSt = $pdo->prepare('SELECT machine_code, credit_required, credit_balance FROM laundry_machines WHERE tenant_id = ? AND id = ? LIMIT 1');
+        $existingSt = $pdo->prepare('SELECT credit_required, credit_balance FROM laundry_machines WHERE tenant_id = ? AND id = ? LIMIT 1');
         $existingSt->execute([$tenantId, $machineId]);
         $existingMachine = $existingSt->fetch(PDO::FETCH_ASSOC);
         if (! is_array($existingMachine)) {
@@ -2102,18 +2130,11 @@ final class LaundryController
             session_flash('errors', ['Machine label already exists. Please use a different label.']);
             return redirect(route('tenant.machines.index'));
         }
-        if ($machineCode === '') {
-            $machineCode = (string) ($existingMachine['machine_code'] ?? '');
-        }
-        if ($machineCode === '') {
-            $machineCode = $this->generateMachineCode($pdo, $tenantId, $machineKind);
-        }
-
         $pdo->prepare(
             'UPDATE laundry_machines
-             SET machine_kind = ?, machine_type = ?, credit_required = ?, credit_balance = ?, machine_code = ?, machine_label = ?, updated_at = NOW()
+             SET machine_kind = ?, machine_type = ?, credit_required = ?, credit_balance = ?, machine_label = ?, updated_at = NOW()
              WHERE tenant_id = ? AND id = ?'
-        )->execute([$machineKind, $machineType, $creditRequired, $creditBalance, $machineCode, $machineLabel, $tenantId, $machineId]);
+        )->execute([$machineKind, $machineType, $creditRequired, $creditBalance, $machineLabel, $tenantId, $machineId]);
         $oldBalance = max(0.0, (float) ($existingMachine['credit_balance'] ?? 0));
         $newBalance = max(0.0, (float) $creditBalance);
         $delta = round($newBalance - $oldBalance, 4);
@@ -2165,20 +2186,6 @@ final class LaundryController
         $st = $pdo->prepare($sql);
         $st->execute($params);
         return $st->fetchColumn() !== false;
-    }
-
-    private function generateMachineCode(PDO $pdo, int $tenantId, string $machineKind): string
-    {
-        $prefix = strtolower($machineKind) === 'dryer' ? 'D' : 'W';
-        for ($i = 1; $i <= 1000; $i++) {
-            $candidate = sprintf('%s-%02d', $prefix, $i);
-            $st = $pdo->prepare('SELECT 1 FROM laundry_machines WHERE tenant_id = ? AND machine_code = ? LIMIT 1');
-            $st->execute([$tenantId, $candidate]);
-            if ($st->fetchColumn() === false) {
-                return $candidate;
-            }
-        }
-        return sprintf('%s-%s', $prefix, strtoupper(substr(md5((string) microtime(true)), 0, 6)));
     }
 
     public function machineDestroy(Request $request, string $id): Response
@@ -2664,7 +2671,7 @@ final class LaundryController
         $tenantId = $ctx['tenant_id'];
         $trackingEnabled = $this->isLaundryStatusTrackingEnabled($pdo, $tenantId);
         $toStatus = strtolower(trim((string) $request->input('to_status', '')));
-        if (! in_array($toStatus, ['washing_drying', 'open_ticket'], true)) {
+        if (! in_array($toStatus, ['washing_drying', 'open_ticket', 'pending'], true)) {
             if ($request->wantsJson()) {
                 return json_response(['success' => false, 'message' => 'Invalid next status.'], 422);
             }
@@ -2694,12 +2701,15 @@ final class LaundryController
             if (! $trackingEnabled) {
                 throw new \RuntimeException('Status transitions are disabled when workflow tracking is off.');
             }
-            $allowed = [
-                'pending' => 'washing_drying',
-                'washing_drying' => 'open_ticket',
-                'running' => 'open_ticket',
-            ];
-            if (! isset($allowed[$current]) || $allowed[$current] !== $toStatus) {
+            $canTransition = false;
+            if ($current === 'pending' && $toStatus === 'washing_drying') {
+                $canTransition = true;
+            } elseif (in_array($current, ['washing_drying', 'running'], true) && $toStatus === 'open_ticket') {
+                $canTransition = true;
+            } elseif (in_array($current, ['washing_drying', 'running'], true) && $toStatus === 'pending') {
+                $canTransition = true;
+            }
+            if (! $canTransition) {
                 throw new \RuntimeException('Invalid status sequence. Move forward only.');
             }
 
@@ -2711,6 +2721,47 @@ final class LaundryController
                 if ($dryingEndAtRaw === '') {
                     throw new \RuntimeException('Cannot move to Unpaid/Paid yet. Drying end time is not set.');
                 }
+            }
+
+            if ($toStatus === 'pending') {
+                if ((string) ($order['payment_status'] ?? '') === 'paid') {
+                    throw new \RuntimeException('Cannot move back to Pending after payment is marked paid.');
+                }
+                $this->restoreMachineCreditsForOrder($pdo, $tenantId, $id);
+                $pdo->prepare(
+                    'UPDATE laundry_machines
+                     SET status = "available", current_order_id = NULL, updated_at = NOW()
+                     WHERE tenant_id = ? AND current_order_id = ?'
+                )->execute([$tenantId, $id]);
+                $pdo->prepare(
+                    'UPDATE laundry_orders
+                     SET status = "pending",
+                         payment_method = "pending",
+                         payment_status = "unpaid",
+                         machine_id = NULL,
+                         washer_machine_id = NULL,
+                         dryer_machine_id = NULL,
+                         machine_type = "manual",
+                         track_machine_stage = NULL,
+                         wash_rinse_minutes = NULL,
+                         wash_rinse_machine_id = NULL,
+                         wash_rinse_started_at = NULL,
+                         wash_rinse_end_at = NULL,
+                         drying_minutes = NULL,
+                         drying_machine_id = NULL,
+                         drying_started_at = NULL,
+                         drying_end_at = NULL,
+                         movement_completed_at = NULL,
+                         movement_last_error = NULL,
+                         updated_at = NOW()
+                     WHERE tenant_id = ? AND id = ?'
+                )->execute([$tenantId, $id]);
+                $pdo->commit();
+                if ($request->wantsJson()) {
+                    return json_response(['success' => true, 'message' => 'Moved back to Pending. Machine credit restored.']);
+                }
+                session_flash('success', 'Moved back to Pending. Machine credit restored.');
+                return redirect(route('tenant.laundry-sales.index'));
             }
 
             if ($toStatus === 'washing_drying') {
@@ -3488,6 +3539,16 @@ final class LaundryController
 
             return redirect(route('tenant.customers.index'));
         }
+        if ($contact === '') {
+            session_flash('errors', ['Contact is required.']);
+
+            return redirect(route('tenant.customers.index'));
+        }
+        if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            session_flash('errors', ['A valid email is required.']);
+
+            return redirect(route('tenant.customers.index'));
+        }
         $birthdayValue = $birthday !== '' ? $birthday : null;
 
         $pdo->prepare(
@@ -3515,6 +3576,12 @@ final class LaundryController
         $birthday = trim((string) $request->input('birthday'));
         if ($name === '') {
             return json_response(['success' => false, 'message' => 'Customer name is required.'], 422);
+        }
+        if ($contact === '') {
+            return json_response(['success' => false, 'message' => 'Contact is required.'], 422);
+        }
+        if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return json_response(['success' => false, 'message' => 'A valid email is required.'], 422);
         }
         $birthdayValue = $birthday !== '' ? $birthday : null;
 
@@ -3802,6 +3869,16 @@ final class LaundryController
         $birthday = trim((string) $request->input('birthday'));
         if ($customerId < 1 || $name === '') {
             session_flash('errors', ['Customer name is required.']);
+
+            return redirect(route('tenant.customers.index'));
+        }
+        if ($contact === '') {
+            session_flash('errors', ['Contact is required.']);
+
+            return redirect(route('tenant.customers.index'));
+        }
+        if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            session_flash('errors', ['A valid email is required.']);
 
             return redirect(route('tenant.customers.index'));
         }
@@ -4948,7 +5025,7 @@ final class LaundryController
                  WHERE tenant_id = ?
                    AND machine_kind = ?
                    AND status = "available"
-                 ORDER BY machine_label ASC, machine_code ASC, id ASC
+                 ORDER BY machine_label ASC, id ASC
                  LIMIT 1'
             );
             $st->execute([$tenantId, $kind]);
@@ -5116,7 +5193,7 @@ final class LaundryController
             return null;
         }
         $st = $pdo->prepare(
-            'SELECT id, machine_code, machine_label, machine_kind, machine_type, credit_required, credit_balance, status
+            'SELECT id, machine_label, machine_kind, machine_type, credit_required, credit_balance, status
              FROM laundry_machines
              WHERE tenant_id = ? AND id = ?
              LIMIT 1'
@@ -5176,7 +5253,7 @@ final class LaundryController
         $seen = ['washer' => 0, 'dryer' => 0];
         $out = [];
         foreach ($machines as $machine) {
-            $kind = (string) ($machine['machine_kind'] ?? '');
+            $kind = strtolower(trim((string) ($machine['machine_kind'] ?? '')));
             if (! isset($limits[$kind])) {
                 continue;
             }
@@ -5200,7 +5277,9 @@ final class LaundryController
             'SELECT id
              FROM laundry_machines
              WHERE tenant_id = ? AND machine_kind = ?
-             ORDER BY machine_label ASC, machine_code ASC, id ASC
+             ORDER BY CASE WHEN status = "available" THEN 0 ELSE 1 END ASC,
+                      CASE WHEN credit_required = 1 AND credit_balance <= 0 THEN 1 ELSE 0 END ASC,
+                      machine_label ASC, id ASC
              LIMIT '.$limit
         );
         $st->execute([$tenantId, $kind]);
@@ -6197,6 +6276,56 @@ final class LaundryController
                 $orderId,
                 'Machine usage credit deduction',
                 (int) (Auth::user()['id'] ?? 0)
+            );
+        }
+    }
+
+    private function restoreMachineCreditsForOrder(PDO $pdo, int $tenantId, int $orderId): void
+    {
+        if ($tenantId < 1 || $orderId < 1) {
+            return;
+        }
+        $pendingByMachine = [];
+        try {
+            $st = $pdo->prepare(
+                'SELECT machine_id,
+                        SUM(CASE WHEN direction = "deduct" THEN amount WHEN direction = "restock" THEN -amount ELSE 0 END) AS pending_amount
+                 FROM laundry_machine_credit_movements
+                 WHERE tenant_id = ? AND order_id = ?
+                 GROUP BY machine_id
+                 HAVING pending_amount > 0'
+            );
+            $st->execute([$tenantId, $orderId]);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $machineId = (int) ($row['machine_id'] ?? 0);
+                $amount = (float) ($row['pending_amount'] ?? 0);
+                if ($machineId > 0 && $amount > 0) {
+                    $pendingByMachine[$machineId] = $amount;
+                }
+            }
+        } catch (\Throwable) {
+            return;
+        }
+        if ($pendingByMachine === []) {
+            return;
+        }
+        $update = $pdo->prepare(
+            'UPDATE laundry_machines
+             SET credit_balance = credit_balance + ?, updated_at = NOW()
+             WHERE tenant_id = ? AND id = ?'
+        );
+        $actorId = (int) (Auth::user()['id'] ?? 0);
+        foreach ($pendingByMachine as $machineId => $amount) {
+            $update->execute([round($amount, 4), $tenantId, (int) $machineId]);
+            $this->recordMachineCreditMovement(
+                $pdo,
+                $tenantId,
+                (int) $machineId,
+                'restock',
+                (float) $amount,
+                $orderId,
+                'Status revert to Pending credit restore',
+                $actorId > 0 ? $actorId : null
             );
         }
     }

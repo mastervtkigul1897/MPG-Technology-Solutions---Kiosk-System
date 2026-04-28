@@ -22,8 +22,19 @@ $showInLabels = [
 <div class="card mb-3">
     <div class="card-body">
         <h5 class="mb-1">Order Pricing</h5>
+        <p class="small text-muted mb-2">
+            Use this page to set up all service pricing and behavior before your team starts taking orders.
+        </p>
+        <ol class="small text-muted mb-2 ps-3">
+            <li><strong>Start from defaults:</strong> Each new shop already has core types: <strong>Drop-off</strong>, <strong>Wash only</strong>, <strong>Dry only</strong>, and <strong>Rinse only</strong>. These are required system types and cannot be deleted.</li>
+            <li><strong>Review core pricing first:</strong> Open each default type via <strong>Edit</strong>, then set base <strong>Price</strong>, optional <strong>Maximum Weight</strong>, and <strong>Excess Fee / kg</strong> if your store charges over-limit weight.</li>
+            <li><strong>Configure inventory deduction:</strong> Set <strong>Detergent qty</strong>, <strong>Fabcon qty</strong>, and <strong>Bleach qty</strong> per order type so stock movement is automatic and consistent per transaction.</li>
+            <li><strong>Control add-ons and rewards:</strong> Keep <strong>Show add-on supplies</strong> ON if you sell extra supplies per order, and enable <strong>Add to rewards</strong> only for services that should earn customer points.</li>
+            <li><strong>Add optional services:</strong> Click <strong>Add order type</strong> for extra offerings (for example <strong>Dry Cleaning</strong> or <strong>Other</strong>), choose the right <strong>Service behavior</strong>, assign where it shows (<strong>Drop Off</strong>, <strong>Self Service</strong>, or <strong>Both</strong>), then save.</li>
+            <li><strong>Know what is removable:</strong> Only optional/custom order types can be deleted. Core/default types stay available to protect standard laundry flow and reporting consistency.</li>
+        </ol>
         <p class="small text-muted mb-0">
-            Every shop keeps the four built-in types (<strong>Drop-off</strong>, <strong>Wash only</strong>, <strong>Dry only</strong>, <strong>Rinse only</strong>); they cannot be deleted. Add optional types such as <strong>Dry Cleaning</strong> or <strong>Other</strong> as needed—only those extras can be removed. Each type appears in <strong>Daily Sales → Add service</strong>. Use <strong>Detergent/Fabcon/Bleach qty</strong> to define inventory deduction per order type. Use <strong>Show add-on supplies</strong> for charged extras on top of the base price.
+            All active order types here appear in <strong>Transactions → Add service</strong>.
         </p>
     </div>
 </div>

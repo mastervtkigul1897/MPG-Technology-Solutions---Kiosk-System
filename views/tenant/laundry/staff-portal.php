@@ -357,7 +357,7 @@ $stockQtyLabel = static function (float $qty): string {
                 </div>
                 <div class="form-check mb-2">
                     <input class="form-check-input" type="checkbox" id="kioskInclusionAutofillEditable" value="1" <?= $kioskInclusionAutofillMode === 'editable' ? 'checked' : '' ?>>
-                    <label class="form-check-label" for="kioskInclusionAutofillEditable">Auto fill inclusions but editing is permitted</label>
+                    <label class="form-check-label" for="kioskInclusionAutofillEditable">Auto fill inclusions and adding qty is permitted</label>
                 </div>
                 <div class="small fw-semibold mb-1">Fold automation</div>
                 <div class="form-check">
@@ -815,18 +815,10 @@ $stockQtyLabel = static function (float $qty): string {
 
 <script>
 (() => {
-    const KIOSK_SCROLL_TOP_AFTER_SAVE_KEY = 'kioskScrollTopAfterSave';
     const kioskReferenceCode = <?= json_embed($referencePreview) ?>;
+    const transactionsIndexUrl = <?= json_encode(route('tenant.transactions.index'), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE) ?>;
     const trackMachineMovementEnabled = <?= $trackMachineMovementEnabled ? 'true' : 'false' ?>;
     let kioskEnableBluetoothPrint = <?= $enableBluetoothPrint ? 'true' : 'false' ?>;
-    try {
-        if (window.sessionStorage.getItem(KIOSK_SCROLL_TOP_AFTER_SAVE_KEY) === '1') {
-            window.sessionStorage.removeItem(KIOSK_SCROLL_TOP_AFTER_SAVE_KEY);
-            window.scrollTo({ top: 0, behavior: 'auto' });
-        }
-    } catch (_) {
-        // Ignore storage access errors and continue normally.
-    }
 
     const steps = Array.from(document.querySelectorAll('.kiosk-step'));
     const paymentMethod = document.getElementById('kioskPaymentMethod');
@@ -2352,12 +2344,7 @@ $stockQtyLabel = static function (float $qty): string {
                     { title: printResult?.printed ? 'Saved and printed' : 'Saved successfully', icon: 'success' }
                 );
             }
-            try {
-                window.sessionStorage.setItem(KIOSK_SCROLL_TOP_AFTER_SAVE_KEY, '1');
-            } catch (_) {
-                // Ignore storage access errors and continue with reload.
-            }
-            window.location.reload();
+            window.location.assign(transactionsIndexUrl);
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Could not save transaction.';
             showWarn(message);

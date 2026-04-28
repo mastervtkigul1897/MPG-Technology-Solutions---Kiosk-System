@@ -13,12 +13,12 @@
                 <input class="form-control" name="name" required>
             </div>
             <div class="col-md-3">
-                <label class="form-label mb-1">Contact (optional)</label>
-                <input class="form-control" name="contact">
+                <label class="form-label mb-1">Contact</label>
+                <input class="form-control" name="contact" required>
             </div>
             <div class="col-md-3">
-                <label class="form-label mb-1">Email (optional)</label>
-                <input type="email" class="form-control" name="email">
+                <label class="form-label mb-1">Email</label>
+                <input type="email" class="form-control" name="email" required>
             </div>
             <div class="col-md-2">
                 <label class="form-label mb-1">Birthday</label>
@@ -134,11 +134,11 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label mb-1" for="customer_edit_contact">Contact</label>
-                        <input class="form-control" id="customer_edit_contact" name="contact">
+                        <input class="form-control" id="customer_edit_contact" name="contact" required>
                     </div>
                     <div class="mb-3">
                         <label class="form-label mb-1" for="customer_edit_email">Email</label>
-                        <input class="form-control" id="customer_edit_email" name="email" type="email">
+                        <input class="form-control" id="customer_edit_email" name="email" type="email" required>
                     </div>
                     <div>
                         <label class="form-label mb-1" for="customer_edit_birthday">Birthday</label>

@@ -166,10 +166,31 @@ final class DashboardController
 
         $tenantId = (int) $user['tenant_id'];
         $pdo = App::db();
+        $dashboardSubscription = null;
 
         LaundrySchema::ensure($pdo);
         $this->ensureTimeLogPhotoColumns($pdo);
         $laundryStatusTrackingEnabled = $this->isLaundryStatusTrackingEnabled($pdo, $tenantId);
+        $warningDays = (int) App::config('subscription_warning_days', 7);
+        try {
+            $stExp = $pdo->prepare('SELECT license_expires_at FROM tenants WHERE id = ? LIMIT 1');
+            $stExp->execute([$tenantId]);
+            $trow = $stExp->fetch(PDO::FETCH_ASSOC) ?: null;
+            $expRaw = $trow['license_expires_at'] ?? null;
+            if ($expRaw !== null && $expRaw !== '') {
+                $expDate = date('Y-m-d', strtotime((string) $expRaw));
+                $todayCheck = date('Y-m-d');
+                $daysLeft = (int) floor((strtotime($expDate.' 00:00:00') - strtotime($todayCheck.' 00:00:00')) / 86400);
+                if ($daysLeft >= 0 && $daysLeft <= $warningDays) {
+                    $dashboardSubscription = [
+                        'expires_label' => date('M j, Y', strtotime($expDate)),
+                        'days_left' => $daysLeft,
+                    ];
+                }
+            }
+        } catch (\Throwable) {
+            $dashboardSubscription = null;
+        }
         $today = date('Y-m-d');
         $machineCreditFrom = trim((string) $request->query('machine_from', $today));
         $machineCreditTo = trim((string) $request->query('machine_to', $today));
@@ -426,6 +447,7 @@ final class DashboardController
             'clock_rows_today' => $clockRows,
             'free_dashboard_limited' => Auth::isTenantFreePlanRestricted($user),
             'can_use_attendance' => Auth::canUseAttendanceFeature($user),
+            'dashboard_subscription' => $dashboardSubscription,
         ]);
     }
 
@@ -973,10 +995,10 @@ final class DashboardController
     {
         try {
             $st = $pdo->prepare(
-                'SELECT id, machine_kind, machine_type, machine_code, machine_label, credit_required, credit_balance, status
+                'SELECT id, machine_kind, machine_type, machine_label, credit_required, credit_balance, status
                  FROM laundry_machines
                  WHERE tenant_id = ?
-                 ORDER BY machine_kind ASC, machine_label ASC, machine_code ASC, id ASC'
+                 ORDER BY machine_kind ASC, machine_label ASC, id ASC'
             );
             $st->execute([$tenantId]);
             $machines = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -987,7 +1009,6 @@ final class DashboardController
                 return array_map(static function (array $machine): array {
                     return [
                         'machine_label' => (string) ($machine['machine_label'] ?? ''),
-                        'machine_code' => (string) ($machine['machine_code'] ?? ''),
                         'credit_required' => (int) ($machine['credit_required'] ?? 0),
                         'opening' => max(0.0, (float) ($machine['credit_balance'] ?? 0)),
                         'restock' => 0.0,
@@ -1047,7 +1068,6 @@ final class DashboardController
                 $opening = max(0.0, $closing - $rangeDelta);
                 $rows[] = [
                     'machine_label' => (string) ($machine['machine_label'] ?? ''),
-                    'machine_code' => (string) ($machine['machine_code'] ?? ''),
                     'credit_required' => (int) ($machine['credit_required'] ?? 0),
                     'opening' => $opening,
                     'restock' => max(0.0, (float) ($restockByMachine[$machineId] ?? 0.0)),

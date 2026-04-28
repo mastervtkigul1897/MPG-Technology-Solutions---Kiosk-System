@@ -5,6 +5,17 @@
     Items beyond this are restricted until upgrade.
 </div>
 <?php endif; ?>
+<div class="alert alert-warning mb-3 border-0 shadow-sm">
+    <div class="fw-semibold mb-1">Gasul setup guide</div>
+    <ul class="small mb-0 ps-3">
+        <li><strong>Purpose:</strong> Gasul is treated as a tracked utility stock used during Drop-off processing when gas tracking is enabled in Kiosk Settings.</li>
+        <li><strong>Required item:</strong> Keep one inventory item named <strong>Gasul</strong> (usually category <strong>Other</strong>, unit <strong>tank</strong>), because this is the standard system reference for gas usage prompts.</li>
+        <li><strong>Stock control:</strong> Use <strong>Add stock</strong> and <strong>Reduce stock</strong> whenever you refill or consume gas so your remaining tank quantity stays accurate.</li>
+        <li><strong>Low stock alert:</strong> Set a practical <strong>Low stock threshold</strong> (example: 3) to highlight rows early and avoid running out during active operations.</li>
+        <li><strong>Cost tracking:</strong> Set <strong>Unit cost</strong> to monitor utility expenses and improve profitability review per period.</li>
+        <li><strong>Operational note:</strong> If Gasul tracking is OFF, orders can still proceed; when ON, the system enforces Gasul selection/usage according to your kiosk automation rules.</li>
+    </ul>
+</div>
 <div class="row g-3 mb-3">
     <div class="col-lg-6">
         <div class="card h-100">
