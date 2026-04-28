@@ -18,6 +18,8 @@ if (is_readable($envFile)) {
 }
 
 $get = static fn (string $key, ?string $default = null): ?string => $env[$key] ?? $_ENV[$key] ?? getenv($key) ?: $default;
+$smsApiKeysRaw = (string) ($get('SMS_API_KEYS', '') ?? '');
+$smsApiKeys = array_values(array_filter(array_map(static fn (string $v): string => trim($v), explode(',', $smsApiKeysRaw)), static fn (string $v): bool => $v !== ''));
 
 return [
     'name' => $get('APP_NAME', 'Laundry System'),
@@ -58,6 +60,11 @@ return [
         'rate_limit_login' => [10, 60],
         'rate_limit_general' => [120, 60],
         'rate_limit_checkout' => [20, 60],
+    ],
+    'sms_api' => [
+        // Comma-separated in .env, example: SMS_API_KEYS=key-one,key-two
+        'keys' => $smsApiKeys,
+        'require_https' => filter_var($get('SMS_API_REQUIRE_HTTPS', 'true'), FILTER_VALIDATE_BOOL),
     ],
     /** Raw ESC/POS over TCP (Wi-Fi/Ethernet thermal, usually port 9100). Server must reach printer IP. */
     'thermal_printer' => [

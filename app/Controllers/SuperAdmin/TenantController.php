@@ -22,6 +22,7 @@ final class TenantController
     private const FREE_PLAN_CODES = ['trial', 'free', 'free_trial', self::FREE_ACCESS_PLAN_CODE];
     private const FREE_TRIAL_DAYS = 7;
     private static ?bool $usersLastLoginColumnExists = null;
+    private static ?bool $tenantsLastSeenColumnExists = null;
 
     private static function planCodeFromMonths(int $months): string
     {
@@ -187,6 +188,23 @@ final class TenantController
         }
     }
 
+    private static function hasTenantsLastSeenColumn(PDO $pdo): bool
+    {
+        if (self::$tenantsLastSeenColumnExists === true) {
+            return true;
+        }
+        try {
+            $chk = $pdo->query("SHOW COLUMNS FROM `tenants` LIKE 'last_seen_at'");
+            $exists = $chk !== false && $chk->fetch(PDO::FETCH_ASSOC) !== false;
+            if ($exists) {
+                self::$tenantsLastSeenColumnExists = true;
+            }
+            return $exists;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     public function index(Request $request): Response
     {
         $pdo = App::db();
@@ -195,6 +213,7 @@ final class TenantController
             self::ensurePaidAmountColumn($pdo);
             self::ensureBranchColumns($pdo);
             $hasUsersLastLoginColumn = self::hasUsersLastLoginColumn($pdo);
+            $hasTenantsLastSeenColumn = self::hasTenantsLastSeenColumn($pdo);
             $search = trim((string) ($request->input('search')['value'] ?? ''));
             $join = ' FROM tenants t
                       LEFT JOIN users u ON u.tenant_id = t.id AND u.role = \'tenant_admin\'
@@ -226,7 +245,8 @@ final class TenantController
                 9 => 't.license_expires_at',
                 10 => 'u.email',
                 11 => $hasUsersLastLoginColumn ? 'u.last_login_at' : 'u.created_at',
-                12 => 't.is_active',
+                12 => $hasTenantsLastSeenColumn ? 't.last_seen_at' : 't.updated_at',
+                13 => 't.is_active',
             ];
             $orderBy = $orderColumnMap[$orderIdx] ?? 't.id';
 
@@ -234,7 +254,8 @@ final class TenantController
             $length = min(100, max(1, (int) $request->input('length', 25)));
 
             $ownerLastLoginSelect = $hasUsersLastLoginColumn ? 'u.last_login_at AS owner_last_login' : 'NULL AS owner_last_login';
-            $sql = 'SELECT t.*, u.email AS owner_email, '.$ownerLastLoginSelect.', mb.name AS main_branch_name'.$join.$where." ORDER BY $orderBy $orderDir LIMIT $length OFFSET $start";
+            $tenantLastSeenSelect = $hasTenantsLastSeenColumn ? 't.last_seen_at AS tenant_last_seen_at' : 'NULL AS tenant_last_seen_at';
+            $sql = 'SELECT t.*, u.email AS owner_email, '.$ownerLastLoginSelect.', '.$tenantLastSeenSelect.', mb.name AS main_branch_name'.$join.$where." ORDER BY $orderBy $orderDir LIMIT $length OFFSET $start";
             $st = $pdo->prepare($sql);
             $st->execute($params);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -320,6 +341,26 @@ final class TenantController
                     $lastLoginCell = '<span class="text-muted">Never</span>';
                 }
 
+                $tenantLastSeenRaw = trim((string) ($t['tenant_last_seen_at'] ?? ''));
+                if ($tenantLastSeenRaw !== '') {
+                    $seenTs = strtotime($tenantLastSeenRaw);
+                    if ($seenTs !== false) {
+                        $minutesAgo = (int) floor((time() - $seenTs) / 60);
+                        if ($minutesAgo <= 5) {
+                            $presenceBadge = '<span class="badge text-bg-success">Online</span>';
+                        } elseif ($minutesAgo <= 30) {
+                            $presenceBadge = '<span class="badge text-bg-warning text-dark">Recently active</span>';
+                        } else {
+                            $presenceBadge = '<span class="badge text-bg-secondary">Offline</span>';
+                        }
+                        $presenceCell = '<span class="text-nowrap">'.e(date('M j, Y g:i A', $seenTs)).'</span> '.$presenceBadge;
+                    } else {
+                        $presenceCell = '<span class="text-muted">Unknown</span>';
+                    }
+                } else {
+                    $presenceCell = '<span class="badge text-bg-secondary">Offline</span>';
+                }
+
                 $editBtn = '<button type="button" class="btn btn-sm btn-outline-secondary px-2 btn-edit-tenant" '
                     .'data-tenant-id="'.$id.'" '
                     .'data-tenant-name="'.e((string) ($t['name'] ?? '')).'" '
@@ -370,6 +411,7 @@ final class TenantController
                     'expires' => $expiresField,
                     'owner_email' => $ownerCell,
                     'last_login' => $lastLoginCell,
+                    'presence' => $presenceCell,
                     'status' => $status,
                     'actions' => $actions,
                 ];

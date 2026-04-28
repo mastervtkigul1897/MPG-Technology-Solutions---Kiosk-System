@@ -22,7 +22,10 @@ final class Application
             (new Response('Too Many Requests', 429))->send();
         }
 
-        if (in_array($req->method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+        if (
+            in_array($req->method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)
+            && ! $this->isCsrfExemptPath($req->path)
+        ) {
             if (! Csrf::validate($req->input('_token'))) {
                 if ($req->wantsJson()) {
                     (new Response(
@@ -139,5 +142,15 @@ final class Application
         });
 
         return $out;
+    }
+
+    private function isCsrfExemptPath(string $path): bool
+    {
+        // Bearer-protected API endpoints should be callable by external clients without CSRF session token.
+        if (str_starts_with($path, '/api/sms/')) {
+            return true;
+        }
+
+        return false;
     }
 }

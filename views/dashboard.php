@@ -18,16 +18,16 @@ if (! empty($is_super)): ?>
         <div class="col-md-4 col-lg-3">
             <div class="card h-100">
                 <div class="card-body">
-                    <small class="text-muted">Free Users</small>
-                    <h3 class="mb-0"><?= (int) ($superStats['free_users'] ?? 0) ?></h3>
+                    <small class="text-muted">Free Shops</small>
+                    <h3 class="mb-0"><?= (int) ($superStats['free_shops'] ?? 0) ?></h3>
                 </div>
             </div>
         </div>
         <div class="col-md-4 col-lg-3">
             <div class="card h-100">
                 <div class="card-body">
-                    <small class="text-muted">Premium Users</small>
-                    <h3 class="mb-0"><?= (int) ($superStats['premium_users'] ?? 0) ?></h3>
+                    <small class="text-muted">Premium Shops</small>
+                    <h3 class="mb-0"><?= (int) ($superStats['premium_shops'] ?? 0) ?></h3>
                 </div>
             </div>
         </div>
@@ -45,32 +45,32 @@ if (! empty($is_super)): ?>
         <div class="col-md-3">
             <div class="card h-100">
                 <div class="card-body">
-                    <small class="text-muted">1 Month Users</small>
-                    <h4 class="mb-0"><?= (int) ($superStats['one_month_users'] ?? 0) ?></h4>
+                    <small class="text-muted">1 Month Plan Shops</small>
+                    <h4 class="mb-0"><?= (int) ($superStats['one_month_plan_shops'] ?? 0) ?></h4>
                 </div>
             </div>
         </div>
         <div class="col-md-3">
             <div class="card h-100">
                 <div class="card-body">
-                    <small class="text-muted">3 Months Users</small>
-                    <h4 class="mb-0"><?= (int) ($superStats['three_month_users'] ?? 0) ?></h4>
+                    <small class="text-muted">3 Months Plan Shops</small>
+                    <h4 class="mb-0"><?= (int) ($superStats['three_month_plan_shops'] ?? 0) ?></h4>
                 </div>
             </div>
         </div>
         <div class="col-md-3">
             <div class="card h-100">
                 <div class="card-body">
-                    <small class="text-muted">6 Months Users</small>
-                    <h4 class="mb-0"><?= (int) ($superStats['six_month_users'] ?? 0) ?></h4>
+                    <small class="text-muted">6 Months Plan Shops</small>
+                    <h4 class="mb-0"><?= (int) ($superStats['six_month_plan_shops'] ?? 0) ?></h4>
                 </div>
             </div>
         </div>
         <div class="col-md-3">
             <div class="card h-100">
                 <div class="card-body">
-                    <small class="text-muted">12 Months Users</small>
-                    <h4 class="mb-0"><?= (int) ($superStats['twelve_month_users'] ?? 0) ?></h4>
+                    <small class="text-muted">12 Months Plan Shops</small>
+                    <h4 class="mb-0"><?= (int) ($superStats['twelve_month_plan_shops'] ?? 0) ?></h4>
                 </div>
             </div>
         </div>
@@ -95,10 +95,72 @@ if (! empty($is_super)): ?>
         </div>
     </div>
 
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
+                <h5 class="mb-0">SMS Queue (Manual Create)</h5>
+                <span class="small text-muted">For Android gateway polling</span>
+            </div>
+            <form method="POST" action="<?= e(route('super-admin.sms-queue.store')) ?>" class="row g-2 mb-3">
+                <?= csrf_field() ?>
+                <div class="col-md-3">
+                    <label class="form-label small mb-1" for="superSmsDeviceId">Device ID</label>
+                    <input type="text" class="form-control" id="superSmsDeviceId" name="device_id" placeholder="PHONE_01" maxlength="100" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small mb-1" for="superSmsPhone">Phone</label>
+                    <input type="text" class="form-control" id="superSmsPhone" name="phone" placeholder="+639171234567" maxlength="30" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small mb-1" for="superSmsMessage">Message</label>
+                    <input type="text" class="form-control" id="superSmsMessage" name="message" placeholder="Your laundry is ready." maxlength="1000" required>
+                </div>
+                <div class="col-md-2 d-grid align-self-end">
+                    <button type="submit" class="btn btn-primary">Create SMS Record</button>
+                </div>
+            </form>
+            <?php $smsQueueRows = (array) ($sms_queue_rows ?? []); ?>
+            <?php if ($smsQueueRows === []): ?>
+                <p class="text-muted mb-0">No SMS queue records yet.</p>
+            <?php else: ?>
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Device</th>
+                            <th>Phone</th>
+                            <th>Message</th>
+                            <th>Status</th>
+                            <th>Retry</th>
+                            <th>Created</th>
+                            <th>Sent At</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($smsQueueRows as $smsRow): ?>
+                            <tr>
+                                <td><?= (int) ($smsRow['id'] ?? 0) ?></td>
+                                <td><?= e((string) ($smsRow['device_id'] ?? '')) ?></td>
+                                <td><?= e((string) ($smsRow['phone'] ?? '')) ?></td>
+                                <td><?= e((string) ($smsRow['message'] ?? '')) ?></td>
+                                <td><span class="badge text-bg-secondary"><?= e((string) ($smsRow['status'] ?? 'pending')) ?></span></td>
+                                <td><?= (int) ($smsRow['retry_count'] ?? 0) ?></td>
+                                <td><?= e((string) ($smsRow['created_at'] ?? '')) ?></td>
+                                <td><?= e((string) ($smsRow['sent_at'] ?? '')) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
     <div class="card">
         <div class="card-body">
             <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
-                <h5 class="mb-0">Users Table (All columns except password)</h5>
+                <h5 class="mb-0">Users Table</h5>
                 <span class="small text-muted">Showing latest <?= count($usersRows) ?> rows</span>
             </div>
             <?php if ($usersColumns === []): ?>
@@ -113,14 +175,35 @@ if (! empty($is_super)): ?>
                             <?php foreach ($usersColumns as $col): ?>
                                 <th><?= e((string) $col) ?></th>
                             <?php endforeach; ?>
+                            <th class="text-end">Actions</th>
                         </tr>
                         </thead>
                         <tbody>
                         <?php foreach ($usersRows as $row): ?>
+                            <?php
+                            $rowUserId = (int) ($row['id'] ?? 0);
+                            $rowRole = strtolower(trim((string) ($row['role'] ?? '')));
+                            $rowEmail = trim((string) ($row['email'] ?? 'this user'));
+                            $isCurrentUser = $rowUserId > 0 && $rowUserId === (int) ((auth_user()['id'] ?? 0));
+                            $deleteAllowed = $rowUserId > 0 && ! $isCurrentUser && $rowRole !== 'super_admin';
+                            ?>
                             <tr>
                                 <?php foreach ($usersColumns as $col): ?>
                                     <td><?= e((string) ($row[$col] ?? '')) ?></td>
                                 <?php endforeach; ?>
+                                <td class="text-end">
+                                    <?php if ($deleteAllowed): ?>
+                                        <form method="POST" action="<?= e(route('super-admin.users.destroy', ['id' => $rowUserId])) ?>" class="d-inline" onsubmit="return confirm('Delete user <?= e(addslashes($rowEmail)) ?>? This action cannot be undone.');">
+                                            <?= csrf_field() ?>
+                                            <?= method_field('DELETE') ?>
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete user" aria-label="Delete user">
+                                                <i class="fa-solid fa-trash"></i>
+                                            </button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="text-muted small">—</span>
+                                    <?php endif; ?>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                         </tbody>

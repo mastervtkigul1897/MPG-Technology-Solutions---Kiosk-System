@@ -395,6 +395,7 @@ final class LaundrySchema
         self::addColumnIfMissing($pdo, 'users', 'work_days_csv', 'VARCHAR(64) NOT NULL DEFAULT \'1,2,3,4,5,6,7\' AFTER overtime_rate_per_hour');
         self::addColumnIfMissing($pdo, 'users', 'working_hours_per_day', 'DECIMAL(6,2) NOT NULL DEFAULT 8.00 AFTER work_days_csv');
         self::addColumnIfMissing($pdo, 'users', 'commission_eligible', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER working_hours_per_day');
+        self::addColumnIfMissing($pdo, 'tenants', 'last_seen_at', 'TIMESTAMP NULL DEFAULT NULL AFTER updated_at');
         self::addColumnIfMissing($pdo, 'laundry_reward_configs', 'reward_order_type_code', 'VARCHAR(64) NULL DEFAULT NULL AFTER reward_points_cost');
         self::addColumnIfMissing($pdo, 'laundry_reward_configs', 'reward_quantity', 'INT NOT NULL DEFAULT 1 AFTER reward_order_type_code');
         self::addColumnIfMissing($pdo, 'laundry_reward_redemptions', 'order_id', 'BIGINT UNSIGNED NULL DEFAULT NULL AFTER reward_name');

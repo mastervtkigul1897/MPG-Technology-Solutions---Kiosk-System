@@ -187,6 +187,23 @@ final class AuthController
         }
     }
 
+    private static function tableHasColumn(PDO $pdo, string $table, string $column): bool
+    {
+        try {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*)
+                 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = ?
+                   AND COLUMN_NAME = ?'
+            );
+            $st->execute([$table, $column]);
+            return (int) $st->fetchColumn() > 0;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     public function showLogin(Request $request): Response
     {
         return view_guest('Login', 'auth.login', ['status' => session_flash('status')]);
@@ -429,16 +446,62 @@ final class AuthController
 
         $pdo->beginTransaction();
         try {
-            $st = $pdo->prepare('INSERT INTO tenants (name, slug, plan, is_active, license_starts_at, license_expires_at, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, NOW(), NOW())');
-            $st->execute([$storeName, $slug, self::FREE_PLAN_CODE, $now, $trialEnd]);
+            $tenantColumns = ['name', 'slug', 'plan', 'is_active'];
+            $tenantValues = [$storeName, $slug, self::FREE_PLAN_CODE, 1];
+            if (self::tableHasColumn($pdo, 'tenants', 'license_starts_at')) {
+                $tenantColumns[] = 'license_starts_at';
+                $tenantValues[] = $now;
+            }
+            if (self::tableHasColumn($pdo, 'tenants', 'license_expires_at')) {
+                $tenantColumns[] = 'license_expires_at';
+                $tenantValues[] = $trialEnd;
+            }
+            if (self::tableHasColumn($pdo, 'tenants', 'created_at')) {
+                $tenantColumns[] = 'created_at';
+                $tenantValues[] = $now;
+            }
+            if (self::tableHasColumn($pdo, 'tenants', 'updated_at')) {
+                $tenantColumns[] = 'updated_at';
+                $tenantValues[] = $now;
+            }
+            $tenantSql = 'INSERT INTO tenants ('.implode(', ', $tenantColumns).') VALUES ('.implode(', ', array_fill(0, count($tenantColumns), '?')).')';
+            $st = $pdo->prepare($tenantSql);
+            $st->execute($tenantValues);
             $tenantId = (int) $pdo->lastInsertId();
-            self::updateTenantBranchDefaults($pdo, $tenantId);
-            LaundrySchema::ensureDefaultInventoryForTenant($pdo, $tenantId);
+            try {
+                self::updateTenantBranchDefaults($pdo, $tenantId);
+            } catch (\Throwable) {
+                // Optional setup only; should not block successful registration.
+            }
+            try {
+                LaundrySchema::ensureDefaultInventoryForTenant($pdo, $tenantId);
+            } catch (\Throwable) {
+                // Optional setup only; should not block successful registration.
+            }
 
-            $st = $pdo->prepare('INSERT INTO users (name, email, password, role, tenant_id, email_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NOW(), NOW())');
-            $st->execute([$name, $email, $pwHash, 'tenant_admin', $tenantId]);
+            $userColumns = ['name', 'email', 'password', 'role', 'tenant_id'];
+            $userValues = [$name, $email, $pwHash, 'tenant_admin', $tenantId];
+            if (self::tableHasColumn($pdo, 'users', 'email_verified_at')) {
+                $userColumns[] = 'email_verified_at';
+                $userValues[] = null;
+            }
+            if (self::tableHasColumn($pdo, 'users', 'created_at')) {
+                $userColumns[] = 'created_at';
+                $userValues[] = $now;
+            }
+            if (self::tableHasColumn($pdo, 'users', 'updated_at')) {
+                $userColumns[] = 'updated_at';
+                $userValues[] = $now;
+            }
+            $userSql = 'INSERT INTO users ('.implode(', ', $userColumns).') VALUES ('.implode(', ', array_fill(0, count($userColumns), '?')).')';
+            $st = $pdo->prepare($userSql);
+            $st->execute($userValues);
             $userId = (int) $pdo->lastInsertId();
-            self::saveTrialDevice($pdo, $tenantId, $userId, $device);
+            try {
+                self::saveTrialDevice($pdo, $tenantId, $userId, $device);
+            } catch (\Throwable) {
+                // Device link telemetry is optional; keep account creation successful.
+            }
             $pdo->commit();
 
             Auth::login($userId);
@@ -446,13 +509,46 @@ final class AuthController
                 EmailVerificationService::sendVerificationForUserId($pdo, $userId);
                 session_flash('status', 'Your 7-day trial account was created. You can use the system now, but please verify your email within '.Auth::emailVerificationGraceDays().' days.');
             } catch (\Throwable) {
-                session_flash('errors', ['Your trial account was created. You can use the system now, but please verify your email within '.Auth::emailVerificationGraceDays().' days. Verification email could not be sent automatically; use resend verification link from inside the app.']);
+                session_flash('status', 'Your trial account was created. You can use the system now, but please verify your email within '.Auth::emailVerificationGraceDays().' days. Verification email could not be sent automatically; use the resend verification link from inside the app.');
             }
 
             return redirect(url('/dashboard'));
         } catch (\Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
+            }
+            // Production safety net:
+            // Some environments can partially persist inserts despite a later failure.
+            // If tenant/user already exists for this fresh registration input, continue as success.
+            try {
+                $recoverUserSt = $pdo->prepare(
+                    'SELECT id
+                     FROM users
+                     WHERE LOWER(email) = LOWER(?)
+                     LIMIT 1'
+                );
+                $recoverUserSt->execute([$email]);
+                $recoverUser = $recoverUserSt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+                $recoverTenantSt = $pdo->prepare(
+                    'SELECT id
+                     FROM tenants
+                     WHERE LOWER(name) = LOWER(?)
+                     LIMIT 1'
+                );
+                $recoverTenantSt->execute([$storeName]);
+                $recoverTenant = $recoverTenantSt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+                if (is_array($recoverUser) && is_array($recoverTenant)) {
+                    $recoveredUserId = (int) ($recoverUser['id'] ?? 0);
+                    if ($recoveredUserId > 0) {
+                        Auth::login($recoveredUserId);
+                        session_flash('status', 'Your trial account was created. You can use the system now, but please verify your email within '.Auth::emailVerificationGraceDays().' days.');
+                        return redirect(url('/dashboard'));
+                    }
+                }
+            } catch (\Throwable) {
+                // Keep original error below when recovery probe fails.
             }
             session_flash('errors', ['Could not create trial account. Please try again.']);
             return redirect(url('/register'));

@@ -33,7 +33,13 @@
 
 <div class="card">
     <div class="card-body table-responsive">
-        <div class="small text-muted mb-2">Tip: Click a customer row to show existing transactions for this customer.</div>
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+            <div class="small text-muted">Tip: Click a customer row to show existing transactions for this customer.</div>
+            <div class="ms-auto" style="min-width: 240px;">
+                <label class="visually-hidden" for="customerListSearchInput">Search customer list</label>
+                <input type="search" class="form-control form-control-sm" id="customerListSearchInput" placeholder="Search customer..." autocomplete="off">
+            </div>
+        </div>
         <table class="table table-striped mb-0">
             <thead>
             <tr>
@@ -202,6 +208,7 @@
     const editEmail = document.getElementById('customer_edit_email');
     const editBirthday = document.getElementById('customer_edit_birthday');
     const customerRows = document.querySelectorAll('.js-customer-row');
+    const customerListSearchInput = document.getElementById('customerListSearchInput');
     const txModalEl = document.getElementById('customerTransactionsModal');
     const txModal = txModalEl ? new bootstrap.Modal(txModalEl) : null;
     const txSummary = document.getElementById('customerTransactionsSummary');
@@ -346,5 +353,14 @@
             open();
         });
     });
+    if (customerListSearchInput) {
+        customerListSearchInput.addEventListener('input', () => {
+            const query = (customerListSearchInput.value || '').trim().toLowerCase();
+            customerRows.forEach((row) => {
+                const text = (row.textContent || '').toLowerCase();
+                row.classList.toggle('d-none', query !== '' && !text.includes(query));
+            });
+        });
+    }
 })();
 </script>

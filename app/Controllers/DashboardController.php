@@ -96,36 +96,50 @@ final class DashboardController
                 $totalVerifiedShops = $stVerified !== false ? (int) $stVerified->fetchColumn() : 0;
             }
 
-            $userColumns = [];
+            $userColumns = ['id', 'name', 'email', 'email_verified_at', 'last_login_at', 'tenant_id'];
             $userRows = [];
+            $availableCols = [];
             $showColumnsSt = $pdo->query('SHOW COLUMNS FROM users');
-            $allUserColumns = [];
             if ($showColumnsSt !== false) {
                 foreach ($showColumnsSt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $col) {
                     $field = (string) ($col['Field'] ?? '');
-                    if ($field === '' || strtolower($field) === 'password') {
-                        continue;
+                    if ($field !== '') {
+                        $availableCols[$field] = true;
                     }
-                    $allUserColumns[] = $field;
                 }
             }
-            if ($allUserColumns !== []) {
-                $userColumns = $allUserColumns;
-                $selectCols = implode(', ', array_map(static fn (string $c): string => "`{$c}`", $allUserColumns));
-                $userRowsSt = $pdo->query("SELECT {$selectCols} FROM users ORDER BY id DESC LIMIT 500");
-                $userRows = $userRowsSt !== false ? ($userRowsSt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+            $selectParts = [
+                'id',
+                'name',
+                'email',
+                isset($availableCols['email_verified_at']) ? 'email_verified_at' : 'NULL AS email_verified_at',
+                isset($availableCols['last_login_at']) ? 'last_login_at' : 'NULL AS last_login_at',
+                isset($availableCols['tenant_id']) ? 'tenant_id' : 'NULL AS tenant_id',
+            ];
+            $selectCols = implode(', ', $selectParts);
+            $userRowsSt = $pdo->query("SELECT {$selectCols} FROM users ORDER BY id DESC LIMIT 500");
+            $userRows = $userRowsSt !== false ? ($userRowsSt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+            $smsQueueRows = [];
+            if ($this->hasTable($pdo, 'sms_queue')) {
+                $smsQueueSt = $pdo->query(
+                    'SELECT id, device_id, phone, message, status, retry_count, created_at, sent_at
+                     FROM sms_queue
+                     ORDER BY id DESC
+                     LIMIT 20'
+                );
+                $smsQueueRows = $smsQueueSt !== false ? ($smsQueueSt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
             }
 
             return view_page('Dashboard', 'dashboard', [
                 'is_super' => true,
                 'stats' => [
                     'overall_total_shops' => $overallTotalShops,
-                    'free_users' => $freeUsers,
-                    'premium_users' => $premiumUsers,
-                    'one_month_users' => (int) ($monthCounts['1m'] ?? 0),
-                    'three_month_users' => (int) ($monthCounts['3m'] ?? 0),
-                    'six_month_users' => (int) ($monthCounts['6m'] ?? 0),
-                    'twelve_month_users' => (int) ($monthCounts['12m'] ?? 0),
+                    'free_shops' => $freeUsers,
+                    'premium_shops' => $premiumUsers,
+                    'one_month_plan_shops' => (int) ($monthCounts['1m'] ?? 0),
+                    'three_month_plan_shops' => (int) ($monthCounts['3m'] ?? 0),
+                    'six_month_plan_shops' => (int) ($monthCounts['6m'] ?? 0),
+                    'twelve_month_plan_shops' => (int) ($monthCounts['12m'] ?? 0),
                     'total_main_branches' => $totalMainBranches,
                     'total_sub_branches' => $totalSubBranches,
                     'total_verified_shops' => $totalVerifiedShops,
@@ -133,6 +147,7 @@ final class DashboardController
                 ],
                 'users_columns' => $userColumns,
                 'users_rows' => $userRows,
+                'sms_queue_rows' => $smsQueueRows,
             ]);
         }
 
@@ -412,6 +427,95 @@ final class DashboardController
             'free_dashboard_limited' => Auth::isTenantFreePlanRestricted($user),
             'can_use_attendance' => Auth::canUseAttendanceFeature($user),
         ]);
+    }
+
+    public function superAdminDeleteUser(Request $request, string $id): Response
+    {
+        $actor = Auth::user();
+        if (! $actor || ($actor['role'] ?? '') !== 'super_admin') {
+            return new Response('Forbidden.', 403);
+        }
+        $targetUserId = (int) $id;
+        if ($targetUserId < 1) {
+            session_flash('errors', ['Invalid user ID.']);
+            return redirect(url('/dashboard'));
+        }
+        $actorId = (int) ($actor['id'] ?? 0);
+        if ($targetUserId === $actorId) {
+            session_flash('errors', ['You cannot delete your own account.']);
+            return redirect(url('/dashboard'));
+        }
+
+        $pdo = App::db();
+        $st = $pdo->prepare('SELECT id, role, email FROM users WHERE id = ? LIMIT 1');
+        $st->execute([$targetUserId]);
+        $target = $st->fetch(PDO::FETCH_ASSOC);
+        if (! is_array($target)) {
+            session_flash('errors', ['User not found.']);
+            return redirect(url('/dashboard'));
+        }
+        if (strtolower(trim((string) ($target['role'] ?? ''))) === 'super_admin') {
+            session_flash('errors', ['Super admin users cannot be deleted from this table.']);
+            return redirect(url('/dashboard'));
+        }
+
+        try {
+            $pdo->prepare('DELETE FROM users WHERE id = ? LIMIT 1')->execute([$targetUserId]);
+            session_flash('status', 'User deleted successfully.');
+        } catch (\Throwable) {
+            session_flash('errors', ['Could not delete user.']);
+        }
+
+        return redirect(url('/dashboard'));
+    }
+
+    public function superAdminSmsQueueStore(Request $request): Response
+    {
+        $actor = Auth::user();
+        if (! $actor || ($actor['role'] ?? '') !== 'super_admin') {
+            return new Response('Forbidden.', 403);
+        }
+
+        $deviceId = trim((string) $request->input('device_id', ''));
+        $phone = trim((string) $request->input('phone', ''));
+        $message = trim((string) $request->input('message', ''));
+
+        if (! preg_match('/^[A-Za-z0-9_\-]{1,100}$/', $deviceId)) {
+            session_flash('errors', ['Invalid Device ID. Use letters, numbers, underscore, or dash only.']);
+            return redirect(url('/dashboard'));
+        }
+        if (! preg_match('/^\+?[0-9]{10,15}$/', $phone)) {
+            session_flash('errors', ['Invalid phone format. Use 10 to 15 digits, optional leading +.']);
+            return redirect(url('/dashboard'));
+        }
+        if ($message === '') {
+            session_flash('errors', ['Message is required.']);
+            return redirect(url('/dashboard'));
+        }
+        if (mb_strlen($message) > 1000) {
+            session_flash('errors', ['Message is too long. Maximum is 1000 characters.']);
+            return redirect(url('/dashboard'));
+        }
+
+        $pdo = App::db();
+        if (! $this->hasTable($pdo, 'sms_queue')) {
+            session_flash('errors', ['SMS queue table is missing. Run storage migrations first.']);
+            return redirect(url('/dashboard'));
+        }
+        try {
+            $st = $pdo->prepare(
+                'INSERT INTO sms_queue
+                 (device_id, phone, message, status, retry_count, error_message, created_at, sent_at, updated_at)
+                 VALUES (?, ?, ?, "pending", 0, NULL, NOW(), NULL, NOW())'
+            );
+            $st->execute([$deviceId, $phone, $message]);
+            session_flash('status', 'SMS record created. Your phone app can now pull it.');
+        } catch (\Throwable $e) {
+            error_log('Super admin SMS queue insert failed: '.$e->getMessage());
+            session_flash('errors', ['Could not create SMS record.']);
+        }
+
+        return redirect(url('/dashboard'));
     }
 
     /**
@@ -1244,9 +1348,15 @@ final class DashboardController
         }
         try {
             foreach ($columns as $column) {
-                $st = $pdo->prepare("SHOW COLUMNS FROM `{$table}` LIKE ?");
-                $st->execute([$column]);
-                if (! $st->fetch(PDO::FETCH_ASSOC)) {
+                $st = $pdo->prepare(
+                    'SELECT COUNT(*)
+                     FROM information_schema.COLUMNS
+                     WHERE TABLE_SCHEMA = DATABASE()
+                       AND TABLE_NAME = ?
+                       AND COLUMN_NAME = ?'
+                );
+                $st->execute([$table, $column]);
+                if ((int) $st->fetchColumn() < 1) {
                     return false;
                 }
             }

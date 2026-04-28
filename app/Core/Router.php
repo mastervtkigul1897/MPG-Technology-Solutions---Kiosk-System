@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Core;
 
 use App\Controllers\AuthController;
+use App\Controllers\Api\SmsGatewayController;
 use App\Controllers\DashboardController;
 use App\Controllers\HomeController;
 use App\Controllers\ProfileController;
@@ -84,6 +85,7 @@ final class Router
     private function applyMiddleware(Request $request, array $mw): ?Response
     {
         $user = Auth::user();
+        $this->touchTenantPresence($user);
         if ($user && ($user['role'] ?? '') === 'cashier' && str_starts_with($request->path, '/tenant/')) {
             $hasTenantAccessRule = false;
             $hasTenantAdminRoleRule = false;
@@ -251,6 +253,33 @@ final class Router
         return null;
     }
 
+    private function touchTenantPresence(?array $user): void
+    {
+        if (! is_array($user)) {
+            return;
+        }
+        $role = strtolower(trim((string) ($user['role'] ?? '')));
+        if (! in_array($role, ['tenant_admin', 'cashier'], true)) {
+            return;
+        }
+        $tenantId = (int) ($user['tenant_id'] ?? 0);
+        if ($tenantId < 1) {
+            return;
+        }
+        $now = time();
+        $lastTick = (int) ($_SESSION['mpg_tenant_presence_touch_at'] ?? 0);
+        if ($lastTick > 0 && ($now - $lastTick) < 60) {
+            return;
+        }
+        try {
+            $pdo = App::db();
+            $pdo->prepare('UPDATE tenants SET last_seen_at = NOW() WHERE id = ? LIMIT 1')->execute([$tenantId]);
+            $_SESSION['mpg_tenant_presence_touch_at'] = $now;
+        } catch (\Throwable) {
+            // Presence telemetry should never block normal routing.
+        }
+    }
+
     private function registerRoutes(): void
     {
         $r = function (array $methods, string $pattern, string $handler, string $name, array $mw = []) {
@@ -279,12 +308,17 @@ final class Router
         $r(['POST'], '#^/email/verification-notification$#', AuthController::class.'::resendVerification', 'verification.resend', ['auth']);
         $r(['GET'], '#^/verify-email$#', AuthController::class.'::verifyEmail', 'verification.verify');
         $r(['POST'], '#^/logout$#', AuthController::class.'::logout', 'logout', ['auth']);
+        $r(['POST'], '#^/api/sms/create$#', SmsGatewayController::class.'::create', 'api.sms.create');
+        $r(['GET'], '#^/api/sms/pending$#', SmsGatewayController::class.'::pending', 'api.sms.pending');
+        $r(['POST'], '#^/api/sms/update-status$#', SmsGatewayController::class.'::updateStatus', 'api.sms.update-status');
 
         $r(['GET'], '#^/subscription-ended$#', AuthController::class.'::subscriptionEnded', 'subscription-ended', ['auth']);
 
         $r(['GET'], '#^/dashboard$#', DashboardController::class.'::index', 'dashboard', ['auth', 'tenant.active', 'tenant.subscription']);
         $r(['POST'], '#^/dashboard/time-in$#', DashboardController::class.'::timeIn', 'dashboard.time-in', ['auth', 'tenant.active', 'tenant.subscription']);
         $r(['POST'], '#^/dashboard/time-out$#', DashboardController::class.'::timeOut', 'dashboard.time-out', ['auth', 'tenant.active', 'tenant.subscription']);
+        $r(['POST'], '#^/super-admin/sms-queue$#', DashboardController::class.'::superAdminSmsQueueStore', 'super-admin.sms-queue.store', ['auth', 'role:super_admin']);
+        $r(['DELETE'], '#^/super-admin/users/(\d+)$#', DashboardController::class.'::superAdminDeleteUser', 'super-admin.users.destroy', ['auth', 'role:super_admin']);
 
         $r(['GET'], '#^/profile$#', ProfileController::class.'::edit', 'profile.edit', ['auth', 'tenant.active', 'tenant.subscription', 'tenant.clock_in']);
         $r(['PATCH'], '#^/profile$#', ProfileController::class.'::update', 'profile.update', ['auth', 'tenant.active', 'tenant.subscription', 'tenant.clock_in']);

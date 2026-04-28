@@ -89,6 +89,7 @@
                     <th>Subscription ends</th>
                     <th>Store owner email</th>
                     <th>Last login</th>
+                    <th>Presence</th>
                     <th>Status</th>
                     <th class="text-end">Actions</th>
                 </tr>
@@ -226,8 +227,9 @@
             { targets: 9, responsivePriority: 4 },
             { targets: 10, responsivePriority: 100 },
             { targets: 11, responsivePriority: 6 },
-            { targets: 12, responsivePriority: 3 },
-            { targets: 13, orderable: false, searchable: false, responsivePriority: 5 },
+            { targets: 12, responsivePriority: 8 },
+            { targets: 13, responsivePriority: 3 },
+            { targets: 14, orderable: false, searchable: false, responsivePriority: 5 },
             { targets: hiddenByViewport, visible: false },
         ],
         columns: [
@@ -243,6 +245,7 @@
             { data: 'expires' },
             { data: 'owner_email' },
             { data: 'last_login' },
+            { data: 'presence' },
             { data: 'status' },
             { data: 'actions' },
         ],
