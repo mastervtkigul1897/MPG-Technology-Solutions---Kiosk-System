@@ -394,6 +394,8 @@ final class LaundrySchema
         self::addColumnIfMissing($pdo, 'users', 'work_days_csv', 'VARCHAR(64) NOT NULL DEFAULT \'1,2,3,4,5,6,7\' AFTER overtime_rate_per_hour');
         self::addColumnIfMissing($pdo, 'users', 'working_hours_per_day', 'DECIMAL(6,2) NOT NULL DEFAULT 8.00 AFTER work_days_csv');
         self::addColumnIfMissing($pdo, 'users', 'commission_eligible', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER working_hours_per_day');
+        self::addColumnIfMissing($pdo, 'users', 'last_seen_at', 'TIMESTAMP NULL DEFAULT NULL AFTER last_login_at');
+        self::addColumnIfMissing($pdo, 'users', 'is_online', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER last_seen_at');
         self::addColumnIfMissing($pdo, 'tenants', 'last_seen_at', 'TIMESTAMP NULL DEFAULT NULL AFTER updated_at');
         self::addColumnIfMissing($pdo, 'laundry_reward_configs', 'reward_order_type_code', 'VARCHAR(64) NULL DEFAULT NULL AFTER reward_points_cost');
         self::addColumnIfMissing($pdo, 'laundry_reward_configs', 'reward_quantity', 'INT NOT NULL DEFAULT 1 AFTER reward_order_type_code');
@@ -411,6 +413,20 @@ final class LaundrySchema
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'track_gasul_usage', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER editable_order_date');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'track_machine_movement', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER laundry_status_tracking_enabled');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'default_drying_minutes', 'INT NULL DEFAULT NULL AFTER track_machine_movement');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'pickup_sms_enabled', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER default_drying_minutes');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'pickup_sms_device_id', 'VARCHAR(100) NULL DEFAULT NULL AFTER pickup_sms_enabled');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'pickup_sms_template', 'TEXT NULL AFTER pickup_sms_device_id');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'pickup_email_enabled', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER pickup_sms_template');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'pickup_email_subject', 'VARCHAR(180) NULL DEFAULT NULL AFTER pickup_email_enabled');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'pickup_email_template', 'TEXT NULL AFTER pickup_email_subject');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'pickup_contact_shop_email', 'VARCHAR(180) NULL DEFAULT NULL AFTER pickup_email_template');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'pickup_contact_shop_phone', 'VARCHAR(30) NULL DEFAULT NULL AFTER pickup_contact_shop_email');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'sms_daily_credits', 'INT NOT NULL DEFAULT 30 AFTER pickup_email_template');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'sms_extra_credits', 'INT NOT NULL DEFAULT 0 AFTER sms_daily_credits');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'sms_credits_last_reset_date', 'DATE NULL DEFAULT NULL AFTER sms_extra_credits');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'customer_contact_required', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER sms_credits_last_reset_date');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'customer_email_required', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER customer_contact_required');
+        self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'machine_global_credit_balance', 'DECIMAL(16,4) NOT NULL DEFAULT 0 AFTER customer_email_required');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'kiosk_inclusion_autofill_mode', 'VARCHAR(20) NOT NULL DEFAULT "off" AFTER track_gasul_usage');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'kiosk_fold_autofill_mode', 'VARCHAR(20) NOT NULL DEFAULT "off" AFTER kiosk_inclusion_autofill_mode');
         self::addColumnIfMissing($pdo, 'laundry_branch_configs', 'kiosk_autofill_order_type_codes', 'TEXT NULL AFTER kiosk_fold_autofill_mode');
@@ -431,6 +447,8 @@ final class LaundrySchema
         self::addColumnIfMissing($pdo, 'laundry_orders', 'drying_end_at', 'DATETIME NULL DEFAULT NULL AFTER drying_started_at');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'movement_completed_at', 'DATETIME NULL DEFAULT NULL AFTER drying_end_at');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'movement_last_error', 'VARCHAR(255) NULL DEFAULT NULL AFTER movement_completed_at');
+        self::addColumnIfMissing($pdo, 'laundry_orders', 'pickup_sms_notified_at', 'DATETIME NULL DEFAULT NULL AFTER movement_last_error');
+        self::addColumnIfMissing($pdo, 'laundry_orders', 'pickup_email_notified_at', 'DATETIME NULL DEFAULT NULL AFTER pickup_sms_notified_at');
         self::addColumnIfMissing($pdo, 'laundry_inventory_items', 'category', 'VARCHAR(40) NOT NULL DEFAULT \'other\' AFTER name');
         self::addColumnIfMissing($pdo, 'laundry_inventory_items', 'show_item_in', 'VARCHAR(20) NOT NULL DEFAULT \'both\' AFTER category');
         self::addColumnIfMissing($pdo, 'laundry_inventory_items', 'image_path', 'VARCHAR(255) NULL DEFAULT NULL AFTER unit_cost');
@@ -451,6 +469,7 @@ final class LaundrySchema
         self::addColumnIfMissing($pdo, 'laundry_orders', 'split_cash_amount', 'DECIMAL(16,4) NOT NULL DEFAULT 0 AFTER payment_status');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'split_online_amount', 'DECIMAL(16,4) NOT NULL DEFAULT 0 AFTER split_cash_amount');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'split_online_method', 'VARCHAR(30) NULL DEFAULT NULL AFTER split_online_amount');
+        self::addColumnIfMissing($pdo, 'laundry_orders', 'payment_reference_no', 'VARCHAR(120) NULL DEFAULT NULL AFTER split_online_method');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'service_weight', 'DECIMAL(10,3) NULL DEFAULT NULL AFTER dry_minutes');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'actual_weight_kg', 'DECIMAL(10,3) NULL DEFAULT NULL AFTER service_weight');
         self::addColumnIfMissing($pdo, 'laundry_orders', 'excess_weight_kg', 'DECIMAL(10,3) NOT NULL DEFAULT 0 AFTER actual_weight_kg');
@@ -507,6 +526,20 @@ final class LaundrySchema
         self::addColumnIfMissing($pdo, 'laundry_machines', 'machine_type', 'VARCHAR(20) NOT NULL DEFAULT \'c5\' AFTER machine_kind');
         self::addColumnIfMissing($pdo, 'laundry_machines', 'credit_required', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER machine_type');
         self::addColumnIfMissing($pdo, 'laundry_machines', 'credit_balance', 'DECIMAL(16,4) NOT NULL DEFAULT 0 AFTER credit_required');
+        $pdo->exec(
+            'CREATE TABLE IF NOT EXISTS laundry_machine_global_credit_movements (
+                id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                tenant_id BIGINT UNSIGNED NOT NULL,
+                order_id BIGINT UNSIGNED DEFAULT NULL,
+                direction ENUM("deduct","restock") NOT NULL,
+                amount DECIMAL(16,4) NOT NULL DEFAULT 0,
+                note VARCHAR(255) DEFAULT NULL,
+                created_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY laundry_machine_global_credit_mv_tenant_idx (tenant_id, created_at),
+                KEY laundry_machine_global_credit_mv_order_idx (tenant_id, order_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        );
     }
 
     private static function widenOrderTypeColumn(PDO $pdo): void

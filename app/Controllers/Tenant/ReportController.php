@@ -203,6 +203,7 @@ final class ReportController
         $inventoryOutTotals = $this->fetchInventoryOutTotals($pdo, $tenantId, $rangeStart, $rangeEnd);
         $inventoryLedgerRows = $this->fetchInventoryLedgerRows($pdo, $tenantId, $rangeStart, $rangeEnd);
         $machineCreditLedgerRows = $this->fetchMachineCreditLedgerRows($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $machineCreditUsageRows = $this->fetchMachineCreditUsageRows($pdo, $tenantId, $rangeStart, $rangeEnd);
         $machineIdleRows = $this->fetchMachineIdleRows($pdo, $tenantId, $rangeStart, $rangeEnd);
 
         $stTop = $pdo->prepare(
@@ -316,6 +317,7 @@ final class ReportController
                 'total_items_out_total' => (float) ($inventoryOutTotals['total_qty'] ?? 0.0),
                 'inventory_ledger_rows' => $inventoryLedgerRows,
                 'machine_credit_ledger_rows' => $machineCreditLedgerRows,
+                'machine_credit_usage_rows' => $machineCreditUsageRows,
                 'machine_idle_rows' => $machineIdleRows,
             ],
             'chart' => $chartSeries,
@@ -531,6 +533,7 @@ final class ReportController
         $serviceModeSummary = $this->fetchServiceModeSummary($pdo, $tenantId, $rangeStart, $rangeEnd);
         $inventoryLedgerRows = $this->fetchInventoryLedgerRows($pdo, $tenantId, $rangeStart, $rangeEnd);
         $machineCreditLedgerRows = $this->fetchMachineCreditLedgerRows($pdo, $tenantId, $rangeStart, $rangeEnd);
+        $machineCreditUsageRows = $this->fetchMachineCreditUsageRows($pdo, $tenantId, $rangeStart, $rangeEnd);
         $machineIdleRows = $this->fetchMachineIdleRows($pdo, $tenantId, $rangeStart, $rangeEnd);
         $dailyOutsData = $this->fetchDailyOutsData($pdo, $tenantId, $from, $to);
         $chartSeries = $this->buildChartSeries($pdo, $tenantId, $from, $to);
@@ -667,6 +670,14 @@ final class ReportController
                 (float) ($row['restock'] ?? 0),
                 (float) ($row['usage'] ?? 0),
                 (float) ($row['closing'] ?? 0),
+            ];
+        }
+        $sheetRows['Machine credit usage by machine'] = [['Machine', 'Usage count', 'Deducted from overall credits']];
+        foreach ($machineCreditUsageRows as $row) {
+            $sheetRows['Machine credit usage by machine'][] = [
+                (string) ($row['machine_label'] ?? ''),
+                (int) ($row['usage_count'] ?? 0),
+                (float) ($row['deducted_credits'] ?? 0),
             ];
         }
         $sheetRows['Machine idle time'] = [['Machine', 'Idle hours', 'Idle gaps', 'Longest idle (hours)', 'Longest idle range', 'Usage logs']];
@@ -1162,10 +1173,63 @@ final class ReportController
      */
     private function fetchMachineCreditLedgerRows(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
     {
-        $rows = [];
+        try {
+            $currentSt = $pdo->prepare('SELECT COALESCE(machine_global_credit_balance, 0) FROM laundry_branch_configs WHERE tenant_id = ? LIMIT 1');
+            $currentSt->execute([$tenantId]);
+            $current = max(0.0, (float) ($currentSt->fetchColumn() ?: 0.0));
+            if (! $this->hasTable($pdo, 'laundry_machine_global_credit_movements')) {
+                return [[
+                    'machine_label' => 'Overall credits',
+                    'credit_required' => 1,
+                    'opening' => $current,
+                    'restock' => 0.0,
+                    'usage' => 0.0,
+                    'closing' => $current,
+                ]];
+            }
+            $rangeSt = $pdo->prepare(
+                'SELECT
+                    COALESCE(SUM(CASE WHEN direction = "restock" THEN amount WHEN direction = "deduct" THEN -amount ELSE 0 END), 0) AS signed_amount,
+                    COALESCE(SUM(CASE WHEN direction = "restock" THEN amount ELSE 0 END), 0) AS restock_amount,
+                    COALESCE(SUM(CASE WHEN direction = "deduct" THEN amount ELSE 0 END), 0) AS usage_amount
+                 FROM laundry_machine_global_credit_movements
+                 WHERE tenant_id = ?
+                   AND created_at BETWEEN ? AND ?'
+            );
+            $rangeSt->execute([$tenantId, $rangeStart, $rangeEnd]);
+            $rangeRow = $rangeSt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $afterSt = $pdo->prepare(
+                'SELECT COALESCE(SUM(CASE WHEN direction = "restock" THEN amount WHEN direction = "deduct" THEN -amount ELSE 0 END), 0) AS signed_amount
+                 FROM laundry_machine_global_credit_movements
+                 WHERE tenant_id = ?
+                   AND created_at > ?'
+            );
+            $afterSt->execute([$tenantId, $rangeEnd]);
+            $afterDelta = (float) ($afterSt->fetchColumn() ?: 0.0);
+            $rangeDelta = (float) ($rangeRow['signed_amount'] ?? 0.0);
+            $closing = max(0.0, $current - $afterDelta);
+            $opening = max(0.0, $closing - $rangeDelta);
+            return [[
+                'machine_label' => 'Overall credits',
+                'credit_required' => 1,
+                'opening' => $opening,
+                'restock' => max(0.0, (float) ($rangeRow['restock_amount'] ?? 0.0)),
+                'usage' => max(0.0, (float) ($rangeRow['usage_amount'] ?? 0.0)),
+                'closing' => $closing,
+            ]];
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @return list<array{machine_label:string,usage_count:int,deducted_credits:float}>
+     */
+    private function fetchMachineCreditUsageRows(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
+    {
         try {
             $st = $pdo->prepare(
-                'SELECT id, machine_label, credit_required, credit_balance
+                'SELECT id, machine_label, credit_required
                  FROM laundry_machines
                  WHERE tenant_id = ?
                  ORDER BY machine_kind ASC, machine_label ASC, id ASC'
@@ -1175,85 +1239,58 @@ final class ReportController
             if ($machines === []) {
                 return [];
             }
-            if (! $this->hasTable($pdo, 'laundry_machine_credit_movements')) {
-                foreach ($machines as $machine) {
-                    $current = max(0.0, (float) ($machine['credit_balance'] ?? 0));
-                    $rows[] = [
-                        'machine_label' => (string) ($machine['machine_label'] ?? ''),
-                        'credit_required' => (int) ($machine['credit_required'] ?? 0),
-                        'opening' => $current,
-                        'restock' => 0.0,
-                        'usage' => 0.0,
-                        'closing' => $current,
-                    ];
-                }
-                return $rows;
-            }
-
-            $signedRangeByMachine = [];
-            $restockByMachine = [];
-            $usageByMachine = [];
-            $signedAfterByMachine = [];
-
-            $mvRange = $pdo->prepare(
-                'SELECT machine_id,
-                        COALESCE(SUM(CASE WHEN direction = "restock" THEN amount WHEN direction = "deduct" THEN -amount ELSE 0 END),0) AS signed_amount,
-                        COALESCE(SUM(CASE WHEN direction = "restock" THEN amount ELSE 0 END),0) AS restock_amount,
-                        COALESCE(SUM(CASE WHEN direction = "deduct" THEN amount ELSE 0 END),0) AS usage_amount
-                 FROM laundry_machine_credit_movements
-                 WHERE tenant_id = ?
-                   AND created_at BETWEEN ? AND ?
-                 GROUP BY machine_id'
-            );
-            $mvRange->execute([$tenantId, $rangeStart, $rangeEnd]);
-            foreach ($mvRange->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
-                $machineId = (int) ($row['machine_id'] ?? 0);
-                if ($machineId < 1) {
-                    continue;
-                }
-                $signedRangeByMachine[$machineId] = (float) ($row['signed_amount'] ?? 0);
-                $restockByMachine[$machineId] = max(0.0, (float) ($row['restock_amount'] ?? 0));
-                $usageByMachine[$machineId] = max(0.0, (float) ($row['usage_amount'] ?? 0));
-            }
-
-            $mvAfter = $pdo->prepare(
-                'SELECT machine_id,
-                        COALESCE(SUM(CASE WHEN direction = "restock" THEN amount WHEN direction = "deduct" THEN -amount ELSE 0 END),0) AS signed_amount
-                 FROM laundry_machine_credit_movements
-                 WHERE tenant_id = ?
-                   AND created_at > ?
-                 GROUP BY machine_id'
-            );
-            $mvAfter->execute([$tenantId, $rangeEnd]);
-            foreach ($mvAfter->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
-                $machineId = (int) ($row['machine_id'] ?? 0);
-                if ($machineId < 1) {
-                    continue;
-                }
-                $signedAfterByMachine[$machineId] = (float) ($row['signed_amount'] ?? 0);
-            }
-
+            $rowsByMachineId = [];
             foreach ($machines as $machine) {
                 $machineId = (int) ($machine['id'] ?? 0);
-                $current = max(0.0, (float) ($machine['credit_balance'] ?? 0));
-                $rangeDelta = (float) ($signedRangeByMachine[$machineId] ?? 0.0);
-                $afterDelta = (float) ($signedAfterByMachine[$machineId] ?? 0.0);
-                $closing = max(0.0, $current - $afterDelta);
-                $opening = max(0.0, $closing - $rangeDelta);
-                $rows[] = [
-                    'machine_label' => (string) ($machine['machine_label'] ?? ''),
-                    'credit_required' => (int) ($machine['credit_required'] ?? 0),
-                    'opening' => $opening,
-                    'restock' => max(0.0, (float) ($restockByMachine[$machineId] ?? 0.0)),
-                    'usage' => max(0.0, (float) ($usageByMachine[$machineId] ?? 0.0)),
-                    'closing' => $closing,
+                if ($machineId < 1 || (int) ($machine['credit_required'] ?? 0) !== 1) {
+                    continue;
+                }
+                $rowsByMachineId[$machineId] = [
+                    'machine_label' => (string) ($machine['machine_label'] ?? 'Machine'),
+                    'usage_count' => 0,
+                    'deducted_credits' => 0.0,
                 ];
             }
+            if ($rowsByMachineId === []) {
+                return [];
+            }
+            $orderSt = $pdo->prepare(
+                'SELECT washer_machine_id, dryer_machine_id, wash_qty
+                 FROM laundry_orders
+                 WHERE tenant_id = ?
+                   AND created_at BETWEEN ? AND ?
+                   AND COALESCE(is_void, 0) = 0
+                   AND status <> "void"
+                   AND (
+                       (washer_machine_id IS NOT NULL AND washer_machine_id > 0)
+                       OR (dryer_machine_id IS NOT NULL AND dryer_machine_id > 0)
+                   )'
+            );
+            $orderSt->execute([$tenantId, $rangeStart, $rangeEnd]);
+            foreach ($orderSt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $order) {
+                $usageQty = max(1, (int) ($order['wash_qty'] ?? 1));
+                $machineIds = [];
+                $washerId = (int) ($order['washer_machine_id'] ?? 0);
+                $dryerId = (int) ($order['dryer_machine_id'] ?? 0);
+                if ($washerId > 0) {
+                    $machineIds[] = $washerId;
+                }
+                if ($dryerId > 0 && $dryerId !== $washerId) {
+                    $machineIds[] = $dryerId;
+                }
+                foreach ($machineIds as $machineId) {
+                    if (! isset($rowsByMachineId[$machineId])) {
+                        continue;
+                    }
+                    $rowsByMachineId[$machineId]['usage_count']++;
+                    $rowsByMachineId[$machineId]['deducted_credits'] += (float) $usageQty;
+                }
+            }
+
+            return array_values($rowsByMachineId);
         } catch (\Throwable) {
             return [];
         }
-
-        return $rows;
     }
 
     /**

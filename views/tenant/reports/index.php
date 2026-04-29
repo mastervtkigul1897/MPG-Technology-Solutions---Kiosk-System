@@ -119,6 +119,7 @@ $addonItemsOut = (float) ($stats['addon_items_out_total'] ?? 0);
 $totalItemsOut = (float) ($stats['total_items_out_total'] ?? ($inclusionItemsOut + $addonItemsOut));
 $inventoryLedgerRows = (array) ($stats['inventory_ledger_rows'] ?? []);
 $machineCreditLedgerRows = (array) ($stats['machine_credit_ledger_rows'] ?? []);
+$machineCreditUsageRows = (array) ($stats['machine_credit_usage_rows'] ?? []);
 $machineIdleRows = (array) ($stats['machine_idle_rows'] ?? []);
 $expenses = (float) ($stats['expenses_total'] ?? 0);
 $netSales = (float) ($stats['net_sales'] ?? 0);
@@ -734,13 +735,13 @@ $nDaily = count($dailyDates);
     <div class="col-12">
         <div class="card">
             <div class="card-body">
-                <h6 class="mb-1">Machine credits ledger (Selected range)<?= $premiumBadge ?></h6>
-                <p class="small text-muted mb-3">Opening + Restock - Usage = Closing per machine for the selected date range.</p>
+                <h6 class="mb-1">Overall machine credits ledger (Selected range)<?= $premiumBadge ?></h6>
+                <p class="small text-muted mb-3">Opening + Restock - Usage = Closing for the overall machine credit pool.</p>
                 <div class="table-responsive">
                     <table class="table table-sm align-middle mb-0">
                         <thead>
                         <tr>
-                            <th>Machine</th>
+                            <th>Scope</th>
                             <th class="text-end">Opening</th>
                             <th class="text-end">Restock</th>
                             <th class="text-end">Usage (Out)</th>
@@ -749,7 +750,7 @@ $nDaily = count($dailyDates);
                         </thead>
                         <tbody>
                         <?php if ($machineCreditLedgerRows === []): ?>
-                            <tr><td colspan="5" class="text-muted text-center py-3">No machine credit rows for this period.</td></tr>
+                            <tr><td colspan="5" class="text-muted text-center py-3">No overall machine credit rows for this period.</td></tr>
                         <?php else: ?>
                             <?php foreach ($machineCreditLedgerRows as $row): ?>
                                 <tr>
@@ -760,6 +761,38 @@ $nDaily = count($dailyDates);
                                     <td class="text-end text-success"><?= ! empty($row['credit_required']) ? e(format_stock((float) ($row['restock'] ?? 0))) : '—' ?></td>
                                     <td class="text-end text-danger"><?= ! empty($row['credit_required']) ? e(format_stock((float) ($row['usage'] ?? 0))) : '—' ?></td>
                                     <td class="text-end fw-semibold"><?= ! empty($row['credit_required']) ? e(format_stock((float) ($row['closing'] ?? 0))) : '—' ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="mb-1">Machine credit usage transparency (Selected range)<?= $premiumBadge ?></h6>
+                <p class="small text-muted mb-3">Shows how many times each credit-required machine was used and how much it deducted from overall machine credits.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th>Machine</th>
+                            <th class="text-end">Usage count</th>
+                            <th class="text-end">Deducted from overall credits</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php if ($machineCreditUsageRows === []): ?>
+                            <tr><td colspan="3" class="text-muted text-center py-3">No machine credit usage records for this period.</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($machineCreditUsageRows as $row): ?>
+                                <tr>
+                                    <td><?= e((string) ($row['machine_label'] ?? 'Machine')) ?></td>
+                                    <td class="text-end"><?= (int) ($row['usage_count'] ?? 0) ?></td>
+                                    <td class="text-end"><?= e(format_stock((float) ($row['deducted_credits'] ?? 0))) ?></td>
                                 </tr>
                             <?php endforeach; ?>
                         <?php endif; ?>

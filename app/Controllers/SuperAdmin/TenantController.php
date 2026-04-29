@@ -236,6 +236,16 @@ final class TenantController
                 $insertValues[] = 0;
                 $updateParts[] = 'enable_bluetooth_print = VALUES(enable_bluetooth_print)';
             }
+            if (self::hasLaundryBranchConfigColumn($pdo, 'pickup_sms_enabled')) {
+                $insertColumns[] = 'pickup_sms_enabled';
+                $insertValues[] = 0;
+                $updateParts[] = 'pickup_sms_enabled = VALUES(pickup_sms_enabled)';
+            }
+            if (self::hasLaundryBranchConfigColumn($pdo, 'pickup_email_enabled')) {
+                $insertColumns[] = 'pickup_email_enabled';
+                $insertValues[] = 1;
+                $updateParts[] = 'pickup_email_enabled = VALUES(pickup_email_enabled)';
+            }
             if ($updateParts === []) {
                 return;
             }

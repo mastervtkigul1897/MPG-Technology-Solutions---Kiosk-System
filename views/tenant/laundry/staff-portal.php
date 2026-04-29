@@ -310,6 +310,7 @@ $stockQtyLabel = static function (float $qty): string {
     <input type="hidden" name="split_cash_amount" id="kioskSplitCashAmount" value="">
     <input type="hidden" name="split_online_amount" id="kioskSplitOnlineAmount" value="">
     <input type="hidden" name="split_online_method" id="kioskSplitOnlineMethod" value="">
+    <input type="hidden" name="payment_reference_no" id="kioskPaymentReferenceNo" value="">
     <input type="hidden" name="enable_bluetooth_print" value="0">
     <input type="hidden" name="track_laundry_status" id="kioskTrackLaundryStatus" value="<?= ! empty($laundry_status_tracking_enabled) ? '1' : '0' ?>">
     <input type="hidden" name="use_machines" id="kioskUseMachines" value="0">
@@ -465,7 +466,7 @@ $stockQtyLabel = static function (float $qty): string {
                     <div class="small text-muted mt-1 mb-2" id="kioskExcessFeeHint"></div>
                 </div>
             </div>
-            <div id="kioskCustomerSection">
+            <div id="kioskCustomerSection" class="mt-3">
                 <h6 class="mb-2">Customer</h6>
                 <?php if ($freeCustomerLocked): ?>
                     <div class="alert alert-warning py-2 small mb-2">
@@ -804,6 +805,10 @@ $stockQtyLabel = static function (float $qty): string {
                         </div>
                     </div>
                 </div>
+                <div class="mt-3 d-none" id="kioskPaymentReferenceWrap">
+                    <label class="form-label mb-1" for="kioskPaymentReferenceInput">Reference Number</label>
+                    <input type="text" class="form-control" id="kioskPaymentReferenceInput" maxlength="120" placeholder="Enter payment reference number">
+                </div>
             </div>
             <div class="modal-footer border-top-0">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -837,10 +842,13 @@ $stockQtyLabel = static function (float $qty): string {
     const splitCashAmountHidden = document.getElementById('kioskSplitCashAmount');
     const splitOnlineAmountHidden = document.getElementById('kioskSplitOnlineAmount');
     const splitOnlineMethodHidden = document.getElementById('kioskSplitOnlineMethod');
+    const paymentReferenceNoHidden = document.getElementById('kioskPaymentReferenceNo');
     const splitFieldsWrap = document.getElementById('kioskSplitPaymentFields');
     const splitCashAmountInput = document.getElementById('kioskSplitCashAmountInput');
     const splitOnlineAmountInput = document.getElementById('kioskSplitOnlineAmountInput');
     const splitOnlineMethodSelect = document.getElementById('kioskSplitOnlineMethodSelect');
+    const paymentReferenceWrap = document.getElementById('kioskPaymentReferenceWrap');
+    const paymentReferenceInput = document.getElementById('kioskPaymentReferenceInput');
     const bluetoothPrintToggle = document.getElementById('kioskEnableBluetoothPrintToggle');
     const bluetoothPrintNote = document.getElementById('kioskBluetoothPrintNote');
     const regularSubmitWrap = document.getElementById('kioskRegularSubmitWrap');
@@ -1594,6 +1602,7 @@ $stockQtyLabel = static function (float $qty): string {
         code,
         label: card.textContent?.trim() || code,
         serviceKind: card.dataset.serviceKind || 'full_service',
+        requiredWeight: ((card.dataset.requiredWeight || '0') === '1') || (String(card.dataset.serviceKind || '').trim() === 'dry_cleaning'),
         basePricePerLoad: parseFloat(card.dataset.pricePerLoad || '0') || 0,
         foldServiceAmount: Math.max(0, parseFloat(card.dataset.foldServiceAmount || '0') || 0),
         pricePerLoad: effectivePricePerLoad(
@@ -1653,6 +1662,7 @@ $stockQtyLabel = static function (float $qty): string {
                     code,
                     label: entry?.label || btn.textContent?.trim() || code,
                     service_kind: entry?.serviceKind || btn.getAttribute('data-service-kind') || 'full_service',
+                    required_weight: (entry?.requiredWeight || String(entry?.serviceKind || '').trim().toLowerCase() === 'dry_cleaning') ? 1 : 0,
                     quantity: qty,
                     price_per_load: effectivePricePerLoad(
                         code,
@@ -2071,7 +2081,12 @@ $stockQtyLabel = static function (float $qty): string {
                 if (rewardMode && rewardServiceCode !== '' && String(entry.code || '').trim() === rewardServiceCode) {
                     return sum;
                 }
-                return sum + (qty * pricePerLoad);
+                const entryServiceKind = String(entry.serviceKind || '').trim().toLowerCase();
+                const lineRequiresWeight = !selfMode && (!!entry.requiredWeight || entryServiceKind === 'dry_cleaning');
+                const lineBase = lineRequiresWeight
+                    ? (Math.max(0, Number(weightValue || 0)) * pricePerLoad)
+                    : (qty * pricePerLoad);
+                return sum + lineBase;
             }, 0)
             : 0;
         const selectedCode = String(orderTypeCode?.value || '').trim();
@@ -2822,6 +2837,7 @@ $stockQtyLabel = static function (float $qty): string {
                 code,
                 label: btn.textContent?.trim() || code,
                 serviceKind: btn.dataset.serviceKind || 'full_service',
+                requiredWeight: ((btn.dataset.requiredWeight || '0') === '1') || (String(btn.dataset.serviceKind || '').trim() === 'dry_cleaning'),
                 basePricePerLoad: parseFloat(btn.dataset.pricePerLoad || '0') || 0,
                 foldServiceAmount: Math.max(0, parseFloat(btn.dataset.foldServiceAmount || '0') || 0),
                 pricePerLoad: effectivePricePerLoad(
@@ -2870,6 +2886,7 @@ $stockQtyLabel = static function (float $qty): string {
                 code,
                 label: card.textContent?.trim() || code,
                 serviceKind: card.dataset.serviceKind || 'full_service',
+                requiredWeight: ((card.dataset.requiredWeight || '0') === '1') || (String(card.dataset.serviceKind || '').trim() === 'dry_cleaning'),
                 basePricePerLoad: parseFloat(card.dataset.pricePerLoad || '0') || 0,
                 foldServiceAmount: Math.max(0, parseFloat(card.dataset.foldServiceAmount || '0') || 0),
                 pricePerLoad: effectivePricePerLoad(
@@ -3561,6 +3578,13 @@ $stockQtyLabel = static function (float $qty): string {
             btn.classList.add('btn-primary');
             const isSplit = selectedPayNowMethod === 'split_payment';
             splitFieldsWrap?.classList.toggle('d-none', !isSplit);
+            const needsReference = selectedPayNowMethod !== 'cash';
+            paymentReferenceWrap?.classList.toggle('d-none', !needsReference);
+            if (paymentReferenceInput) {
+                if (!needsReference) {
+                    paymentReferenceInput.value = '';
+                }
+            }
             if (!isSplit) {
                 resetSplitPaymentValues();
             }
@@ -3599,9 +3623,11 @@ $stockQtyLabel = static function (float $qty): string {
                 showWarn('Enter a split payment amount greater than 0.');
                 return;
             }
+            const referenceNo = String(paymentReferenceInput?.value || '').trim();
             if (splitCashAmountHidden) splitCashAmountHidden.value = cashAmount.toFixed(2);
             if (splitOnlineAmountHidden) splitOnlineAmountHidden.value = onlineAmount.toFixed(2);
             if (splitOnlineMethodHidden) splitOnlineMethodHidden.value = onlineMethod;
+            if (paymentReferenceNoHidden) paymentReferenceNoHidden.value = referenceNo;
             if (amountTenderedHidden) amountTenderedHidden.value = splitTotal.toFixed(2);
             if (changeAmountHidden) changeAmountHidden.value = Math.max(0, splitTotal - dueAmount).toFixed(2);
         } else {
@@ -3610,8 +3636,10 @@ $stockQtyLabel = static function (float $qty): string {
                 showWarn('Enter an amount paid greater than 0.');
                 return;
             }
+            const referenceNo = String(paymentReferenceInput?.value || '').trim();
             if (amountTenderedHidden) amountTenderedHidden.value = paidAmount.toFixed(2);
             if (changeAmountHidden) changeAmountHidden.value = Math.max(0, paidAmount - dueAmount).toFixed(2);
+            if (paymentReferenceNoHidden) paymentReferenceNoHidden.value = selectedPayNowMethod === 'cash' ? '' : referenceNo;
             resetSplitPaymentValues();
         }
         paymentMethod.value = selectedPayNowMethod || 'cash';
@@ -3620,6 +3648,11 @@ $stockQtyLabel = static function (float $qty): string {
     });
     paymentMethodModalEl?.addEventListener('hidden.bs.modal', () => {
         splitFieldsWrap?.classList.add('d-none');
+        paymentReferenceWrap?.classList.add('d-none');
+        if (paymentReferenceInput) {
+            paymentReferenceInput.value = '';
+        }
+        if (paymentReferenceNoHidden) paymentReferenceNoHidden.value = '';
         updatePayNowAmountsUI();
     });
     foldNoBtn?.click();

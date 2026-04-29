@@ -10,10 +10,12 @@ use App\Core\Auth;
 use App\Core\LaundrySchema;
 use App\Core\Request;
 use App\Core\Response;
+use App\Services\Mailer;
 use PDO;
 
 final class LaundryController
 {
+    private const PICKUP_SMS_DEVICE_ID = 'MPG_GATEWAY';
     private static ?bool $hasLaundryInventoryImagePath = null;
 
     private static ?bool $hasUsersDayRateColumn = null;
@@ -24,6 +26,7 @@ final class LaundryController
     private static ?bool $hasLaundryOrdersDiscountAmount = null;
     private static ?bool $hasLaundryOrdersAmountTendered = null;
     private static ?bool $hasLaundryOrdersChangeAmount = null;
+    private static ?bool $hasLaundryOrdersPaymentReferenceNo = null;
     private const FREE_LIMIT_WASHERS = 1;
     private const FREE_LIMIT_DRYERS = 1;
 
@@ -127,7 +130,6 @@ final class LaundryController
              FROM laundry_machines
              WHERE tenant_id = ? AND status = "available"
              ORDER BY machine_kind ASC,
-                      CASE WHEN credit_required = 1 AND credit_balance <= 0 THEN 1 ELSE 0 END ASC,
                       machine_label ASC, id ASC'
         );
         $machinesSt->execute([$tenantId]);
@@ -301,6 +303,8 @@ final class LaundryController
             'track_machine_movement_enabled' => $trackMachineMovementEnabled,
             'default_drying_minutes' => $defaultDryingMinutes,
             'editable_order_date' => $editableOrderDate,
+            'pickup_sms_enabled' => $this->getBranchBoolConfig($pdo, $tenantId, 'pickup_sms_enabled', false),
+            'pickup_email_enabled' => $this->getBranchBoolConfig($pdo, $tenantId, 'pickup_email_enabled', true),
             'transactions_scope' => $transactionsScope,
             'transactions_mode' => $transactionsMode,
             'transactions_page' => $transactionsPage,
@@ -336,7 +340,6 @@ final class LaundryController
              FROM laundry_machines
              WHERE tenant_id = ? AND status = "available"
              ORDER BY machine_kind ASC,
-                      CASE WHEN credit_required = 1 AND credit_balance <= 0 THEN 1 ELSE 0 END ASC,
                       machine_label ASC, id ASC'
         );
         $machinesSt->execute([$tenantId]);
@@ -420,7 +423,8 @@ final class LaundryController
         $updateWorkflow = (string) $request->input('update_laundry_status_workflow', '') === '1';
         $updateOrderDateEdit = (string) $request->input('update_editable_order_date', '') === '1';
         $updateKioskAutomation = (string) $request->input('update_kiosk_automation', '') === '1';
-        if ($updateWorkflow || $updateOrderDateEdit || $updateKioskAutomation) {
+        $updateNotificationActivation = (string) $request->input('update_notification_activation', '') === '1';
+        if ($updateWorkflow || $updateOrderDateEdit || $updateKioskAutomation || $updateNotificationActivation) {
             $actor = Auth::user();
             if (($actor['role'] ?? '') !== 'tenant_admin') {
                 session_flash('errors', ['Only the store owner can update this setting.']);
@@ -464,6 +468,26 @@ final class LaundryController
             }
             if ($updateKioskAutomation) {
                 $this->persistBranchKioskAutomationSettings($pdo, $tenantId, $this->parseKioskAutomationSettingsFromRequest($request));
+            }
+            if ($updateNotificationActivation) {
+                if (Auth::isTenantFreePlanRestricted($actor)) {
+                    session_flash('errors', ['Premium: SMS/Email notifications are not available in Free Mode.']);
+                    return redirect(route($redirectRoute));
+                }
+                $pickupSmsEnabled = $request->boolean('pickup_sms_enabled');
+                $pickupEmailEnabled = $request->boolean('pickup_email_enabled');
+                if ($pickupSmsEnabled && $pickupEmailEnabled) {
+                    // Keep one channel active only.
+                    $pickupSmsEnabled = false;
+                }
+                if (! $pickupSmsEnabled && ! $pickupEmailEnabled) {
+                    session_flash('errors', ['Select one notification channel: SMS or Email.']);
+                    return redirect(route($redirectRoute));
+                }
+                $this->persistBranchReadyNotificationSettings($pdo, $tenantId, [
+                    'pickup_sms_enabled' => $pickupSmsEnabled ? 1 : 0,
+                    'pickup_email_enabled' => $pickupEmailEnabled ? 1 : 0,
+                ]);
             }
             session_flash('success', 'Sales settings updated.');
             return redirect(route($redirectRoute));
@@ -534,6 +558,7 @@ final class LaundryController
         $splitCashAmount = round(max(0.0, (float) $request->input('split_cash_amount', 0)), 4);
         $splitOnlineAmount = round(max(0.0, (float) $request->input('split_online_amount', 0)), 4);
         $splitOnlineMethod = strtolower(trim((string) $request->input('split_online_method', '')));
+        $paymentReferenceNo = trim((string) $request->input('payment_reference_no', ''));
         if (! in_array($splitOnlineMethod, ['gcash', 'paymaya', 'online_banking', 'qr_payment', 'card'], true)) {
             $splitOnlineMethod = '';
         }
@@ -601,6 +626,7 @@ final class LaundryController
                     'code' => (string) ($def['code'] ?? $code),
                     'label' => (string) ($def['label'] ?? $code),
                     'service_kind' => (string) ($def['service_kind'] ?? 'full_service'),
+                    'required_weight' => ((int) ($def['required_weight'] ?? 0) === 1 || (string) ($def['service_kind'] ?? '') === 'dry_cleaning') ? 1 : 0,
                     'quantity' => $qty,
                     'price_per_load' => $effectiveOrderLinePrice($def),
                 ];
@@ -640,6 +666,7 @@ final class LaundryController
                             'code' => (string) ($def['code'] ?? $code),
                             'label' => (string) ($def['label'] ?? $code),
                             'service_kind' => (string) ($def['service_kind'] ?? 'full_service'),
+                            'required_weight' => ((int) ($def['required_weight'] ?? 0) === 1 || (string) ($def['service_kind'] ?? '') === 'dry_cleaning') ? 1 : 0,
                             'quantity' => $qty,
                             'price_per_load' => $effectiveOrderLinePrice($def),
                             'show_addon_supplies' => (int) ($def['show_addon_supplies'] ?? 1) === 1,
@@ -988,12 +1015,28 @@ final class LaundryController
         if ($orderMode === 'self_service') {
             $basePrice = 0.0;
             foreach ($selfServiceLines as $line) {
-                $basePrice += max(0, (int) ($line['quantity'] ?? 0)) * max(0.0, (float) ($line['price_per_load'] ?? 0));
+                $lineQty = max(0, (int) ($line['quantity'] ?? 0));
+                $linePrice = max(0.0, (float) ($line['price_per_load'] ?? 0));
+                $lineKind = strtolower(trim((string) ($line['service_kind'] ?? '')));
+                $lineRequiresWeight = $lineKind === 'dry_cleaning' || (int) ($line['required_weight'] ?? 0) === 1;
+                if ($lineRequiresWeight && $serviceWeight !== null && $serviceWeight > 0) {
+                    $basePrice += $serviceWeight * $linePrice;
+                    continue;
+                }
+                $basePrice += $lineQty * $linePrice;
             }
         } elseif ($dropOffLines !== []) {
             $basePrice = 0.0;
             foreach ($dropOffLines as $line) {
-                $basePrice += max(0, (int) ($line['quantity'] ?? 0)) * max(0.0, (float) ($line['price_per_load'] ?? 0));
+                $lineQty = max(0, (int) ($line['quantity'] ?? 0));
+                $linePrice = max(0.0, (float) ($line['price_per_load'] ?? 0));
+                $lineKind = strtolower(trim((string) ($line['service_kind'] ?? '')));
+                $lineRequiresWeight = $lineKind === 'dry_cleaning' || (int) ($line['required_weight'] ?? 0) === 1;
+                if ($lineRequiresWeight && $serviceWeight !== null && $serviceWeight > 0) {
+                    $basePrice += $serviceWeight * $linePrice;
+                    continue;
+                }
+                $basePrice += $lineQty * $linePrice;
             }
         }
         $allowedWeightKg = $maxWeightKgPerLoad > 0 ? ($maxWeightKgPerLoad * $numberOfLoads) : 0.0;
@@ -1207,6 +1250,9 @@ final class LaundryController
                 : ($isPaidNowRequest
                     ? ($requestedPaymentMethod !== '' && $requestedPaymentMethod !== 'pending' ? $requestedPaymentMethod : 'cash')
                     : 'pending'));
+        $paymentReferenceNo = (! $isFree && ! $isRewardNoBalanceDue && $isPaidNowRequest && ! in_array($initialPaymentMethod, ['cash', 'pending'], true))
+            ? substr($paymentReferenceNo, 0, 120)
+            : '';
         if ($initialPaymentMethod === 'split_payment') {
             if ($splitCashAmount <= 0 && $splitOnlineAmount <= 0) {
                 session_flash('errors', ['Enter split payment amounts.']);
@@ -1282,6 +1328,7 @@ final class LaundryController
                 'code' => $orderTypeCode,
                 'label' => trim((string) ($otDef['label'] ?? $orderTypeCode)),
                 'service_kind' => $serviceKind,
+                'required_weight' => $requiredWeight ? 1 : 0,
                 'quantity' => $numberOfLoads,
                 'price_per_load' => $pricePerLoad,
             ];
@@ -1292,7 +1339,13 @@ final class LaundryController
         foreach ($lineSourceForSplit as $line) {
             $lineKind = strtolower(trim((string) ($line['service_kind'] ?? '')));
             $lineQty = max(0, (int) ($line['quantity'] ?? 0));
+            $lineRequiresWeight = $lineKind === 'dry_cleaning' || (int) ($line['required_weight'] ?? 0) === 1;
             if ($lineQty < 1) {
+                continue;
+            }
+            if ($lineRequiresWeight) {
+                // Keep weight-priced lines as a single consolidated order to avoid
+                // multiplying the same weight charge across auto-split child orders.
                 continue;
             }
             if (! in_array($lineKind, $splitEligibleKinds, true)) {
@@ -1304,12 +1357,14 @@ final class LaundryController
         if ($orderMode === 'drop_off'
             && $numberOfLoads > 1
             && in_array($serviceKind, $splitEligibleKinds, true)
+            && ! $requiredWeight
             && count($lineSourceForSplit) <= 1
             && $splitEligibleLoadCount < $numberOfLoads) {
             $splitLines = [[
                 'code' => $orderTypeCode,
                 'label' => trim((string) ($otDef['label'] ?? $orderTypeCode)),
                 'service_kind' => $serviceKind,
+                'required_weight' => $requiredWeight ? 1 : 0,
                 'quantity' => $numberOfLoads,
                 'price_per_load' => $pricePerLoad,
             ]];
@@ -1386,6 +1441,10 @@ final class LaundryController
                     $lineCode = (string) ($line['code'] ?? $orderTypeCode);
                     $lineLabel = (string) ($line['label'] ?? $lineCode);
                     $linePrice = max(0.0, (float) ($line['price_per_load'] ?? 0));
+                    $lineRequiresWeight = strtolower(trim($lineKind)) === 'dry_cleaning' || (int) ($line['required_weight'] ?? 0) === 1;
+                    if ($lineRequiresWeight && $serviceWeight !== null && $serviceWeight > 0) {
+                        $linePrice = $linePrice * $serviceWeight;
+                    }
                     if ($lineQty < 1) {
                         continue;
                     }
@@ -1420,6 +1479,13 @@ final class LaundryController
                              SET reference_code = ?, updated_at = NOW()
                              WHERE tenant_id = ? AND id = ?'
                         )->execute([$finalRef, $tenantId, $newOrderId]);
+                        if ($this->hasLaundryOrdersPaymentReferenceNo($pdo)) {
+                            $pdo->prepare(
+                                'UPDATE laundry_orders
+                                 SET payment_reference_no = ?
+                                 WHERE tenant_id = ? AND id = ?'
+                            )->execute([$paymentReferenceNo !== '' ? $paymentReferenceNo : null, $tenantId, $newOrderId]);
+                        }
                         $lineInsert->execute([
                             $tenantId,
                             $newOrderId,
@@ -1561,6 +1627,10 @@ final class LaundryController
                     $setParts[] = 'change_amount = ?';
                     $setParams[] = $recordedChangeAmount;
                 }
+                if ($this->hasLaundryOrdersPaymentReferenceNo($pdo)) {
+                    $setParts[] = 'payment_reference_no = ?';
+                    $setParams[] = $paymentReferenceNo !== '' ? $paymentReferenceNo : null;
+                }
                 if ($setParts !== []) {
                     $setParams[] = $tenantId;
                     $setParams[] = $orderId;
@@ -1601,6 +1671,13 @@ final class LaundryController
                 foreach ($lineSource as $line) {
                     $lineQty = max(0, (int) ($line['quantity'] ?? 0));
                     $linePrice = max(0.0, (float) ($line['price_per_load'] ?? 0));
+                    $lineKind = strtolower(trim((string) ($line['service_kind'] ?? '')));
+                    $lineRequiresWeight = $lineKind === 'dry_cleaning' || (int) ($line['required_weight'] ?? 0) === 1;
+                    if ($lineRequiresWeight && $serviceWeight !== null && $serviceWeight > 0) {
+                        $lineInsertTotal = $linePrice * $serviceWeight;
+                    } else {
+                        $lineInsertTotal = $lineQty * $linePrice;
+                    }
                     if ($lineQty < 1) {
                         continue;
                     }
@@ -1612,7 +1689,7 @@ final class LaundryController
                         (string) ($line['service_kind'] ?? 'full_service'),
                         $lineQty,
                         $linePrice,
-                        $lineQty * $linePrice,
+                        $lineInsertTotal,
                     ]);
                 }
             }
@@ -1749,6 +1826,7 @@ final class LaundryController
             'machines_washer' => $washers,
             'machines_dryer' => $dryers,
             'machine_assignment_enabled' => $this->isMachineAssignmentEnabled($pdo, $tenantId),
+            'machine_global_credit_balance' => $this->getGlobalMachineCreditBalance($pdo, $tenantId),
             'free_machine_limit_washers' => $freeRestricted ? self::FREE_LIMIT_WASHERS : null,
             'free_machine_limit_dryers' => $freeRestricted ? self::FREE_LIMIT_DRYERS : null,
         ]);
@@ -2041,12 +2119,39 @@ final class LaundryController
             }
             return redirect(route('tenant.machines.index'));
         }
+        if ((string) $request->input('update_global_machine_credit', '') === '1') {
+            $direction = strtolower(trim((string) $request->input('credit_action', 'add')));
+            $amount = max(0.0, (float) $request->input('credit_amount', 0));
+            if ($amount <= 0) {
+                session_flash('errors', ['Enter a credit amount greater than 0.']);
+                return redirect(route('tenant.machines.index'));
+            }
+            $current = $this->getGlobalMachineCreditBalance($pdo, $tenantId);
+            $delta = $direction === 'deduct' ? -$amount : $amount;
+            $next = max(0.0, round($current + $delta, 4));
+            $applied = round(abs($next - $current), 4);
+            if ($applied <= 0.000001) {
+                session_flash('errors', ['Overall machine credit is already zero.']);
+                return redirect(route('tenant.machines.index'));
+            }
+            $this->persistGlobalMachineCreditBalance($pdo, $tenantId, $next);
+            $this->recordGlobalMachineCreditMovement(
+                $pdo,
+                $tenantId,
+                $delta < 0 ? 'deduct' : 'restock',
+                $applied,
+                null,
+                $delta < 0 ? 'Manual overall credit deduction' : 'Manual overall credit restock',
+                (int) (Auth::user()['id'] ?? 0)
+            );
+            session_flash('success', 'Overall machine credit updated.');
+            return redirect(route('tenant.machines.index'));
+        }
 
         $machineLabel = trim((string) $request->input('machine_label'));
         $machineKind = trim((string) $request->input('machine_kind', 'washer'));
         $creditRequired = $request->boolean('credit_required') ? 1 : 0;
         $machineType = $creditRequired === 1 ? 'c5' : 'maytag';
-        $creditBalance = $creditRequired === 1 ? max(0.0, (float) $request->input('credit_balance', 0)) : 0.0;
         if (! in_array($machineKind, ['washer', 'dryer'], true)) {
             $machineKind = 'washer';
         }
@@ -2074,26 +2179,13 @@ final class LaundryController
             'INSERT INTO laundry_machines (tenant_id, machine_kind, machine_type, credit_required, credit_balance, machine_label, status, current_order_id, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, "available", NULL, NOW(), NOW())
              ON DUPLICATE KEY UPDATE machine_kind = VALUES(machine_kind), machine_type = VALUES(machine_type), credit_required = VALUES(credit_required), credit_balance = VALUES(credit_balance), updated_at = NOW()'
-        )->execute([$tenantId, $machineKind, $machineType, $creditRequired, $creditBalance, $machineLabel]);
+        )->execute([$tenantId, $machineKind, $machineType, $creditRequired, 0, $machineLabel]);
         $machineId = (int) $pdo->lastInsertId();
         if ($machineId < 1) {
             $stMachine = $pdo->prepare('SELECT id FROM laundry_machines WHERE tenant_id = ? AND LOWER(TRIM(machine_label)) = LOWER(TRIM(?)) LIMIT 1');
             $stMachine->execute([$tenantId, $machineLabel]);
             $machineId = (int) ($stMachine->fetchColumn() ?: 0);
         }
-        if ($machineId > 0 && $creditRequired === 1 && $creditBalance > 0) {
-            $this->recordMachineCreditMovement(
-                $pdo,
-                $tenantId,
-                $machineId,
-                'restock',
-                $creditBalance,
-                null,
-                'Initial machine credit',
-                (int) (Auth::user()['id'] ?? 0)
-            );
-        }
-
         session_flash('success', 'Machine saved.');
 
         return redirect(route('tenant.machines.index'));
@@ -2110,7 +2202,6 @@ final class LaundryController
         $machineKind = trim((string) $request->input('machine_kind', 'washer'));
         $creditRequired = $request->boolean('credit_required') ? 1 : 0;
         $machineType = $creditRequired === 1 ? 'c5' : 'maytag';
-        $creditBalance = $creditRequired === 1 ? max(0.0, (float) $request->input('credit_balance', 0)) : 0.0;
         if (! in_array($machineKind, ['washer', 'dryer'], true)) {
             $machineKind = 'washer';
         }
@@ -2134,33 +2225,7 @@ final class LaundryController
             'UPDATE laundry_machines
              SET machine_kind = ?, machine_type = ?, credit_required = ?, credit_balance = ?, machine_label = ?, updated_at = NOW()
              WHERE tenant_id = ? AND id = ?'
-        )->execute([$machineKind, $machineType, $creditRequired, $creditBalance, $machineLabel, $tenantId, $machineId]);
-        $oldBalance = max(0.0, (float) ($existingMachine['credit_balance'] ?? 0));
-        $newBalance = max(0.0, (float) $creditBalance);
-        $delta = round($newBalance - $oldBalance, 4);
-        if ($delta > 0) {
-            $this->recordMachineCreditMovement(
-                $pdo,
-                $tenantId,
-                $machineId,
-                'restock',
-                $delta,
-                null,
-                'Manual credit restock',
-                (int) (Auth::user()['id'] ?? 0)
-            );
-        } elseif ($delta < 0) {
-            $this->recordMachineCreditMovement(
-                $pdo,
-                $tenantId,
-                $machineId,
-                'deduct',
-                abs($delta),
-                null,
-                'Manual credit adjustment',
-                (int) (Auth::user()['id'] ?? 0)
-            );
-        }
+        )->execute([$machineKind, $machineType, $creditRequired, 0, $machineLabel, $tenantId, $machineId]);
 
         session_flash('success', 'Machine updated.');
 
@@ -2914,14 +2979,15 @@ final class LaundryController
                     if ($needsDryer && $dryer === null) {
                         throw new \RuntimeException('Selected dryer is not available or is not a dryer.');
                     }
+                    $requiredMachineCount = 0;
                     foreach ([$washer, $dryer] as $machine) {
-                        if (! is_array($machine) || (int) ($machine['credit_required'] ?? 0) !== 1) {
-                            continue;
+                        if (is_array($machine) && (int) ($machine['credit_required'] ?? 0) === 1) {
+                            $requiredMachineCount++;
                         }
-                        if ((float) ($machine['credit_balance'] ?? 0) <= 0) {
-                            $label = trim((string) ($machine['machine_label'] ?? 'Selected machine'));
-                            throw new \RuntimeException($label.' has 0 credit. Please load machine credit before using it.');
-                        }
+                    }
+                    $neededCredit = $requiredMachineCount * max(1, (int) ($order['wash_qty'] ?? 1));
+                    if ($neededCredit > 0 && $this->getGlobalMachineCreditBalance($pdo, $tenantId) < $neededCredit) {
+                        throw new \RuntimeException('Overall machine credit is insufficient. Please add overall credits first.');
                     }
                     $machineType = $this->resolveOrderMachineType($washer, $dryer);
                     $machineIdLegacy = $washerMachineId > 0 ? $washerMachineId : ($dryerMachineId > 0 ? $dryerMachineId : null);
@@ -3148,6 +3214,7 @@ final class LaundryController
         $splitCashAmount = round(max(0.0, (float) $request->input('split_cash_amount', 0)), 4);
         $splitOnlineAmount = round(max(0.0, (float) $request->input('split_online_amount', 0)), 4);
         $splitOnlineMethod = strtolower(trim((string) $request->input('split_online_method', '')));
+        $paymentReferenceNo = trim((string) $request->input('payment_reference_no', ''));
         if (! in_array($splitOnlineMethod, ['gcash', 'paymaya', 'online_banking', 'qr_payment', 'card'], true)) {
             $splitOnlineMethod = '';
         }
@@ -3206,6 +3273,9 @@ final class LaundryController
             } elseif (! in_array($paymentMethod, $allowedPayment, true)) {
                 throw new \RuntimeException('Select a payment method.');
             }
+            $paymentReferenceNo = (! $isNoPaymentMode && ! in_array($paymentMethod, ['cash', 'pending'], true))
+                ? substr($paymentReferenceNo, 0, 120)
+                : '';
 
             $total = (float) ($order['total_amount'] ?? 0);
             $discountAmount = round($total * ($discountPercentage / 100), 4);
@@ -3274,6 +3344,10 @@ final class LaundryController
             if ($this->hasLaundryOrdersDiscountAmount($pdo)) {
                 $setParts[] = 'discount_amount = ?';
                 $params[] = $discountAmount;
+            }
+            if ($this->hasLaundryOrdersPaymentReferenceNo($pdo)) {
+                $setParts[] = 'payment_reference_no = ?';
+                $params[] = $paymentReferenceNo !== '' ? $paymentReferenceNo : null;
             }
             $params[] = $tenantId;
             $params[] = $id;
@@ -3516,6 +3590,7 @@ final class LaundryController
             'customers' => $st->fetchAll(PDO::FETCH_ASSOC),
             'premium_trial_browse_lock' => Auth::isTenantFreePlanRestricted(Auth::user()),
             'reward_system_active' => $this->rewardProgramIsActive($pdo, $tenantId),
+            'customer_requirements' => $this->getCustomerRequirementSettings($pdo, $tenantId),
         ]);
     }
 
@@ -3529,6 +3604,24 @@ final class LaundryController
         $ctx = $this->baseContext();
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
+        $actor = Auth::user();
+
+        if ($request->boolean('update_customer_requirements')) {
+            if (($actor['role'] ?? '') !== 'tenant_admin') {
+                session_flash('errors', ['Only the store owner can update customer required field settings.']);
+
+                return redirect(route('tenant.customers.index'));
+            }
+            $this->persistCustomerRequirementSettings($pdo, $tenantId, [
+                'contact_required' => $request->boolean('customer_contact_required'),
+                'email_required' => $request->boolean('customer_email_required'),
+            ]);
+            session_flash('success', 'Customer required field settings updated.');
+
+            return redirect(route('tenant.customers.index'));
+        }
+
+        $requirements = $this->getCustomerRequirementSettings($pdo, $tenantId);
 
         $name = trim((string) $request->input('name'));
         $contact = trim((string) $request->input('contact'));
@@ -3539,12 +3632,17 @@ final class LaundryController
 
             return redirect(route('tenant.customers.index'));
         }
-        if ($contact === '') {
+        if ($requirements['contact_required'] && $contact === '') {
             session_flash('errors', ['Contact is required.']);
 
             return redirect(route('tenant.customers.index'));
         }
-        if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        if ($requirements['email_required'] && $email === '') {
+            session_flash('errors', ['Email is required.']);
+
+            return redirect(route('tenant.customers.index'));
+        }
+        if ($email !== '' && ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
             session_flash('errors', ['A valid email is required.']);
 
             return redirect(route('tenant.customers.index'));
@@ -3569,6 +3667,7 @@ final class LaundryController
         $ctx = $this->baseContext();
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
+        $requirements = $this->getCustomerRequirementSettings($pdo, $tenantId);
 
         $name = trim((string) $request->input('name'));
         $contact = trim((string) $request->input('contact'));
@@ -3577,10 +3676,13 @@ final class LaundryController
         if ($name === '') {
             return json_response(['success' => false, 'message' => 'Customer name is required.'], 422);
         }
-        if ($contact === '') {
+        if ($requirements['contact_required'] && $contact === '') {
             return json_response(['success' => false, 'message' => 'Contact is required.'], 422);
         }
-        if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        if ($requirements['email_required'] && $email === '') {
+            return json_response(['success' => false, 'message' => 'Email is required.'], 422);
+        }
+        if ($email !== '' && ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
             return json_response(['success' => false, 'message' => 'A valid email is required.'], 422);
         }
         $birthdayValue = $birthday !== '' ? $birthday : null;
@@ -3862,6 +3964,7 @@ final class LaundryController
         $pdo = $ctx['pdo'];
         $tenantId = $ctx['tenant_id'];
         $customerId = max(0, (int) $id);
+        $requirements = $this->getCustomerRequirementSettings($pdo, $tenantId);
 
         $name = trim((string) $request->input('name'));
         $contact = trim((string) $request->input('contact'));
@@ -3872,12 +3975,17 @@ final class LaundryController
 
             return redirect(route('tenant.customers.index'));
         }
-        if ($contact === '') {
+        if ($requirements['contact_required'] && $contact === '') {
             session_flash('errors', ['Contact is required.']);
 
             return redirect(route('tenant.customers.index'));
         }
-        if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        if ($requirements['email_required'] && $email === '') {
+            session_flash('errors', ['Email is required.']);
+
+            return redirect(route('tenant.customers.index'));
+        }
+        if ($email !== '' && ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
             session_flash('errors', ['A valid email is required.']);
 
             return redirect(route('tenant.customers.index'));
@@ -4804,6 +4912,113 @@ final class LaundryController
         }
     }
 
+    public function notificationsSmsIndex(Request $request): Response
+    {
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+        $this->resetSmsCreditsIfNeeded($pdo, $tenantId);
+        return view_page('SMS Notifications', 'tenant.notifications.sms', [
+            'premium_trial_browse_lock' => Auth::isTenantFreePlanRestricted(Auth::user()),
+            'notification_sms' => [
+                'enabled' => $this->getBranchBoolConfig($pdo, $tenantId, 'pickup_sms_enabled', false),
+                'template' => (string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_sms_template', 'Hi {customer_name}, your laundry order {reference_code} is done and ready for pick up.'),
+                'shop_email' => (string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_contact_shop_email', ''),
+                'shop_phone' => (string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_contact_shop_phone', ''),
+                'daily_credits' => (int) $this->getBranchScalarConfig($pdo, $tenantId, 'sms_daily_credits', 30),
+                'extra_credits' => (int) $this->getBranchScalarConfig($pdo, $tenantId, 'sms_extra_credits', 0),
+            ],
+        ]);
+    }
+
+    public function notificationsSmsUpdate(Request $request): Response
+    {
+        if (Auth::isTenantFreePlanRestricted(Auth::user())) {
+            session_flash('errors', ['Premium: SMS notifications are not available in Free Mode.']);
+            return redirect(route('tenant.notifications.sms.index'));
+        }
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+        $enabled = $this->getBranchBoolConfig($pdo, $tenantId, 'pickup_sms_enabled', false);
+        $template = trim((string) $request->input('pickup_sms_template', ''));
+        $shopEmail = strtolower(trim((string) $request->input('pickup_contact_shop_email', '')));
+        $shopPhone = trim((string) $request->input('pickup_contact_shop_phone', ''));
+        if ($template === '') {
+            $template = 'Hi {customer_name}, your laundry order {reference_code} is done and ready for pick up.';
+        }
+        if (! filter_var($shopEmail, FILTER_VALIDATE_EMAIL)) {
+            session_flash('errors', ['Shop email is required and must be valid.']);
+            return redirect(route('tenant.notifications.sms.index'));
+        }
+        if (! preg_match('/^\+?[0-9]{10,15}$/', $shopPhone)) {
+            session_flash('errors', ['Shop phone number is required. Use 10 to 15 digits, optional leading +.']);
+            return redirect(route('tenant.notifications.sms.index'));
+        }
+        $this->persistBranchReadyNotificationSettings($pdo, $tenantId, [
+            'pickup_sms_template' => substr($template, 0, 500),
+            'pickup_contact_shop_email' => substr($shopEmail, 0, 180),
+            'pickup_contact_shop_phone' => substr($shopPhone, 0, 30),
+        ]);
+        session_flash('success', 'SMS notification settings updated.');
+        return redirect(route('tenant.notifications.sms.index'));
+    }
+
+    public function notificationsEmailIndex(Request $request): Response
+    {
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+        return view_page('Email Notifications', 'tenant.notifications.email', [
+            'premium_trial_browse_lock' => Auth::isTenantFreePlanRestricted(Auth::user()),
+            'notification_email' => [
+                'enabled' => $this->getBranchBoolConfig($pdo, $tenantId, 'pickup_email_enabled', false),
+                'subject' => (string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_email_subject', 'Laundry ready for pick up'),
+                'template' => (string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_email_template', 'Hello {customer_name}, your laundry order {reference_code} is done and ready for pick up.'),
+                'shop_email' => (string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_contact_shop_email', ''),
+                'shop_phone' => (string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_contact_shop_phone', ''),
+            ],
+        ]);
+    }
+
+    public function notificationsEmailUpdate(Request $request): Response
+    {
+        if (Auth::isTenantFreePlanRestricted(Auth::user())) {
+            session_flash('errors', ['Premium: Email notifications are not available in Free Mode.']);
+            return redirect(route('tenant.notifications.email.index'));
+        }
+        $ctx = $this->baseContext();
+        $pdo = $ctx['pdo'];
+        $tenantId = $ctx['tenant_id'];
+        $enabled = $this->getBranchBoolConfig($pdo, $tenantId, 'pickup_email_enabled', false);
+        $subject = trim((string) $request->input('pickup_email_subject', ''));
+        $template = trim((string) $request->input('pickup_email_template', ''));
+        $shopEmail = strtolower(trim((string) $request->input('pickup_contact_shop_email', '')));
+        $shopPhone = trim((string) $request->input('pickup_contact_shop_phone', ''));
+        if ($subject === '') {
+            $subject = 'Laundry ready for pick up';
+        }
+        if ($template === '') {
+            $template = 'Hello {customer_name}, your laundry order {reference_code} is done and ready for pick up.';
+        }
+        if (! filter_var($shopEmail, FILTER_VALIDATE_EMAIL)) {
+            session_flash('errors', ['Shop email is required and must be valid.']);
+            return redirect(route('tenant.notifications.email.index'));
+        }
+        if (! preg_match('/^\+?[0-9]{10,15}$/', $shopPhone)) {
+            session_flash('errors', ['Shop phone number is required. Use 10 to 15 digits, optional leading +.']);
+            return redirect(route('tenant.notifications.email.index'));
+        }
+        $this->persistBranchReadyNotificationSettings($pdo, $tenantId, [
+            'pickup_email_subject' => substr($subject, 0, 180),
+            'pickup_email_template' => substr($template, 0, 2000),
+            'pickup_contact_shop_email' => substr($shopEmail, 0, 180),
+            'pickup_contact_shop_phone' => substr($shopPhone, 0, 30),
+        ]);
+        session_flash('success', 'Email notification settings updated.');
+        return redirect(route('tenant.notifications.email.index'));
+    }
+
     private function persistEditableOrderDateConfig(PDO $pdo, int $tenantId, bool $enabled): void
     {
         if ($tenantId < 1 || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'editable_order_date')) {
@@ -4814,6 +5029,41 @@ final class LaundryController
              VALUES (?, ?, NOW(), NOW())
              ON DUPLICATE KEY UPDATE editable_order_date = VALUES(editable_order_date), updated_at = NOW()'
         )->execute([$tenantId, $enabled ? 1 : 0]);
+    }
+
+    /**
+     * @return array{contact_required: bool, email_required: bool}
+     */
+    private function getCustomerRequirementSettings(PDO $pdo, int $tenantId): array
+    {
+        return [
+            'contact_required' => $this->getBranchBoolConfig($pdo, $tenantId, 'customer_contact_required', false),
+            'email_required' => $this->getBranchBoolConfig($pdo, $tenantId, 'customer_email_required', false),
+        ];
+    }
+
+    /**
+     * @param array{contact_required: bool, email_required: bool} $settings
+     */
+    private function persistCustomerRequirementSettings(PDO $pdo, int $tenantId, array $settings): void
+    {
+        if ($tenantId < 1) {
+            return;
+        }
+        if (! $this->hasColumn($pdo, 'laundry_branch_configs', 'customer_contact_required')
+            || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'customer_email_required')
+        ) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, customer_contact_required, customer_email_required, created_at, updated_at)
+             VALUES (?, ?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE customer_contact_required = VALUES(customer_contact_required), customer_email_required = VALUES(customer_email_required), updated_at = NOW()'
+        )->execute([
+            $tenantId,
+            ! empty($settings['contact_required']) ? 1 : 0,
+            ! empty($settings['email_required']) ? 1 : 0,
+        ]);
     }
 
     private function isEditableOrderDateEnabled(PDO $pdo, int $tenantId): bool
@@ -4865,6 +5115,7 @@ final class LaundryController
             return;
         }
         $defaultDryingMinutes = $this->getBranchDefaultDryingMinutes($pdo, $tenantId);
+        $completedOrderIds = [];
         try {
             $pdo->beginTransaction();
             $washToDry = $pdo->prepare(
@@ -4977,12 +5228,102 @@ final class LaundryController
                          updated_at = NOW()
                      WHERE tenant_id = ? AND id = ?'
                 )->execute([$tenantId, $orderId]);
+                $completedOrderIds[] = $orderId;
             }
             $pdo->commit();
+            foreach ($completedOrderIds as $completedOrderId) {
+                $this->sendReadyForPickupNotifications($pdo, $tenantId, (int) $completedOrderId);
+            }
         } catch (\Throwable) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }
+        }
+    }
+
+    private function sendReadyForPickupNotifications(PDO $pdo, int $tenantId, int $orderId): void
+    {
+        if ($tenantId < 1 || $orderId < 1) {
+            return;
+        }
+        if (
+            ! $this->hasColumn($pdo, 'laundry_orders', 'pickup_sms_notified_at')
+            || ! $this->hasColumn($pdo, 'laundry_orders', 'pickup_email_notified_at')
+        ) {
+            return;
+        }
+        try {
+            $st = $pdo->prepare(
+                'SELECT o.id, o.reference_code, o.customer_id, o.pickup_sms_notified_at, o.pickup_email_notified_at,
+                        c.name AS customer_name, c.contact AS customer_contact, c.email AS customer_email,
+                        t.name AS tenant_name
+                 FROM laundry_orders o
+                 LEFT JOIN laundry_customers c ON c.id = o.customer_id AND c.tenant_id = o.tenant_id
+                 LEFT JOIN tenants t ON t.id = o.tenant_id
+                 WHERE o.tenant_id = ? AND o.id = ? LIMIT 1'
+            );
+            $st->execute([$tenantId, $orderId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (! is_array($row)) {
+                return;
+            }
+            $ctx = [
+                'customer_name' => trim((string) ($row['customer_name'] ?? 'Customer')),
+                'reference_code' => trim((string) ($row['reference_code'] ?? '')),
+                'store_name' => trim((string) ($row['tenant_name'] ?? 'Laundry Shop')),
+            ];
+            $phone = trim((string) ($row['customer_contact'] ?? ''));
+            $email = trim((string) ($row['customer_email'] ?? ''));
+            $shopEmail = trim((string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_contact_shop_email', ''));
+            $shopPhone = trim((string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_contact_shop_phone', ''));
+            if ($ctx['customer_name'] === '') {
+                $ctx['customer_name'] = 'Customer';
+            }
+            $smsEnabled = $this->getBranchBoolConfig($pdo, $tenantId, 'pickup_sms_enabled', false);
+            $smsTemplate = trim((string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_sms_template', 'Hi {customer_name}, your laundry order {reference_code} is done and ready for pick up.'));
+            if ($smsTemplate === '') {
+                $smsTemplate = 'Hi {customer_name}, your laundry order {reference_code} is done and ready for pick up.';
+            }
+            if (
+                $smsEnabled
+                && trim((string) ($row['pickup_sms_notified_at'] ?? '')) === ''
+                && preg_match('/^\+?[0-9]{10,15}$/', $phone)
+                && $this->hasTable($pdo, 'sms_queue')
+                && $this->consumeSmsCredit($pdo, $tenantId)
+            ) {
+                $smsMessage = $this->applyNotificationTemplate($smsTemplate, $ctx).$this->notificationDisclaimerSuffix($shopEmail, $shopPhone, true);
+                $pdo->prepare(
+                    'INSERT INTO sms_queue
+                     (device_id, phone, message, status, retry_count, error_message, created_at, sent_at, updated_at)
+                     VALUES (?, ?, ?, "pending", 0, NULL, NOW(), NULL, NOW())'
+                )->execute([self::PICKUP_SMS_DEVICE_ID, $phone, $smsMessage]);
+                $pdo->prepare('UPDATE laundry_orders SET pickup_sms_notified_at = NOW(), updated_at = NOW() WHERE tenant_id = ? AND id = ? LIMIT 1')
+                    ->execute([$tenantId, $orderId]);
+            }
+
+            $emailEnabled = $this->getBranchBoolConfig($pdo, $tenantId, 'pickup_email_enabled', false);
+            $emailSubject = trim((string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_email_subject', 'Laundry ready for pick up'));
+            $emailTemplate = trim((string) $this->getBranchScalarConfig($pdo, $tenantId, 'pickup_email_template', 'Hello {customer_name}, your laundry order {reference_code} is done and ready for pick up.'));
+            if ($emailSubject === '') {
+                $emailSubject = 'Laundry ready for pick up';
+            }
+            if ($emailTemplate === '') {
+                $emailTemplate = 'Hello {customer_name}, your laundry order {reference_code} is done and ready for pick up.';
+            }
+            if (
+                $emailEnabled
+                && trim((string) ($row['pickup_email_notified_at'] ?? '')) === ''
+                && filter_var($email, FILTER_VALIDATE_EMAIL)
+            ) {
+                $fullEmailMessage = $this->applyNotificationTemplate($emailTemplate, $ctx).$this->notificationDisclaimerSuffix($shopEmail, $shopPhone, false);
+                $emailBody = nl2br(htmlspecialchars($fullEmailMessage, ENT_QUOTES, 'UTF-8'));
+                if (Mailer::send($email, $emailSubject, '<p>'.$emailBody.'</p>')) {
+                    $pdo->prepare('UPDATE laundry_orders SET pickup_email_notified_at = NOW(), updated_at = NOW() WHERE tenant_id = ? AND id = ? LIMIT 1')
+                        ->execute([$tenantId, $orderId]);
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('Pickup ready notification failed for order '.$orderId.': '.$e->getMessage());
         }
     }
 
@@ -5031,9 +5372,6 @@ final class LaundryController
             $st->execute([$tenantId, $kind]);
             $row = $st->fetch(PDO::FETCH_ASSOC);
             if (! is_array($row)) {
-                return null;
-            }
-            if ((int) ($row['credit_required'] ?? 0) === 1 && (float) ($row['credit_balance'] ?? 0) <= 0) {
                 return null;
             }
             return $row;
@@ -5278,7 +5616,6 @@ final class LaundryController
              FROM laundry_machines
              WHERE tenant_id = ? AND machine_kind = ?
              ORDER BY CASE WHEN status = "available" THEN 0 ELSE 1 END ASC,
-                      CASE WHEN credit_required = 1 AND credit_balance <= 0 THEN 1 ELSE 0 END ASC,
                       machine_label ASC, id ASC
              LIMIT '.$limit
         );
@@ -5389,6 +5726,23 @@ final class LaundryController
         return (bool) $this->getBranchScalarConfig($pdo, $tenantId, $column, $default ? 1 : 0);
     }
 
+    private function getGlobalMachineCreditBalance(PDO $pdo, int $tenantId): float
+    {
+        return max(0.0, (float) $this->getBranchScalarConfig($pdo, $tenantId, 'machine_global_credit_balance', 0));
+    }
+
+    private function persistGlobalMachineCreditBalance(PDO $pdo, int $tenantId, float $balance): void
+    {
+        if ($tenantId < 1 || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'machine_global_credit_balance')) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs (tenant_id, machine_global_credit_balance, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE machine_global_credit_balance = VALUES(machine_global_credit_balance), updated_at = NOW()'
+        )->execute([$tenantId, max(0.0, round($balance, 4))]);
+    }
+
     private function persistBranchBluetoothPrintConfig(PDO $pdo, int $tenantId, bool $enabled): void
     {
         if ($tenantId < 1 || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'enable_bluetooth_print')) {
@@ -5488,6 +5842,111 @@ final class LaundryController
                 kiosk_autofill_order_type_codes = VALUES(kiosk_autofill_order_type_codes),
                 updated_at = NOW()'
         )->execute([$tenantId, $inclusionMode, $foldMode, implode(',', $codes)]);
+    }
+
+    /** @param array<string,int|string> $settings */
+    private function persistBranchReadyNotificationSettings(PDO $pdo, int $tenantId, array $settings): void
+    {
+        if ($tenantId < 1 || $settings === []) {
+            return;
+        }
+        $allowed = [
+            'pickup_sms_enabled',
+            'pickup_sms_device_id',
+            'pickup_sms_template',
+            'pickup_email_enabled',
+            'pickup_email_subject',
+            'pickup_email_template',
+            'pickup_contact_shop_email',
+            'pickup_contact_shop_phone',
+            'sms_daily_credits',
+            'sms_extra_credits',
+            'sms_credits_last_reset_date',
+        ];
+        $columns = ['tenant_id'];
+        $values = [$tenantId];
+        $updates = [];
+        foreach ($settings as $column => $value) {
+            if (! in_array($column, $allowed, true) || ! $this->hasColumn($pdo, 'laundry_branch_configs', $column)) {
+                continue;
+            }
+            $columns[] = $column;
+            $values[] = $value;
+            $updates[] = $column.' = VALUES('.$column.')';
+        }
+        if ($updates === []) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO laundry_branch_configs ('.implode(', ', $columns).', created_at, updated_at)
+             VALUES ('.implode(', ', array_fill(0, count($columns), '?')).', NOW(), NOW())
+             ON DUPLICATE KEY UPDATE '.implode(', ', $updates).', updated_at = NOW()'
+        )->execute($values);
+    }
+
+    private function resetSmsCreditsIfNeeded(PDO $pdo, int $tenantId): void
+    {
+        if (
+            ! $this->hasColumn($pdo, 'laundry_branch_configs', 'sms_daily_credits')
+            || ! $this->hasColumn($pdo, 'laundry_branch_configs', 'sms_credits_last_reset_date')
+        ) {
+            return;
+        }
+        $today = date('Y-m-d');
+        $lastReset = trim((string) $this->getBranchScalarConfig($pdo, $tenantId, 'sms_credits_last_reset_date', ''));
+        if ($lastReset === $today) {
+            return;
+        }
+        $this->persistBranchReadyNotificationSettings($pdo, $tenantId, [
+            'sms_daily_credits' => 30,
+            'sms_credits_last_reset_date' => $today,
+        ]);
+    }
+
+    private function consumeSmsCredit(PDO $pdo, int $tenantId): bool
+    {
+        $this->resetSmsCreditsIfNeeded($pdo, $tenantId);
+        $daily = max(0, (int) $this->getBranchScalarConfig($pdo, $tenantId, 'sms_daily_credits', 30));
+        $extra = max(0, (int) $this->getBranchScalarConfig($pdo, $tenantId, 'sms_extra_credits', 0));
+        if (($daily + $extra) < 1) {
+            return false;
+        }
+        if ($daily > 0) {
+            $daily--;
+        } else {
+            $extra--;
+        }
+        $this->persistBranchReadyNotificationSettings($pdo, $tenantId, [
+            'sms_daily_credits' => $daily,
+            'sms_extra_credits' => $extra,
+        ]);
+        return true;
+    }
+
+    /** @param array<string,string> $ctx */
+    private function applyNotificationTemplate(string $template, array $ctx): string
+    {
+        return strtr($template, [
+            '{customer_name}' => $ctx['customer_name'] ?? '',
+            '{reference_code}' => $ctx['reference_code'] ?? '',
+            '{store_name}' => $ctx['store_name'] ?? '',
+        ]);
+    }
+
+    private function notificationDisclaimerSuffix(string $shopEmail, string $shopPhone, bool $isSms): string
+    {
+        $contactParts = [];
+        if ($shopPhone !== '') {
+            $contactParts[] = $shopPhone;
+        }
+        if ($shopEmail !== '') {
+            $contactParts[] = $shopEmail;
+        }
+        $contact = $contactParts !== [] ? implode(' / ', $contactParts) : 'the shop directly';
+        if ($isSms) {
+            return ' Do not reply to this message. For concerns, contact '.$contact.'.';
+        }
+        return "\n\nDo not reply to this email. For concerns, contact ".$contact.'.';
     }
 
     private function getBranchIntConfig(PDO $pdo, int $tenantId, string $column, int $default): int
@@ -6252,11 +6711,7 @@ final class LaundryController
     {
         $usage = max(1, $washQty);
         $seen = [];
-        $st = $pdo->prepare(
-            'UPDATE laundry_machines
-             SET credit_balance = GREATEST(0, credit_balance - ?), updated_at = NOW()
-             WHERE tenant_id = ? AND id = ? AND credit_required = 1'
-        );
+        $requiredMachineCount = 0;
         foreach ($machines as $machine) {
             if (! is_array($machine)) {
                 continue;
@@ -6266,18 +6721,26 @@ final class LaundryController
                 continue;
             }
             $seen[$id] = true;
-            $st->execute([$usage, $tenantId, $id]);
-            $this->recordMachineCreditMovement(
-                $pdo,
-                $tenantId,
-                $id,
-                'deduct',
-                (float) $usage,
-                $orderId,
-                'Machine usage credit deduction',
-                (int) (Auth::user()['id'] ?? 0)
-            );
+            $requiredMachineCount++;
         }
+        $deductAmount = round($usage * $requiredMachineCount, 4);
+        if ($deductAmount <= 0.000001) {
+            return;
+        }
+        $current = $this->getGlobalMachineCreditBalance($pdo, $tenantId);
+        if ($current + 0.000001 < $deductAmount) {
+            throw new \RuntimeException('Overall machine credit is insufficient. Please add overall credits first.');
+        }
+        $this->persistGlobalMachineCreditBalance($pdo, $tenantId, max(0.0, $current - $deductAmount));
+        $this->recordGlobalMachineCreditMovement(
+            $pdo,
+            $tenantId,
+            'deduct',
+            $deductAmount,
+            $orderId,
+            'Machine usage credit deduction',
+            (int) (Auth::user()['id'] ?? 0)
+        );
     }
 
     private function restoreMachineCreditsForOrder(PDO $pdo, int $tenantId, int $orderId): void
@@ -6285,62 +6748,45 @@ final class LaundryController
         if ($tenantId < 1 || $orderId < 1) {
             return;
         }
-        $pendingByMachine = [];
+        $pendingAmount = 0.0;
         try {
             $st = $pdo->prepare(
-                'SELECT machine_id,
-                        SUM(CASE WHEN direction = "deduct" THEN amount WHEN direction = "restock" THEN -amount ELSE 0 END) AS pending_amount
-                 FROM laundry_machine_credit_movements
-                 WHERE tenant_id = ? AND order_id = ?
-                 GROUP BY machine_id
-                 HAVING pending_amount > 0'
+                'SELECT SUM(CASE WHEN direction = "deduct" THEN amount WHEN direction = "restock" THEN -amount ELSE 0 END) AS pending_amount
+                 FROM laundry_machine_global_credit_movements
+                 WHERE tenant_id = ? AND order_id = ?'
             );
             $st->execute([$tenantId, $orderId]);
-            foreach ($st->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
-                $machineId = (int) ($row['machine_id'] ?? 0);
-                $amount = (float) ($row['pending_amount'] ?? 0);
-                if ($machineId > 0 && $amount > 0) {
-                    $pendingByMachine[$machineId] = $amount;
-                }
-            }
+            $pendingAmount = max(0.0, (float) ($st->fetchColumn() ?: 0.0));
         } catch (\Throwable) {
             return;
         }
-        if ($pendingByMachine === []) {
+        if ($pendingAmount <= 0.000001) {
             return;
         }
-        $update = $pdo->prepare(
-            'UPDATE laundry_machines
-             SET credit_balance = credit_balance + ?, updated_at = NOW()
-             WHERE tenant_id = ? AND id = ?'
-        );
+        $current = $this->getGlobalMachineCreditBalance($pdo, $tenantId);
+        $this->persistGlobalMachineCreditBalance($pdo, $tenantId, $current + $pendingAmount);
         $actorId = (int) (Auth::user()['id'] ?? 0);
-        foreach ($pendingByMachine as $machineId => $amount) {
-            $update->execute([round($amount, 4), $tenantId, (int) $machineId]);
-            $this->recordMachineCreditMovement(
-                $pdo,
-                $tenantId,
-                (int) $machineId,
-                'restock',
-                (float) $amount,
-                $orderId,
-                'Status revert to Pending credit restore',
-                $actorId > 0 ? $actorId : null
-            );
-        }
+        $this->recordGlobalMachineCreditMovement(
+            $pdo,
+            $tenantId,
+            'restock',
+            $pendingAmount,
+            $orderId,
+            'Status revert to Pending credit restore',
+            $actorId > 0 ? $actorId : null
+        );
     }
 
-    private function recordMachineCreditMovement(
+    private function recordGlobalMachineCreditMovement(
         PDO $pdo,
         int $tenantId,
-        int $machineId,
         string $direction,
         float $amount,
         ?int $orderId = null,
         ?string $note = null,
         ?int $createdByUserId = null
     ): void {
-        if ($tenantId < 1 || $machineId < 1 || $amount <= 0) {
+        if ($tenantId < 1 || $amount <= 0) {
             return;
         }
         $dir = strtolower(trim($direction));
@@ -6349,12 +6795,11 @@ final class LaundryController
         }
         try {
             $pdo->prepare(
-                'INSERT INTO laundry_machine_credit_movements
-                 (tenant_id, machine_id, order_id, direction, amount, note, created_by_user_id, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, NOW())'
+                'INSERT INTO laundry_machine_global_credit_movements
+                 (tenant_id, order_id, direction, amount, note, created_by_user_id, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, NOW())'
             )->execute([
                 $tenantId,
-                $machineId,
                 ($orderId !== null && $orderId > 0) ? $orderId : null,
                 $dir,
                 round($amount, 4),
@@ -6616,6 +7061,21 @@ final class LaundryController
         }
 
         return self::$hasLaundryOrdersDiscountAmount;
+    }
+
+    private function hasLaundryOrdersPaymentReferenceNo(PDO $pdo): bool
+    {
+        if (self::$hasLaundryOrdersPaymentReferenceNo !== null) {
+            return self::$hasLaundryOrdersPaymentReferenceNo;
+        }
+        try {
+            $st = $pdo->query("SHOW COLUMNS FROM `laundry_orders` LIKE 'payment_reference_no'");
+            self::$hasLaundryOrdersPaymentReferenceNo = $st !== false && $st->fetch(PDO::FETCH_ASSOC) !== false;
+        } catch (\Throwable) {
+            self::$hasLaundryOrdersPaymentReferenceNo = false;
+        }
+
+        return self::$hasLaundryOrdersPaymentReferenceNo;
     }
 
     private function hasLaundryOrdersAmountTendered(PDO $pdo): bool

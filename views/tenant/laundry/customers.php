@@ -1,9 +1,29 @@
 <?php require dirname(__DIR__, 2).'/partials/premium_trial_page_banner.php'; ?>
 <?php if (! empty($reward_system_active)): ?>
-<div class="alert alert-light border small mb-3 mb-md-0">
+<div class="alert alert-light border small mb-2">
     Reward load only increases from paid sales with <strong>Eligible for Reward</strong> enabled. To stop counting, turn off <strong>Activate Reward System</strong>.
 </div>
 <?php endif; ?>
+<?php
+$contactRequired = ! empty($customer_requirements['contact_required']);
+$emailRequired = ! empty($customer_requirements['email_required']);
+?>
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="POST" action="<?= e(route('tenant.customers.store')) ?>" id="customerRequirementsForm" class="d-flex flex-wrap align-items-center gap-3">
+            <?= csrf_field() ?>
+            <input type="hidden" name="update_customer_requirements" value="1">
+            <div class="form-check m-0">
+                <input class="form-check-input" type="checkbox" id="customer_contact_required" name="customer_contact_required" value="1" <?= $contactRequired ? 'checked' : '' ?>>
+                <label class="form-check-label" for="customer_contact_required">Required Contact</label>
+            </div>
+            <div class="form-check m-0">
+                <input class="form-check-input" type="checkbox" id="customer_email_required" name="customer_email_required" value="1" <?= $emailRequired ? 'checked' : '' ?>>
+                <label class="form-check-label" for="customer_email_required">Required Email</label>
+            </div>
+        </form>
+    </div>
+</div>
 <div class="card mb-3">
     <div class="card-body">
         <form method="POST" action="<?= e(route('tenant.customers.store')) ?>" class="row g-2 align-items-end">
@@ -14,11 +34,11 @@
             </div>
             <div class="col-md-3">
                 <label class="form-label mb-1">Contact</label>
-                <input class="form-control" name="contact" required>
+                <input class="form-control" name="contact" <?= $contactRequired ? 'required' : '' ?>>
             </div>
             <div class="col-md-3">
                 <label class="form-label mb-1">Email</label>
-                <input type="email" class="form-control" name="email" required>
+                <input type="email" class="form-control" name="email" <?= $emailRequired ? 'required' : '' ?>>
             </div>
             <div class="col-md-2">
                 <label class="form-label mb-1">Birthday</label>
@@ -134,11 +154,11 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label mb-1" for="customer_edit_contact">Contact</label>
-                        <input class="form-control" id="customer_edit_contact" name="contact" required>
+                        <input class="form-control" id="customer_edit_contact" name="contact" <?= $contactRequired ? 'required' : '' ?>>
                     </div>
                     <div class="mb-3">
                         <label class="form-label mb-1" for="customer_edit_email">Email</label>
-                        <input class="form-control" id="customer_edit_email" name="email" type="email" required>
+                        <input class="form-control" id="customer_edit_email" name="email" type="email" <?= $emailRequired ? 'required' : '' ?>>
                     </div>
                     <div>
                         <label class="form-label mb-1" for="customer_edit_birthday">Birthday</label>
@@ -192,6 +212,8 @@
 </div>
 <script>
 (() => {
+    const requirementsForm = document.getElementById('customerRequirementsForm');
+    const requirementsChecks = requirementsForm ? requirementsForm.querySelectorAll('input[type="checkbox"]') : [];
     const editModalEl = document.getElementById('customerEditModal');
     const editModal = editModalEl ? new bootstrap.Modal(editModalEl) : null;
     const editForm = document.getElementById('customerEditForm');
@@ -362,5 +384,10 @@
             });
         });
     }
+    requirementsChecks.forEach((checkbox) => {
+        checkbox.addEventListener('change', () => {
+            requirementsForm?.submit();
+        });
+    });
 })();
 </script>

@@ -95,68 +95,6 @@ if (! empty($is_super)): ?>
         </div>
     </div>
 
-    <div class="card mb-3">
-        <div class="card-body">
-            <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
-                <h5 class="mb-0">SMS Queue (Manual Create)</h5>
-                <span class="small text-muted">For Android gateway polling</span>
-            </div>
-            <form method="POST" action="<?= e(route('super-admin.sms-queue.store')) ?>" class="row g-2 mb-3">
-                <?= csrf_field() ?>
-                <div class="col-md-3">
-                    <label class="form-label small mb-1" for="superSmsDeviceId">Device ID</label>
-                    <input type="text" class="form-control" id="superSmsDeviceId" name="device_id" placeholder="PHONE_01" maxlength="100" required>
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label small mb-1" for="superSmsPhone">Phone</label>
-                    <input type="text" class="form-control" id="superSmsPhone" name="phone" placeholder="+639171234567" maxlength="30" required>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label small mb-1" for="superSmsMessage">Message</label>
-                    <input type="text" class="form-control" id="superSmsMessage" name="message" placeholder="Your laundry is ready." maxlength="1000" required>
-                </div>
-                <div class="col-md-2 d-grid align-self-end">
-                    <button type="submit" class="btn btn-primary">Create SMS Record</button>
-                </div>
-            </form>
-            <?php $smsQueueRows = (array) ($sms_queue_rows ?? []); ?>
-            <?php if ($smsQueueRows === []): ?>
-                <p class="text-muted mb-0">No SMS queue records yet.</p>
-            <?php else: ?>
-                <div class="table-responsive">
-                    <table class="table table-sm table-striped align-middle mb-0">
-                        <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Device</th>
-                            <th>Phone</th>
-                            <th>Message</th>
-                            <th>Status</th>
-                            <th>Retry</th>
-                            <th>Created</th>
-                            <th>Sent At</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <?php foreach ($smsQueueRows as $smsRow): ?>
-                            <tr>
-                                <td><?= (int) ($smsRow['id'] ?? 0) ?></td>
-                                <td><?= e((string) ($smsRow['device_id'] ?? '')) ?></td>
-                                <td><?= e((string) ($smsRow['phone'] ?? '')) ?></td>
-                                <td><?= e((string) ($smsRow['message'] ?? '')) ?></td>
-                                <td><span class="badge text-bg-secondary"><?= e((string) ($smsRow['status'] ?? 'pending')) ?></span></td>
-                                <td><?= (int) ($smsRow['retry_count'] ?? 0) ?></td>
-                                <td><?= e((string) ($smsRow['created_at'] ?? '')) ?></td>
-                                <td><?= e((string) ($smsRow['sent_at'] ?? '')) ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
-
     <div class="card">
         <div class="card-body">
             <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
@@ -175,6 +113,7 @@ if (! empty($is_super)): ?>
                             <?php foreach ($usersColumns as $col): ?>
                                 <th><?= e((string) $col) ?></th>
                             <?php endforeach; ?>
+                            <th>Status</th>
                             <th class="text-end">Actions</th>
                         </tr>
                         </thead>
@@ -186,11 +125,17 @@ if (! empty($is_super)): ?>
                             $rowEmail = trim((string) ($row['email'] ?? 'this user'));
                             $isCurrentUser = $rowUserId > 0 && $rowUserId === (int) ((auth_user()['id'] ?? 0));
                             $deleteAllowed = $rowUserId > 0 && ! $isCurrentUser && $rowRole !== 'super_admin';
+                            $isOnline = (int) ($row['is_online'] ?? 0) === 1;
                             ?>
                             <tr>
                                 <?php foreach ($usersColumns as $col): ?>
                                     <td><?= e((string) ($row[$col] ?? '')) ?></td>
                                 <?php endforeach; ?>
+                                <td>
+                                    <span class="badge <?= $isOnline ? 'text-bg-success' : 'text-bg-secondary' ?>">
+                                        <?= $isOnline ? 'Online' : 'Offline' ?>
+                                    </span>
+                                </td>
                                 <td class="text-end">
                                     <?php if ($deleteAllowed): ?>
                                         <form method="POST" action="<?= e(route('super-admin.users.destroy', ['id' => $rowUserId])) ?>" class="d-inline" onsubmit="return confirm('Delete user <?= e(addslashes($rowEmail)) ?>? This action cannot be undone.');">
@@ -504,7 +449,7 @@ if (! empty($is_super)): ?>
             <div class="card h-100">
                 <div class="card-body">
                     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-                        <h6 class="card-title mb-0">Machine credits</h6>
+                        <h6 class="card-title mb-0">Overall machine credits</h6>
                         <form method="GET" action="<?= e(url('/dashboard')) ?>" class="d-flex flex-wrap align-items-end gap-2">
                             <div>
                                 <label class="form-label form-label-sm small mb-1" for="machineCreditFrom">Start</label>
@@ -532,13 +477,13 @@ if (! empty($is_super)): ?>
                         </form>
                     </div>
                     <?php if (($machine_credit_balances ?? []) === []): ?>
-                        <p class="small text-muted mb-0">No machines registered.</p>
+                        <p class="small text-muted mb-0">No overall machine credit records yet.</p>
                     <?php else: ?>
                         <div class="table-responsive">
                             <table class="table table-sm align-middle mb-0">
                                 <thead>
                                 <tr>
-                                    <th>Machine</th>
+                                    <th>Scope</th>
                                     <th class="text-end">Opening</th>
                                     <th class="text-end">Restock</th>
                                     <th class="text-end">Usage (Out)</th>

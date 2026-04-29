@@ -317,7 +317,9 @@ final class Router
         $r(['GET'], '#^/dashboard$#', DashboardController::class.'::index', 'dashboard', ['auth', 'tenant.active', 'tenant.subscription']);
         $r(['POST'], '#^/dashboard/time-in$#', DashboardController::class.'::timeIn', 'dashboard.time-in', ['auth', 'tenant.active', 'tenant.subscription']);
         $r(['POST'], '#^/dashboard/time-out$#', DashboardController::class.'::timeOut', 'dashboard.time-out', ['auth', 'tenant.active', 'tenant.subscription']);
+        $r(['GET'], '#^/super-admin/sms$#', DashboardController::class.'::superAdminSmsIndex', 'super-admin.sms.index', ['auth', 'role:super_admin']);
         $r(['POST'], '#^/super-admin/sms-queue$#', DashboardController::class.'::superAdminSmsQueueStore', 'super-admin.sms-queue.store', ['auth', 'role:super_admin']);
+        $r(['POST'], '#^/super-admin/sms/credits$#', DashboardController::class.'::superAdminSmsCreditsAssign', 'super-admin.sms.credits.assign', ['auth', 'role:super_admin']);
         $r(['DELETE'], '#^/super-admin/users/(\d+)$#', DashboardController::class.'::superAdminDeleteUser', 'super-admin.users.destroy', ['auth', 'role:super_admin']);
 
         $r(['GET'], '#^/profile$#', ProfileController::class.'::edit', 'profile.edit', ['auth', 'tenant.active', 'tenant.subscription', 'tenant.clock_in']);
@@ -424,6 +426,10 @@ final class Router
         $r(['POST'], '#^/tenant/laundry-order-pricing/types$#', LaundryController::class.'::orderTypeCreate', 'tenant.laundry-order-pricing.types.store', $tenantAdmin);
         $r(['POST'], '#^/tenant/laundry-order-pricing/types/(\d+)/update$#', LaundryController::class.'::orderTypeUpdate', 'tenant.laundry-order-pricing.types.update', $tenantAdmin);
         $r(['POST'], '#^/tenant/laundry-order-pricing/types/(\d+)/delete$#', LaundryController::class.'::orderTypeDestroy', 'tenant.laundry-order-pricing.types.destroy', $tenantAdmin);
+        $r(['GET'], '#^/tenant/notifications/sms$#', LaundryController::class.'::notificationsSmsIndex', 'tenant.notifications.sms.index', $tenantAdmin);
+        $r(['POST'], '#^/tenant/notifications/sms$#', LaundryController::class.'::notificationsSmsUpdate', 'tenant.notifications.sms.update', $tenantAdmin);
+        $r(['GET'], '#^/tenant/notifications/email$#', LaundryController::class.'::notificationsEmailIndex', 'tenant.notifications.email.index', $tenantAdmin);
+        $r(['POST'], '#^/tenant/notifications/email$#', LaundryController::class.'::notificationsEmailUpdate', 'tenant.notifications.email.update', $tenantAdmin);
         $r(['GET'], '#^/tenant/customers$#', LaundryController::class.'::customersIndex', 'tenant.customers.index', array_merge($ta, ['tenant.access:transactions']));
         $r(['GET'], '#^/tenant/customers/(\d+)/transactions$#', LaundryController::class.'::customersTransactions', 'tenant.customers.transactions', array_merge($ta, ['tenant.access:transactions']));
         $r(['POST'], '#^/tenant/customers$#', LaundryController::class.'::customersStore', 'tenant.customers.store', array_merge($ta, ['tenant.access:transactions']));

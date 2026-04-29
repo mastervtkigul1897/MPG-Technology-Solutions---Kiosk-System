@@ -3,6 +3,7 @@ $freeMachineLimitWashers = isset($free_machine_limit_washers) ? (int) $free_mach
 $freeMachineLimitDryers = isset($free_machine_limit_dryers) ? (int) $free_machine_limit_dryers : 0;
 $freeMachineLimited = $freeMachineLimitWashers > 0 || $freeMachineLimitDryers > 0;
 $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
+$globalMachineCredit = (float) ($machine_global_credit_balance ?? 0);
 ?>
 <?php if ($freeMachineLimited): ?>
 <div class="alert alert-info mb-3 border-0 shadow-sm">
@@ -15,17 +16,47 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
         <h6 class="mb-1">Machines</h6>
         <p class="small text-muted mb-2">
             Set up all washers and dryers here before running daily operations. This machine master list is shared across
-            Daily Sales, Kanban movement, and Kiosk order handling.
+            Transactions, Kanban movement, and Kiosk order handling, so every status change and assignment reads from this same source.
         </p>
         <ul class="small text-muted mb-0 ps-3">
             <li><strong>Create clear labels:</strong> use unique names like <strong>Washer #1</strong> and <strong>Dryer #1</strong> so staff can assign jobs quickly without confusion.</li>
-            <li><strong>Enable credit only when needed:</strong> check <strong>Needs credit</strong> for coin/credit-based machines; leave it off for manual/non-credit units.</li>
-            <li><strong>Keep status reliable:</strong> machines move between <strong>Available</strong> and <strong>Running</strong> during transaction stages and card movement.</li>
-            <li><strong>Kiosk impact:</strong> when orders are created from Kiosk, machine options and movement validation use this same washer/dryer inventory and availability.</li>
-            <li><strong>Best practice:</strong> keep at least one available washer and dryer with enough credit (if credit mode is used) to avoid assignment blocking.</li>
+            <li><strong>Use Needs credit correctly:</strong> check <strong>Needs credit</strong> only for machines that should consume from the global pool; leave it off for non-credit machines.</li>
+            <li><strong>Global credit logic:</strong> there is only one shared credit balance for all credit-required machines. Per-machine credit loading is removed to avoid fragmented balances.</li>
+            <li><strong>Automatic movement behavior:</strong> during workflow transitions, the system checks machine availability first, then validates overall machine credits before allowing progress.</li>
+            <li><strong>Blocking scenarios:</strong> if no required machine is available, or if overall machine credits are zero/insufficient, the transaction cannot proceed until corrected.</li>
+            <li><strong>Rollback protection:</strong> if a transaction is returned to <strong>Pending</strong>, previously deducted overall machine credits are restored to keep balances accurate.</li>
+            <li><strong>Kiosk impact:</strong> Kiosk machine choices and validation always follow this machine list, status availability, and global credit rules in real time.</li>
+            <li><strong>Best practice:</strong> keep labels clean, monitor running machines, and maintain enough <strong>overall machine credits</strong> to avoid assignment delays during peak hours.</li>
         </ul>
     </div>
 </div>
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="text-center mb-3">
+            <div class="small text-muted text-uppercase">Overall machine credits</div>
+            <div class="display-5 fw-bold"><?= e(format_stock($globalMachineCredit)) ?></div>
+        </div>
+        <form method="POST" action="<?= e(route('tenant.machines.store')) ?>" class="row g-2 align-items-end justify-content-center">
+            <?= csrf_field() ?>
+            <input type="hidden" name="update_global_machine_credit" value="1">
+            <div class="col-12 col-md-3">
+                <label class="form-label mb-1">Action</label>
+                <select class="form-select" name="credit_action">
+                    <option value="add">Add credits</option>
+                    <option value="deduct">Deduct credits</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label mb-1">Credits</label>
+                <input class="form-control" type="number" min="0.01" step="0.01" name="credit_amount" placeholder="0.00" required>
+            </div>
+            <div class="col-12 col-md-2">
+                <button class="btn btn-primary w-100" type="submit">Apply</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <div class="card mb-3">
     <div class="card-body">
         <div class="small text-muted mb-0">
@@ -54,10 +85,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                             <label class="form-check-label">Needs credit</label>
                         </div>
                     </div>
-                    <div class="col-md-4 d-none js-credit-field-wrap">
-                        <label class="form-label mb-1">Credit</label>
-                        <input class="form-control" type="number" min="0" step="0.01" name="credit_balance" value="0">
-                    </div>
                     <div class="col-12">
                         <button class="btn btn-primary" type="submit">Save washer</button>
                     </div>
@@ -67,7 +94,7 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                         <thead>
                         <tr>
                             <th>Label</th>
-                            <th class="text-end">Credit</th>
+                            <th>Needs credit</th>
                             <th>Status</th>
                             <th class="text-end">Actions</th>
                         </tr>
@@ -82,7 +109,7 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                                         <span class="badge text-bg-warning text-dark ms-1">Free-limited</span>
                                     <?php endif; ?>
                                 </td>
-                                <td class="text-end"><?= ! empty($machine['credit_required']) ? e(rtrim(rtrim(number_format((float) ($machine['credit_balance'] ?? 0), 4, '.', ''), '0'), '.')) : '—' ?></td>
+                                <td><?= ! empty($machine['credit_required']) ? 'Yes' : 'No' ?></td>
                                 <td>
                                     <span class="badge <?= $isRunning ? 'bg-warning text-dark' : 'bg-success' ?>">
                                         <?= e($isRunning ? 'Running' : 'Available') ?>
@@ -97,7 +124,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                                             data-kind="washer"
                                             data-label="<?= e((string) ($machine['machine_label'] ?? '')) ?>"
                                             data-credit-required="<?= ! empty($machine['credit_required']) ? '1' : '0' ?>"
-                                            data-credit-balance="<?= e((string) (float) ($machine['credit_balance'] ?? 0)) ?>"
                                             title="Edit machine"
                                         ><i class="fa fa-pen"></i></button>
                                         <?php if (! $isRunning): ?>
@@ -134,10 +160,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                             <label class="form-check-label">Needs credit</label>
                         </div>
                     </div>
-                    <div class="col-md-4 d-none js-credit-field-wrap">
-                        <label class="form-label mb-1">Credit</label>
-                        <input class="form-control" type="number" min="0" step="0.01" name="credit_balance" value="0">
-                    </div>
                     <div class="col-12">
                         <button class="btn btn-info text-dark" type="submit">Save dryer</button>
                     </div>
@@ -147,7 +169,7 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                         <thead>
                         <tr>
                             <th>Label</th>
-                            <th class="text-end">Credit</th>
+                            <th>Needs credit</th>
                             <th>Status</th>
                             <th class="text-end">Actions</th>
                         </tr>
@@ -162,7 +184,7 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                                         <span class="badge text-bg-warning text-dark ms-1">Free-limited</span>
                                     <?php endif; ?>
                                 </td>
-                                <td class="text-end"><?= ! empty($machine['credit_required']) ? e(rtrim(rtrim(number_format((float) ($machine['credit_balance'] ?? 0), 4, '.', ''), '0'), '.')) : '—' ?></td>
+                                <td><?= ! empty($machine['credit_required']) ? 'Yes' : 'No' ?></td>
                                 <td>
                                     <span class="badge <?= $isRunning ? 'bg-warning text-dark' : 'bg-success' ?>">
                                         <?= e($isRunning ? 'Running' : 'Available') ?>
@@ -177,7 +199,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                                             data-kind="dryer"
                                             data-label="<?= e((string) ($machine['machine_label'] ?? '')) ?>"
                                             data-credit-required="<?= ! empty($machine['credit_required']) ? '1' : '0' ?>"
-                                            data-credit-balance="<?= e((string) (float) ($machine['credit_balance'] ?? 0)) ?>"
                                             title="Edit machine"
                                         ><i class="fa fa-pen"></i></button>
                                         <?php if (! $isRunning): ?>
@@ -221,10 +242,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
                                 <label class="form-check-label" for="machineEditCreditRequired">Needs credit</label>
                             </div>
                         </div>
-                        <div class="col-md-4 d-none js-credit-field-wrap">
-                            <label class="form-label mb-1" for="machineEditCreditBalance">Credit</label>
-                            <input class="form-control" id="machineEditCreditBalance" type="number" min="0" step="0.01" name="credit_balance" value="0">
-                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -243,27 +260,7 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
     const editKind = document.getElementById('machineEditKind');
     const editLabel = document.getElementById('machineEditLabel');
     const editCreditRequired = document.getElementById('machineEditCreditRequired');
-    const editCreditBalance = document.getElementById('machineEditCreditBalance');
     const baseUrl = '<?= e(url('/tenant/machines')) ?>';
-
-    const syncCreditFields = (form) => {
-        if (!form) return;
-        const creditRequired = form.querySelector('.js-credit-required');
-        const wrap = form.querySelector('.js-credit-field-wrap');
-        const input = wrap?.querySelector('input[name="credit_balance"]');
-        const enabled = !!creditRequired?.checked;
-        wrap?.classList.toggle('d-none', !enabled);
-        if (input) {
-            input.disabled = !enabled;
-            if (!enabled) input.value = '0';
-        }
-    };
-
-    document.querySelectorAll('form').forEach((form) => {
-        if (!form.querySelector('.js-credit-required')) return;
-        syncCreditFields(form);
-        form.querySelector('.js-credit-required')?.addEventListener('change', () => syncCreditFields(form));
-    });
 
     document.querySelectorAll('.js-edit-machine').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -273,8 +270,6 @@ $machineAssignmentEnabled = ! empty($machine_assignment_enabled);
             if (editKind) editKind.value = btn.getAttribute('data-kind') || 'washer';
             if (editLabel) editLabel.value = btn.getAttribute('data-label') || '';
             if (editCreditRequired) editCreditRequired.checked = btn.getAttribute('data-credit-required') === '1';
-            if (editCreditBalance) editCreditBalance.value = btn.getAttribute('data-credit-balance') || '0';
-            syncCreditFields(editForm);
             editModal?.show();
         });
     });

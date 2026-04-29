@@ -251,6 +251,7 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
             <?php endif; ?>
             <?php if (($u['role'] ?? null) === 'super_admin'): ?>
                 <a class="nav-link text-white <?= route_is('super-admin.tenants.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/tenants')) ?>"><i class="fa-solid fa-building"></i><span>Tenants</span></a>
+                <a class="nav-link text-white <?= route_is('super-admin.sms.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('super-admin.sms.index')) ?>"><i class="fa-solid fa-comment-sms"></i><span>SMS</span></a>
                 <a class="nav-link text-white <?= route_is('super-admin.email-campaign.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('super-admin.email-campaign.index')) ?>"><i class="fa-solid fa-envelope"></i><span>Email Campaign</span></a>
                 <a class="nav-link text-white <?= route_is('super-admin.traffic-tracking.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('super-admin.traffic-tracking.index')) ?>"><i class="fa-solid fa-chart-column"></i><span>Traffic Tracking</span></a>
                 <a class="nav-link text-white <?= route_is('super-admin.backups.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/super-admin/backups/runner')) ?>"><i class="fa-solid fa-database"></i><span>Backup Runner</span></a>
@@ -290,6 +291,11 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                     <a class="nav-link text-white <?= route_is('tenant.reports.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/reports')) ?>"><i class="fa-solid fa-chart-line"></i><span>Reports</span></a>
                 <?php endif; ?>
                 <hr class="border-secondary my-2 opacity-50">
+                <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
+                    <a class="nav-link text-white <?= route_is('tenant.notifications.email.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.notifications.email.index')) ?>"><i class="fa-solid fa-envelope"></i><span>Email<?= $premiumNavBadge(true) ?> <span class="badge text-bg-info ms-1">Soon</span></span></a>
+                    <a class="nav-link text-white <?= route_is('tenant.notifications.sms.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(route('tenant.notifications.sms.index')) ?>"><i class="fa-solid fa-comment-sms"></i><span>SMS<?= $premiumNavBadge(true) ?> <span class="badge text-bg-info ms-1">Soon</span></span></a>
+                    <hr class="border-secondary my-2 opacity-50">
+                <?php endif; ?>
                 <?php if (user_can_module('activity_logs')): ?>
                     <a class="nav-link text-white <?= route_is('tenant.activity-logs.') ? 'bg-secondary rounded' : '' ?>" href="<?= e(url('/tenant/activity-logs')) ?>"><i class="fa-solid fa-clock-rotate-left"></i><span>Activity Log</span></a>
                 <?php endif; ?>
@@ -322,6 +328,7 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                 <?php endif; ?>
                 <?php if (($u['role'] ?? null) === 'super_admin'): ?>
                     <a class="nav-link text-white" href="<?= e(url('/super-admin/tenants')) ?>"><i class="fa-solid fa-building me-2"></i>Tenants</a>
+                    <a class="nav-link text-white" href="<?= e(route('super-admin.sms.index')) ?>"><i class="fa-solid fa-comment-sms me-2"></i>SMS</a>
                     <a class="nav-link text-white" href="<?= e(route('super-admin.email-campaign.index')) ?>"><i class="fa-solid fa-envelope me-2"></i>Email Campaign</a>
                     <a class="nav-link text-white" href="<?= e(route('super-admin.traffic-tracking.index')) ?>"><i class="fa-solid fa-chart-column me-2"></i>Traffic Tracking</a>
                     <a class="nav-link text-white" href="<?= e(url('/super-admin/backups/runner')) ?>"><i class="fa-solid fa-database me-2"></i>Backup Runner</a>
@@ -361,6 +368,11 @@ $premiumNavBadge = static function (bool $isPremiumItem) use ($navPremiumTrialHi
                         <a class="nav-link text-white" href="<?= e(url('/tenant/reports')) ?>"><i class="fa-solid fa-chart-line me-2"></i>Reports</a>
                     <?php endif; ?>
                     <hr class="border-secondary my-2 opacity-50">
+                    <?php if (($u['role'] ?? null) === 'tenant_admin'): ?>
+                    <a class="nav-link text-white" href="<?= e(route('tenant.notifications.email.index')) ?>"><i class="fa-solid fa-envelope me-2"></i>Email<?= $premiumNavBadge(true) ?> <span class="badge text-bg-info ms-1">Soon</span></a>
+                    <a class="nav-link text-white" href="<?= e(route('tenant.notifications.sms.index')) ?>"><i class="fa-solid fa-comment-sms me-2"></i>SMS<?= $premiumNavBadge(true) ?> <span class="badge text-bg-info ms-1">Soon</span></a>
+                    <hr class="border-secondary my-2 opacity-50">
+                    <?php endif; ?>
                     <?php if (user_can_module('activity_logs')): ?>
                         <a class="nav-link text-white" href="<?= e(url('/tenant/activity-logs')) ?>"><i class="fa-solid fa-clock-rotate-left me-2"></i>Activity Log</a>
                     <?php endif; ?>

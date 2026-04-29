@@ -115,21 +115,11 @@ final class DashboardController
                 isset($availableCols['email_verified_at']) ? 'email_verified_at' : 'NULL AS email_verified_at',
                 isset($availableCols['last_login_at']) ? 'last_login_at' : 'NULL AS last_login_at',
                 isset($availableCols['tenant_id']) ? 'tenant_id' : 'NULL AS tenant_id',
+                isset($availableCols['is_online']) ? 'is_online' : '0 AS is_online',
             ];
             $selectCols = implode(', ', $selectParts);
             $userRowsSt = $pdo->query("SELECT {$selectCols} FROM users ORDER BY id DESC LIMIT 500");
             $userRows = $userRowsSt !== false ? ($userRowsSt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
-            $smsQueueRows = [];
-            if ($this->hasTable($pdo, 'sms_queue')) {
-                $smsQueueSt = $pdo->query(
-                    'SELECT id, device_id, phone, message, status, retry_count, created_at, sent_at
-                     FROM sms_queue
-                     ORDER BY id DESC
-                     LIMIT 20'
-                );
-                $smsQueueRows = $smsQueueSt !== false ? ($smsQueueSt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
-            }
-
             return view_page('Dashboard', 'dashboard', [
                 'is_super' => true,
                 'stats' => [
@@ -147,7 +137,6 @@ final class DashboardController
                 ],
                 'users_columns' => $userColumns,
                 'users_rows' => $userRows,
-                'sms_queue_rows' => $smsQueueRows,
             ]);
         }
 
@@ -504,25 +493,25 @@ final class DashboardController
 
         if (! preg_match('/^[A-Za-z0-9_\-]{1,100}$/', $deviceId)) {
             session_flash('errors', ['Invalid Device ID. Use letters, numbers, underscore, or dash only.']);
-            return redirect(url('/dashboard'));
+            return redirect(route('super-admin.sms.index'));
         }
         if (! preg_match('/^\+?[0-9]{10,15}$/', $phone)) {
             session_flash('errors', ['Invalid phone format. Use 10 to 15 digits, optional leading +.']);
-            return redirect(url('/dashboard'));
+            return redirect(route('super-admin.sms.index'));
         }
         if ($message === '') {
             session_flash('errors', ['Message is required.']);
-            return redirect(url('/dashboard'));
+            return redirect(route('super-admin.sms.index'));
         }
         if (mb_strlen($message) > 1000) {
             session_flash('errors', ['Message is too long. Maximum is 1000 characters.']);
-            return redirect(url('/dashboard'));
+            return redirect(route('super-admin.sms.index'));
         }
 
         $pdo = App::db();
         if (! $this->hasTable($pdo, 'sms_queue')) {
             session_flash('errors', ['SMS queue table is missing. Run storage migrations first.']);
-            return redirect(url('/dashboard'));
+            return redirect(route('super-admin.sms.index'));
         }
         try {
             $st = $pdo->prepare(
@@ -537,7 +526,69 @@ final class DashboardController
             session_flash('errors', ['Could not create SMS record.']);
         }
 
-        return redirect(url('/dashboard'));
+        return redirect(route('super-admin.sms.index'));
+    }
+
+    public function superAdminSmsIndex(Request $request): Response
+    {
+        $actor = Auth::user();
+        if (! $actor || ($actor['role'] ?? '') !== 'super_admin') {
+            return new Response('Forbidden.', 403);
+        }
+        $smsQueueRows = [];
+        $pdo = App::db();
+        if ($this->hasTable($pdo, 'sms_queue')) {
+            $smsQueueSt = $pdo->query(
+                'SELECT id, device_id, phone, message, status, retry_count, created_at, sent_at
+                 FROM sms_queue
+                 ORDER BY id DESC
+                 LIMIT 50'
+            );
+            $smsQueueRows = $smsQueueSt !== false ? ($smsQueueSt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        }
+        $tenantRows = [];
+        try {
+            $tenantSt = $pdo->query('SELECT id, name FROM tenants ORDER BY name ASC, id ASC');
+            $tenantRows = $tenantSt !== false ? ($tenantSt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+        } catch (\Throwable) {
+            $tenantRows = [];
+        }
+
+        return view_page('SMS', 'super-admin.sms.index', [
+            'sms_queue_rows' => $smsQueueRows,
+            'sms_tenants' => $tenantRows,
+        ]);
+    }
+
+    public function superAdminSmsCreditsAssign(Request $request): Response
+    {
+        $actor = Auth::user();
+        if (! $actor || ($actor['role'] ?? '') !== 'super_admin') {
+            return new Response('Forbidden.', 403);
+        }
+        $tenantId = max(0, (int) $request->input('tenant_id', 0));
+        $amount = max(0, (int) $request->input('credits', 0));
+        if ($tenantId < 1 || $amount < 1) {
+            session_flash('errors', ['Select a shop and enter credits greater than zero.']);
+            return redirect(route('super-admin.sms.index'));
+        }
+        $pdo = App::db();
+        if (! $this->hasTable($pdo, 'laundry_branch_configs')) {
+            session_flash('errors', ['Branch config table is missing. Run storage migrations first.']);
+            return redirect(route('super-admin.sms.index'));
+        }
+        try {
+            $pdo->prepare(
+                'INSERT INTO laundry_branch_configs (tenant_id, sms_extra_credits, created_at, updated_at)
+                 VALUES (?, ?, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE sms_extra_credits = COALESCE(sms_extra_credits, 0) + VALUES(sms_extra_credits), updated_at = NOW()'
+            )->execute([$tenantId, $amount]);
+            session_flash('status', 'SMS credits assigned successfully.');
+        } catch (\Throwable $e) {
+            error_log('SMS credit assign failed: '.$e->getMessage());
+            session_flash('errors', ['Could not assign SMS credits.']);
+        }
+        return redirect(route('super-admin.sms.index'));
     }
 
     /**
@@ -994,89 +1045,49 @@ final class DashboardController
     private function fetchMachineCreditLedgerRows(PDO $pdo, int $tenantId, string $rangeStart, string $rangeEnd): array
     {
         try {
-            $st = $pdo->prepare(
-                'SELECT id, machine_kind, machine_type, machine_label, credit_required, credit_balance, status
-                 FROM laundry_machines
+            $currentSt = $pdo->prepare('SELECT COALESCE(machine_global_credit_balance, 0) FROM laundry_branch_configs WHERE tenant_id = ? LIMIT 1');
+            $currentSt->execute([$tenantId]);
+            $current = max(0.0, (float) ($currentSt->fetchColumn() ?: 0.0));
+            if (! $this->hasTable($pdo, 'laundry_machine_global_credit_movements')) {
+                return [[
+                    'machine_label' => 'Overall credits',
+                    'credit_required' => 1,
+                    'opening' => $current,
+                    'restock' => 0.0,
+                    'usage' => 0.0,
+                    'closing' => $current,
+                ]];
+            }
+            $rangeSt = $pdo->prepare(
+                'SELECT
+                    COALESCE(SUM(CASE WHEN direction = "restock" THEN amount WHEN direction = "deduct" THEN -amount ELSE 0 END), 0) AS signed_amount,
+                    COALESCE(SUM(CASE WHEN direction = "restock" THEN amount ELSE 0 END), 0) AS restock_amount,
+                    COALESCE(SUM(CASE WHEN direction = "deduct" THEN amount ELSE 0 END), 0) AS usage_amount
+                 FROM laundry_machine_global_credit_movements
                  WHERE tenant_id = ?
-                 ORDER BY machine_kind ASC, machine_label ASC, id ASC'
+                   AND created_at BETWEEN ? AND ?'
             );
-            $st->execute([$tenantId]);
-            $machines = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            if ($machines === []) {
-                return [];
-            }
-            if (! $this->hasTable($pdo, 'laundry_machine_credit_movements')) {
-                return array_map(static function (array $machine): array {
-                    return [
-                        'machine_label' => (string) ($machine['machine_label'] ?? ''),
-                        'credit_required' => (int) ($machine['credit_required'] ?? 0),
-                        'opening' => max(0.0, (float) ($machine['credit_balance'] ?? 0)),
-                        'restock' => 0.0,
-                        'usage' => 0.0,
-                        'closing' => max(0.0, (float) ($machine['credit_balance'] ?? 0)),
-                    ];
-                }, $machines);
-            }
-            $signedRangeByMachine = [];
-            $restockByMachine = [];
-            $usageByMachine = [];
-            $signedAfterByMachine = [];
-
-            $mvRange = $pdo->prepare(
-                'SELECT machine_id,
-                        COALESCE(SUM(CASE WHEN direction = "restock" THEN amount WHEN direction = "deduct" THEN -amount ELSE 0 END),0) AS signed_amount,
-                        COALESCE(SUM(CASE WHEN direction = "restock" THEN amount ELSE 0 END),0) AS restock_amount,
-                        COALESCE(SUM(CASE WHEN direction = "deduct" THEN amount ELSE 0 END),0) AS usage_amount
-                 FROM laundry_machine_credit_movements
+            $rangeSt->execute([$tenantId, $rangeStart, $rangeEnd]);
+            $rangeRow = $rangeSt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $afterSt = $pdo->prepare(
+                'SELECT COALESCE(SUM(CASE WHEN direction = "restock" THEN amount WHEN direction = "deduct" THEN -amount ELSE 0 END), 0) AS signed_amount
+                 FROM laundry_machine_global_credit_movements
                  WHERE tenant_id = ?
-                   AND created_at BETWEEN ? AND ?
-                 GROUP BY machine_id'
+                   AND created_at > ?'
             );
-            $mvRange->execute([$tenantId, $rangeStart, $rangeEnd]);
-            foreach ($mvRange->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
-                $machineId = (int) ($row['machine_id'] ?? 0);
-                if ($machineId < 1) {
-                    continue;
-                }
-                $signedRangeByMachine[$machineId] = (float) ($row['signed_amount'] ?? 0);
-                $restockByMachine[$machineId] = max(0.0, (float) ($row['restock_amount'] ?? 0));
-                $usageByMachine[$machineId] = max(0.0, (float) ($row['usage_amount'] ?? 0));
-            }
-            $mvAfter = $pdo->prepare(
-                'SELECT machine_id,
-                        COALESCE(SUM(CASE WHEN direction = "restock" THEN amount WHEN direction = "deduct" THEN -amount ELSE 0 END),0) AS signed_amount
-                 FROM laundry_machine_credit_movements
-                 WHERE tenant_id = ?
-                   AND created_at > ?
-                 GROUP BY machine_id'
-            );
-            $mvAfter->execute([$tenantId, $rangeEnd]);
-            foreach ($mvAfter->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
-                $machineId = (int) ($row['machine_id'] ?? 0);
-                if ($machineId < 1) {
-                    continue;
-                }
-                $signedAfterByMachine[$machineId] = (float) ($row['signed_amount'] ?? 0);
-            }
-            $rows = [];
-            foreach ($machines as $machine) {
-                $machineId = (int) ($machine['id'] ?? 0);
-                $current = max(0.0, (float) ($machine['credit_balance'] ?? 0));
-                $rangeDelta = (float) ($signedRangeByMachine[$machineId] ?? 0.0);
-                $afterDelta = (float) ($signedAfterByMachine[$machineId] ?? 0.0);
-                $closing = max(0.0, $current - $afterDelta);
-                $opening = max(0.0, $closing - $rangeDelta);
-                $rows[] = [
-                    'machine_label' => (string) ($machine['machine_label'] ?? ''),
-                    'credit_required' => (int) ($machine['credit_required'] ?? 0),
-                    'opening' => $opening,
-                    'restock' => max(0.0, (float) ($restockByMachine[$machineId] ?? 0.0)),
-                    'usage' => max(0.0, (float) ($usageByMachine[$machineId] ?? 0.0)),
-                    'closing' => $closing,
-                ];
-            }
-
-            return $rows;
+            $afterSt->execute([$tenantId, $rangeEnd]);
+            $afterDelta = (float) ($afterSt->fetchColumn() ?: 0.0);
+            $rangeDelta = (float) ($rangeRow['signed_amount'] ?? 0.0);
+            $closing = max(0.0, $current - $afterDelta);
+            $opening = max(0.0, $closing - $rangeDelta);
+            return [[
+                'machine_label' => 'Overall credits',
+                'credit_required' => 1,
+                'opening' => $opening,
+                'restock' => max(0.0, (float) ($rangeRow['restock_amount'] ?? 0.0)),
+                'usage' => max(0.0, (float) ($rangeRow['usage_amount'] ?? 0.0)),
+                'closing' => $closing,
+            ]];
         } catch (\Throwable) {
             return [];
         }

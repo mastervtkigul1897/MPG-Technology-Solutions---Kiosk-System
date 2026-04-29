@@ -136,10 +136,27 @@ final class Auth
         $_SESSION['user_id'] = $userId;
         $_SESSION['login_day'] = date('Y-m-d');
         unset($_SESSION['active_tenant_id']);
+        try {
+            $pdo = App::db();
+            $pdo->prepare('UPDATE users SET is_online = 1, last_seen_at = NOW(), updated_at = NOW() WHERE id = ? LIMIT 1')
+                ->execute([$userId]);
+        } catch (\Throwable) {
+            // Keep login successful even when presence telemetry cannot be saved.
+        }
     }
 
     public static function logout(): void
     {
+        $userId = (int) ($_SESSION['user_id'] ?? 0);
+        if ($userId > 0) {
+            try {
+                $pdo = App::db();
+                $pdo->prepare('UPDATE users SET is_online = 0, last_seen_at = NOW(), updated_at = NOW() WHERE id = ? LIMIT 1')
+                    ->execute([$userId]);
+            } catch (\Throwable) {
+                // Keep logout successful even when presence telemetry cannot be saved.
+            }
+        }
         unset($_SESSION['user_id']);
         unset($_SESSION['login_day']);
         unset($_SESSION['active_tenant_id']);

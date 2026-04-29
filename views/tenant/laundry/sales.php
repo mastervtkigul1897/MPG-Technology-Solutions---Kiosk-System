@@ -18,6 +18,8 @@ $laundryStatusTrackingEnabled = (bool) ($laundry_status_tracking_enabled ?? true
 $trackMachineMovementEnabled = (bool) ($track_machine_movement_enabled ?? false);
 $defaultDryingMinutes = $default_drying_minutes ?? null;
 $editableOrderDate = (bool) ($editable_order_date ?? false);
+$pickupSmsEnabled = (bool) ($pickup_sms_enabled ?? false);
+$pickupEmailEnabled = (bool) ($pickup_email_enabled ?? true);
 $order_types_list = $order_types ?? [];
 $rewardConfig = is_array($reward_config ?? null) ? $reward_config : null;
 $rewardThreshold = $rewardConfig !== null ? max(1.0, (float) ($rewardConfig['minimum_points_to_redeem'] ?? $rewardConfig['reward_points_cost'] ?? 10)) : 0.0;
@@ -158,13 +160,7 @@ $machinesDryerSales = array_values(array_filter($machines ?? [], static function
 }));
 $machineOptionLabel = static function (array $machine): string {
     $label = trim((string) ($machine['machine_label'] ?? ''));
-    $balance = rtrim(rtrim(number_format((float) ($machine['credit_balance'] ?? 0), 4, '.', ''), '0'), '.');
-    if ($balance === '') {
-        $balance = '0';
-    }
-    $credit = ! empty($machine['credit_required'])
-        ? ($balance === '0' ? 'No credit' : 'Credit '.$balance)
-        : 'Manual';
+    $credit = ! empty($machine['credit_required']) ? 'Uses overall credits' : 'Manual';
     $status = strtolower(trim((string) ($machine['status'] ?? 'available')));
     if ($status === 'running') {
         $credit .= ' · Running';
@@ -222,7 +218,7 @@ $toDateTimeLocal = static function (string $raw): string {
                     <ul class="mb-0 ps-3">
                         <li><strong>Workflow OFF:</strong> Jobs skip stage monitoring and use payment-only handling (Unpaid/Paid), best for simple counter operation without machine-stage tracking.</li>
                         <li><strong>Workflow ON + Manual machine movement:</strong> Staff manually controls machine assignment and job progress per stage, useful when operators decide washer/dryer usage based on actual floor conditions.</li>
-                        <li><strong>Workflow ON + Automatic machine movement:</strong> The system drives stage flow (Pending → Washing - Rinsing → Drying → Unpaid → Paid) using configured timing rules and availability checks for more consistent, low-touch operations.</li>
+                        <li><strong>Workflow ON + Automatic machine movement:</strong> The system drives stage flow (Pending → Washing - Rinsing → Drying → Unpaid → Paid) using configured timing rules, machine availability checks, and overall machine credit rules for consistent low-touch operations.</li>
                     </ul>
                 </div>
                 <div class="<?= $laundryStatusTrackingEnabled ? '' : 'd-none' ?>">
@@ -259,10 +255,12 @@ $toDateTimeLocal = static function (string $raw): string {
                         </div>
                     </div>
                     <div class="small text-muted mt-2 lh-base">
-                        Use this when you want the system to automatically move each job through machine stages based on timer rules.
-                        The app can auto-progress from Washing - Rinsing to Drying and then to completion flow, while respecting
-                        machine availability and configured defaults. Default drying minutes is required so every auto-moved drying step
-                        has a clear expected finish time.
+                        Use this mode when you want Kiosk and Transactions to follow strict automatic control. When staff moves a job from Pending to Washing - Drying,
+                        the system first checks for available machines required by the service flow. If no valid washer/dryer is available, the job cannot proceed.
+                        For machines marked <strong>Needs credit</strong>, deduction is applied from <strong>Overall machine credits</strong> (global pool) instead of per-machine credit.
+                        If overall credits are already zero or not enough for the required usage, the job is blocked and staff must restock overall credits first.
+                        If a transaction is returned to Pending, the previously deducted overall credits are restored automatically to keep balances accurate and transparent.
+                        Default drying minutes is required so every auto-moved drying stage has a clear expected finish time.
                     </div>
                 </div>
             </form>
@@ -286,7 +284,9 @@ $toDateTimeLocal = static function (string $raw): string {
                     </label>
                 </div>
                 <div class="small text-muted lh-base">
-                    Use this when your team wants to manually choose the washer/dryer per job. The system keeps the workflow status cards, but machine selection is done by staff during assignment instead of fully automatic movement.
+                    Use this when your team wants to manually choose the washer/dryer per job while still following workflow statuses.
+                    Assignment remains controlled by staff, but availability checks still apply, and machines with <strong>Needs credit</strong>
+                    still deduct from <strong>Overall machine credits</strong> when used.
                 </div>
             </form>
         </div>
@@ -294,6 +294,45 @@ $toDateTimeLocal = static function (string $raw): string {
     <div class="card mb-3">
         <div class="card-body">
             <div class="small fw-semibold text-secondary text-uppercase mb-2">Transaction Settings</div>
+            <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" class="vstack gap-2 mb-3">
+                <?= csrf_field() ?>
+                <input type="hidden" name="update_notification_activation" value="1">
+                <input type="hidden" name="pickup_sms_enabled" value="0">
+                <input type="hidden" name="pickup_email_enabled" value="0">
+                <div class="form-check mb-0">
+                    <input
+                        class="form-check-input"
+                        type="checkbox"
+                        name="pickup_sms_enabled"
+                        id="pickupSmsEnabledTransactions"
+                        value="1"
+                        <?= $pickupSmsEnabled ? 'checked' : '' ?>
+                        onchange="if(this.checked){document.getElementById('pickupEmailEnabledTransactions').checked=false;} this.form.submit();"
+                    >
+                    <label class="form-check-label" for="pickupSmsEnabledTransactions">
+                        Enable SMS pickup-ready notification
+                    </label>
+                </div>
+                <div class="form-check mb-0">
+                    <input
+                        class="form-check-input"
+                        type="checkbox"
+                        name="pickup_email_enabled"
+                        id="pickupEmailEnabledTransactions"
+                        value="1"
+                        <?= $pickupEmailEnabled ? 'checked' : '' ?>
+                        onchange="if(this.checked){document.getElementById('pickupSmsEnabledTransactions').checked=false;} this.form.submit();"
+                    >
+                    <label class="form-check-label" for="pickupEmailEnabledTransactions">
+                        Enable Email pickup-ready notification
+                    </label>
+                </div>
+                <div class="small text-muted lh-base">
+                    Choose how customers are notified when a laundry job reaches "done and ready for pick up". Select only one
+                    activation channel to prevent duplicate alerts. SMS uses daily credits with optional super-admin extensions,
+                    while Email uses your configured mail server. Default setup for new stores is Email enabled.
+                </div>
+            </form>
             <form method="POST" action="<?= e(route('tenant.laundry-sales.store')) ?>" class="d-flex flex-wrap gap-3 align-items-center">
                 <?= csrf_field() ?>
                 <input type="hidden" name="update_editable_order_date" value="1">
@@ -1426,6 +1465,10 @@ $toDateTimeLocal = static function (string $raw): string {
                         </div>
                     </div>
                     <div class="form-text mt-2" id="laundryPaySplitInfo">Split total: ₱0.00</div>
+                </div>
+                <div class="mb-3 d-none" id="laundryPayReferenceWrap">
+                    <label class="form-label fw-medium" for="laundryPayReferenceNo">Reference Number</label>
+                    <input type="text" class="form-control form-control-lg" name="payment_reference_no" id="laundryPayReferenceNo" maxlength="120" placeholder="Enter payment reference number">
                 </div>
                 <div class="rounded-3 border p-3 bg-body-tertiary bg-opacity-25 mb-3">
                     <div class="small text-muted mb-0">Remaining balance to collect</div>
@@ -2619,14 +2662,14 @@ $toDateTimeLocal = static function (string $raw): string {
             }
             if (needWasher && !assignWasherSelect.value) {
                 if (assignError) {
-                    assignError.textContent = 'Please select a washer with available credit, or load credit first.';
+                    assignError.textContent = 'Please select a washer. Overall machine credits are used for credit-required machines.';
                     assignError.classList.remove('d-none');
                 }
                 return;
             }
             if (needDryer && !assignDryerSelect.value) {
                 if (assignError) {
-                    assignError.textContent = 'Please select a dryer with available credit, or load credit first.';
+                    assignError.textContent = 'Please select a dryer. Overall machine credits are used for credit-required machines.';
                     assignError.classList.remove('d-none');
                 }
                 return;
@@ -2893,6 +2936,8 @@ $toDateTimeLocal = static function (string $raw): string {
     let totalDue = 0;
     let discountAmount = 0;
     let paySourceEl = null;
+    const paymentReferenceWrapEl = document.getElementById('laundryPayReferenceWrap');
+    const paymentReferenceNoEl = document.getElementById('laundryPayReferenceNo');
     const splitPaymentOnlineMethods = new Set(['gcash', 'paymaya', 'online_banking', 'qr_payment', 'card']);
     const selectedPaymentMethod = () => {
         const selected = form?.querySelector('input[name="payment_method"]:checked');
@@ -2917,7 +2962,15 @@ $toDateTimeLocal = static function (string $raw): string {
         }
         dueEl.textContent = money(totalDue);
         const splitMode = isSplitPaymentSelected();
+        const method = selectedPaymentMethod();
+        const needsReference = method !== '' && method !== 'cash';
         if (splitWrapEl) splitWrapEl.classList.toggle('d-none', !splitMode);
+        if (paymentReferenceWrapEl) paymentReferenceWrapEl.classList.toggle('d-none', !needsReference);
+        if (paymentReferenceNoEl) {
+            if (!needsReference) {
+                paymentReferenceNoEl.value = '';
+            }
+        }
         if (splitMode) {
             const splitCash = Math.max(0, parseFloat(splitCashEl?.value || '0') || 0);
             const splitOnline = Math.max(0, parseFloat(splitOnlineAmountEl?.value || '0') || 0);
